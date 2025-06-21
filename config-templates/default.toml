@@ -484,8 +484,8 @@ input_mode = "last"
 output_mode = "append"
 
 [layers.mcp]
-server_refs = ["developer", "filesystem", "octocode"]
-allowed_tools = ["text_editor", "list_files", "semantic_search", "remember", "view_signatures"]
+server_refs = ["filesystem", "octocode"]
+allowed_tools = ["list_files", "semantic_search", "remember", "view_signatures"]
 
 [layers.parameters]
 
