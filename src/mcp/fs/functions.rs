@@ -33,18 +33,22 @@ pub fn get_list_files_function() -> McpFunction {
 			- `pattern`: Optional filename pattern (uses ripgrep syntax)
 			- `content`: Optional content search within files
 			- `max_depth`: Optional depth limit for directory traversal
+			- `include_hidden`: Include hidden files/directories starting with '.' (default: false)
 
 			Best Practices:
 			- Always use specific patterns - avoid listing entire large directories
 			- Use max_depth to limit scope and reduce token usage
 			- Combine with content search when looking for specific functionality
 			- Filter by file type using patterns like '\\*.rs' or '\\*.toml'
+			- Use include_hidden=false (default) to exclude dotfiles for cleaner results
 
 			Examples:
 			- Find Rust files: `{\"directory\": \"src\", \"pattern\": \"\\*.rs\"}`
 			- Find config files: `{\"directory\": \".\", \"pattern\": \"\\*.toml|\\*.yaml|\\*.json\"}`
 			- Search for function: `{\"directory\": \"src\", \"content\": \"fn main\"}`
 			- Limited depth: `{\"directory\": \".\", \"max_depth\": 2, \"pattern\": \"\\*.rs\"}`
+			- Include dotfiles: `{\"directory\": \".\", \"pattern\": \".*rc\", \"include_hidden\": true}`
+			- Find hidden configs: `{\"directory\": \".\", \"include_hidden\": true, \"pattern\": \"\\*.json|\\*.yaml\"}`
 
 			Token-Efficient Usage:
 			- Use patterns to target specific file types
@@ -71,6 +75,11 @@ pub fn get_list_files_function() -> McpFunction {
 				"max_depth": {
 					"type": "integer",
 					"description": "Maximum depth of directories to descend (default: no limit)"
+				},
+				"include_hidden": {
+					"type": "boolean",
+					"default": false,
+					"description": "Include hidden files and directories starting with '.' (default: false)"
 				}
 			}
 		}),

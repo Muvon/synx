@@ -101,11 +101,22 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 		.and_then(|v| v.as_u64())
 		.map(|n| n as usize);
 
+	let include_hidden = call
+		.parameters
+		.get("include_hidden")
+		.and_then(|v| v.as_bool())
+		.unwrap_or(false);
+
 	// Build the ripgrep command based on the parameters
 	let mut cmd_args = Vec::new();
 
 	if let Some(depth) = max_depth {
-		cmd_args.push(format!("--max-depth {}", depth));
+		cmd_args.push(format!("--max-depth={}", depth));
+	}
+
+	// Add hidden files flag if requested
+	if include_hidden {
+		cmd_args.push("--hidden".to_string());
 	}
 
 	// Search for content in files or list files matching pattern
@@ -170,7 +181,8 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 						"directory": directory,
 						"pattern": pattern,
 						"content": content,
-						"max_depth": max_depth
+						"max_depth": max_depth,
+						"include_hidden": include_hidden
 					}
 				})
 			}
@@ -183,7 +195,8 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 					"directory": directory,
 					"pattern": pattern,
 					"content": content,
-					"max_depth": max_depth
+					"max_depth": max_depth,
+					"include_hidden": include_hidden
 				}
 			}),
 		}
