@@ -86,7 +86,7 @@ where
 // Output mode determines how the layer's output affects the session
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OutputMode {
-	None,    // Don't modify session (intermediate layer like query_processor)
+	None,    // Don't modify session (intermediate layer like task_refiner)
 	Append,  // Add output as new message to session
 	Replace, // Replace entire session with output (reducer functionality)
 }

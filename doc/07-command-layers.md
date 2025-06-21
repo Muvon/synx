@@ -16,7 +16,7 @@ Use the `/run` command followed by the command name:
 
 ```bash
 /run estimate
-/run query_processor
+/run task_refiner
 /run review
 ```
 

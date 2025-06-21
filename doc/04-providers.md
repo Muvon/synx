@@ -251,10 +251,8 @@ model = "openai:gpt-4o-mini"
 # Main model for development work
 model = "openrouter:anthropic/claude-sonnet-4"
 
-# Lightweight models for processing layers
-query_processor_model = "openai:gpt-4o-mini"
-context_generator_model = "google:gemini-1.5-flash"
-reducer_model = "openai:gpt-4o-mini"
+# Individual layer models are configured in [[layers]] sections
+# See doc/05-sessions.md for layer configuration details
 ```
 
 ## Cost Optimization
@@ -283,10 +281,9 @@ model = "openrouter:anthropic/claude-sonnet-4"
 [chat.openrouter]
 model = "google:gemini-1.5-flash"
 
-# Layer-specific cost optimization
-query_processor_model = "google:gemini-1.5-flash"
-context_generator_model = "openai:gpt-4o-mini"
-developer_model = "openrouter:anthropic/claude-sonnet-4"
+# Layer-specific cost optimization is done in [[layers]] sections
+# Each layer has its own model configuration
+# See doc/05-sessions.md for complete layer configuration examples
 ```
 
 ## Caching Support

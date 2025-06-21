@@ -395,7 +395,7 @@ Each layer supports input_mode and output_mode for flexible behavior.
 enable_layers = true
 
 [[layers]]
-name = "query_processor"
+name = "task_refiner"
 model = "openrouter:openai/gpt-4.1-mini"
 temperature = 0.2
 input_mode = "Last"
@@ -403,7 +403,7 @@ output_mode = "none"  # Intermediate layer
 builtin = true
 
 [[layers]]
-name = "context_generator"
+name = "task_researcher"
 model = "openrouter:google/gemini-2.5-flash-preview"
 temperature = 0.2
 input_mode = "Last"
@@ -436,7 +436,7 @@ enable_tools = false
 input_mode = "Last"
 
 [[layers]]
-name = "context_generator"
+name = "task_researcher"
 enabled = true
 model = "openrouter:google/gemini-2.5-flash-preview"
 temperature = 0.2

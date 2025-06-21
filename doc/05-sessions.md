@@ -637,7 +637,7 @@ enable_layers = true
 # All layers are configured through [[layers]] sections
 
 [[layers]]
-name = "query_processor"
+name = "task_refiner"
 model = "openrouter:openai/gpt-4.1-mini"
 temperature = 0.2
 input_mode = "Last"
@@ -645,7 +645,7 @@ output_mode = "none"  # Intermediate layer
 builtin = true
 
 [[layers]]
-name = "context_generator"
+name = "task_researcher"
 model = "openrouter:google/gemini-2.5-flash-preview"
 temperature = 0.2
 input_mode = "Last"
@@ -696,7 +696,7 @@ Layers can process input in different modes:
 #### Output Modes
 Layers can affect the session in different ways:
 
-- **none**: Intermediate layer that doesn't modify the session (like query_processor)
+- **none**: Intermediate layer that doesn't modify the session (like task_refiner)
 - **append**: Adds layer output as a new message to the session
 - **replace**: Replaces the entire session content with the layer output (like reducer)
 
@@ -767,12 +767,16 @@ model = "openrouter:anthropic/claude-sonnet-4"  # Best reasoning
 
 #### Layer-Specific Optimization
 ```toml
-# Cheap models for simple processing
-query_processor_model = "google:gemini-1.5-flash"
-context_generator_model = "openai:gpt-4o-mini"
+# Layer models are configured individually in [[layers]] sections
+# Example: task_refiner uses a cheap model, developer uses expensive model
 
-# Expensive model only for final development work
-developer_model = "openrouter:anthropic/claude-sonnet-4"
+[[layers]]
+name = "task_refiner"
+model = "google:gemini-1.5-flash"  # Cheap for simple processing
+
+[[layers]]
+name = "developer"
+model = "openrouter:anthropic/claude-sonnet-4"  # Expensive for complex work
 ```
 
 ### Token Management

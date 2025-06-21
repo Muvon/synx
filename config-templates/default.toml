@@ -305,7 +305,7 @@ Core Behavior: Think → Verify → Act → Complete. Senior developer precision
 %{SYSTEM}
 """
 welcome = "Hello! Octomind ready to serve you. Working dir: %{CWD} (Role: %{ROLE})"
-layer_refs = ["context_generator", "query_processor"]
+layer_refs = ["task_refiner", "task_researcher"]
 
 [roles.mcp]
 server_refs = ["developer", "filesystem", "web", "octocode", "agent"]
@@ -395,7 +395,7 @@ tools = []
 
 # Built-in core layers (always available)
 [[layers]]
-name = "query_processor"
+name = "task_refiner"
 model = "openrouter:openai/gpt-4.1-mini"
 system_prompt = """
 You are a simple query processor for the Octomind system. Your ONLY job is basic query refinement and initial file guessing.
@@ -436,7 +436,7 @@ allowed_tools = []
 [layers.parameters]
 
 [[layers]]
-name = "context_generator"
+name = "task_researcher"
 model = "openrouter:google/gemini-2.5-flash-preview"
 system_prompt = """
 You are a research assistant and information gatherer for development tasks. Think of yourself as a junior developer doing reconnaissance work.

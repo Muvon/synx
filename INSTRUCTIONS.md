@@ -5,7 +5,7 @@
 **Session-First Design**: Everything happens in interactive AI sessions with MCP tools
 **Template-Based Config**: All defaults in `config-templates/default.toml`, NO hardcoded values
 **Role-Based Access**: Developer (full tools), Assistant (chat only), Custom roles
-**Layered Processing**: query_processor → context_generator → developer layers
+**Layered Processing**: task_refiner → task_researcher → developer layers
 **Custom Commands**: `/run <command>` executes configured layer-based commands
 **Agent System**: `agent_<name>(task="...")` MCP tools route tasks to specialized AI layers
 **Cache & Cost**: 2-marker cache system + automatic cost tracking across sessions/layers/tools

@@ -188,12 +188,9 @@ impl LayeredOrchestrator {
 				"{}",
 				format!("───── Result of {} ─────", layer_name).bright_yellow()
 			);
-			for (i, output) in result.outputs.iter().enumerate() {
-				if result.outputs.len() > 1 {
-					println!("--- Output {} ---", i + 1);
-				}
-				println!("{}", output);
-			}
+			
+			// Display layer outputs with improved formatting
+			self.display_layer_outputs(&result.outputs, &layer_name);
 
 			// Track token usage stats
 			if let Some(usage) = &result.token_usage {
@@ -370,5 +367,62 @@ impl LayeredOrchestrator {
 		// for the entire conversation context, ensuring all the work done by the layers is preserved
 		// and available for subsequent messages in the main chat flow.
 		Ok(current_input)
+	}
+
+	/// Display layer outputs with improved formatting to match main loop tool rendering style
+	fn display_layer_outputs(&self, outputs: &[String], layer_name: &str) {
+		for (i, output) in outputs.iter().enumerate() {
+			// For multiple outputs, show which output this is
+			if outputs.len() > 1 {
+				println!("--- Output {} ---", i + 1);
+			}
+			
+			// Check if this output contains assistant response text that should be formatted
+			if !output.trim().is_empty() {
+				// Display the output with assistant response formatting
+				self.display_formatted_assistant_output(output, layer_name, i + 1);
+			}
+		}
+	}
+
+	/// Display assistant output with formatting similar to main loop style
+	fn display_formatted_assistant_output(&self, output: &str, layer_name: &str, output_index: usize) {
+		use colored::Colorize;
+		
+		// Create a header similar to tool execution style for assistant responses
+		let title = format!(" Assistant Response | {} ", layer_name);
+		let separator_length = 70.max(title.len() + 4);
+		let dashes = "─".repeat(separator_length - title.len());
+		let separator = format!("──{}{}──", title.bright_cyan(), dashes.dimmed());
+		
+		println!("{}", separator);
+		
+		// Display the content with smart formatting
+		self.display_assistant_content_smart(output);
+		
+		// Add completion indicator
+		println!("{}", format!("✓ Layer '{}' output {} completed", layer_name, output_index).bright_green());
+		println!("──────────────────");
+	}
+
+	/// Display assistant content with smart formatting (similar to tool output formatting)
+	fn display_assistant_content_smart(&self, content: &str) {
+		let lines: Vec<&str> = content.lines().collect();
+		
+		if lines.len() <= 50 && content.chars().count() <= 5000 {
+			// Reasonable size: show as-is
+			println!("{}", content);
+		} else if lines.len() > 50 {
+			// Many lines: show first 40 lines + summary
+			for line in lines.iter().take(40) {
+				println!("{}", line);
+			}
+			println!("{}", format!("... [+{} more lines]", lines.len().saturating_sub(40)).bright_black());
+		} else {
+			// Long content: truncate with indication
+			let truncated: String = content.chars().take(4997).collect();
+			println!("{}...", truncated);
+			println!("{}", "[Content truncated for display]".bright_black());
+		}
 	}
 }

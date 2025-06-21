@@ -472,7 +472,7 @@ All layers are configured through the `[[layers]]` section in your configuration
 
 #### Output Modes Explained
 
-- **`none`**: Intermediate layer that doesn't modify the session (like query_processor)
+- **`none`**: Intermediate layer that doesn't modify the session (like task_refiner)
 - **`append`**: Adds layer output as a new message to the session
 - **`replace`**: Replaces the entire session content with the layer output
 
@@ -505,7 +505,7 @@ enable_layers = true
 # All layers use the same GenericLayer implementation with different configurations
 
 [[layers]]
-name = "query_processor"
+name = "task_refiner"
 model = "openrouter:openai/gpt-4.1-mini"
 temperature = 0.2
 input_mode = "Last"
@@ -517,7 +517,7 @@ server_refs = []
 allowed_tools = []
 
 [[layers]]
-name = "context_generator"
+name = "task_researcher"
 model = "openrouter:google/gemini-2.5-flash-preview"
 temperature = 0.2
 input_mode = "Last"
@@ -607,8 +607,8 @@ cache_tokens_pct_threshold = 40
 # Use different providers for different purposes
 [developer]
 model = "openrouter:anthropic/claude-sonnet-4"  # Main development
-query_processor_model = "openai:gpt-4o-mini"   # Fast processing
-context_generator_model = "google:gemini-1.5-flash"  # Good balance
+# Layer models are configured in individual [[layers]] sections
+# See the layers configuration examples above for model assignments
 
 [assistant]
 model = "openrouter:anthropic/claude-3.5-haiku"  # Lightweight chat
