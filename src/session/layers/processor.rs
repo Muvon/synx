@@ -168,7 +168,7 @@ impl Layer for LayerProcessor {
 					{
 						Ok((res, _tool_time_ms)) => res, // Extract result from tuple
 						Err(e) => {
-							println!("{} {}", "Tool execution error:".red(), e);
+							crate::log_error!("{} {}", "Tool execution error:", e);
 							continue;
 						}
 					};
@@ -244,7 +244,7 @@ impl Layer for LayerProcessor {
 							});
 						}
 						Err(e) => {
-							println!("{} {}", "Error processing tool results:".red(), e);
+							crate::log_error!("{} {}", "Error processing tool results:", e);
 							// Continue with the original output
 						}
 					}

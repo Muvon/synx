@@ -70,7 +70,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
 	// Make sure to clean up any started server processes
 	if let Err(e) = octomind::mcp::server::cleanup_servers() {
-		eprintln!("Warning: Error cleaning up MCP servers: {}", e);
+		octomind::log_error!("Warning: Error cleaning up MCP servers: {}", e);
 	}
 
 	result
@@ -86,14 +86,14 @@ async fn run_with_cleanup(args: CliArgs, config: Config) -> Result<(), anyhow::E
 
 			// Step 1: Initialize MCP servers first
 			if let Err(e) = octomind::mcp::initialize_servers_for_role(&config_for_role).await {
-				eprintln!("Warning: Failed to initialize MCP servers: {}", e);
+				octomind::log_error!("Warning: Failed to initialize MCP servers: {}", e);
 				// Continue anyway - servers can be started on-demand if needed
 			}
 
 			// Step 2: Initialize tool map after servers are ready (non-blocking for user)
 			// This runs in background - if it fails, we fall back to original logic
 			if let Err(e) = octomind::mcp::tool_map::initialize_tool_map(&config_for_role).await {
-				eprintln!("Warning: Failed to initialize tool map: {}", e);
+				octomind::log_error!("Warning: Failed to initialize tool map: {}", e);
 				// Continue anyway - will fall back to building tool map on each use
 			}
 		}
@@ -104,13 +104,13 @@ async fn run_with_cleanup(args: CliArgs, config: Config) -> Result<(), anyhow::E
 
 			// Step 1: Initialize MCP servers first
 			if let Err(e) = octomind::mcp::initialize_servers_for_role(&config_for_role).await {
-				eprintln!("Warning: Failed to initialize MCP servers: {}", e);
+				octomind::log_error!("Warning: Failed to initialize MCP servers: {}", e);
 				// Continue anyway - servers can be started on-demand if needed
 			}
 
 			// Step 2: Initialize tool map after servers are ready
 			if let Err(e) = octomind::mcp::tool_map::initialize_tool_map(&config_for_role).await {
-				eprintln!("Warning: Failed to initialize tool map: {}", e);
+				octomind::log_error!("Warning: Failed to initialize tool map: {}", e);
 				// Continue anyway - will fall back to building tool map on each use
 			}
 		}

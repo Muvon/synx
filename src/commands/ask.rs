@@ -91,29 +91,43 @@ fn validate_file_patterns(file_patterns: &[String]) -> Result<()> {
 							found_any = true;
 							total_files += 1;
 							if !path.exists() {
-								eprintln!("Error: File does not exist: {}", path.display());
+								octomind::log_error!(
+									"Error: File does not exist: {}",
+									path.display()
+								);
 								has_errors = true;
 							} else if !path.is_file() {
-								eprintln!("Error: Path is not a file: {}", path.display());
+								octomind::log_error!(
+									"Error: Path is not a file: {}",
+									path.display()
+								);
 								has_errors = true;
 							} else if let Err(e) = fs::metadata(&path) {
-								eprintln!("Error: Cannot access file {}: {}", path.display(), e);
+								octomind::log_error!(
+									"Error: Cannot access file {}: {}",
+									path.display(),
+									e
+								);
 								has_errors = true;
 							}
 						}
 						Err(e) => {
-							eprintln!("Error: Invalid path in pattern '{}': {}", pattern, e);
+							octomind::log_error!(
+								"Error: Invalid path in pattern '{}': {}",
+								pattern,
+								e
+							);
 							has_errors = true;
 						}
 					}
 				}
 				if !found_any {
-					eprintln!("Error: No files found matching pattern '{}'", pattern);
+					octomind::log_error!("Error: No files found matching pattern '{}'", pattern);
 					has_errors = true;
 				}
 			}
 			Err(e) => {
-				eprintln!("Error: Invalid glob pattern '{}': {}", pattern, e);
+				octomind::log_error!("Error: Invalid glob pattern '{}': {}", pattern, e);
 				has_errors = true;
 			}
 		}
@@ -126,7 +140,7 @@ fn validate_file_patterns(file_patterns: &[String]) -> Result<()> {
 	}
 
 	if total_files > 50 {
-		eprintln!(
+		octomind::log_error!(
 			"Warning: Including {} files as context. This may result in a very large prompt.",
 			total_files
 		);
@@ -257,7 +271,7 @@ fn get_interactive_input() -> Result<String> {
 pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 	// Validate file patterns first, before any other processing
 	if let Err(e) = validate_file_patterns(&args.files) {
-		eprintln!("{}", e);
+		octomind::log_error!("{}", e);
 		std::process::exit(1);
 	}
 
@@ -305,7 +319,7 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 		let input = buffer.trim().to_string();
 
 		if input.is_empty() {
-			eprintln!("Error: No input provided.");
+			octomind::log_error!("Error: No input provided.");
 			std::process::exit(1);
 		}
 
@@ -338,7 +352,7 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 			match get_interactive_input() {
 				Ok(input) => {
 					if input.is_empty() {
-						eprintln!("Error: No input provided.");
+						octomind::log_error!("Error: No input provided.");
 						continue;
 					}
 
@@ -364,7 +378,7 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 							println!(); // Add spacing between responses
 						}
 						Err(e) => {
-							eprintln!("Error: {}", e);
+							octomind::log_error!("Error: {}", e);
 						}
 					}
 				}
@@ -373,7 +387,7 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 						println!("Exiting multimode.");
 						break;
 					} else {
-						eprintln!("Error: {}", e);
+						octomind::log_error!("Error: {}", e);
 						continue;
 					}
 				}

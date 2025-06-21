@@ -115,7 +115,9 @@ pub async fn execute(args: &ShellArgs, config: &Config) -> Result<()> {
 	};
 
 	if description.is_empty() {
-		eprintln!("Error: No description provided. Use argument or pipe description to stdin.");
+		octomind::log_error!(
+			"Error: No description provided. Use argument or pipe description to stdin."
+		);
 		std::process::exit(1);
 	}
 
@@ -190,19 +192,23 @@ pub async fn execute(args: &ShellArgs, config: &Config) -> Result<()> {
 					match serde_json::from_str::<ShellResponse>(json_part) {
 						Ok(resp) => resp,
 						Err(_) => {
-							eprintln!("Error: Could not parse AI response as structured command.");
-							eprintln!("Raw response: {}", response.content);
+							octomind::log_error!(
+								"Error: Could not parse AI response as structured command."
+							);
+							octomind::log_error!("Raw response: {}", response.content);
 							std::process::exit(1);
 						}
 					}
 				} else {
-					eprintln!("Error: Could not parse AI response as structured command.");
-					eprintln!("Raw response: {}", response.content);
+					octomind::log_error!(
+						"Error: Could not parse AI response as structured command."
+					);
+					octomind::log_error!("Raw response: {}", response.content);
 					std::process::exit(1);
 				}
 			} else {
-				eprintln!("Error: Could not parse AI response as structured command.");
-				eprintln!("Raw response: {}", response.content);
+				octomind::log_error!("Error: Could not parse AI response as structured command.");
+				octomind::log_error!("Raw response: {}", response.content);
 				std::process::exit(1);
 			}
 		}

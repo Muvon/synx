@@ -90,7 +90,7 @@ pub fn execute(args: &ConfigArgs, mut config: Config) -> Result<(), anyhow::Erro
 				return Ok(());
 			}
 			Err(e) => {
-				eprintln!("❌ Configuration validation failed: {}", e);
+				octomind::log_error!("❌ Configuration validation failed: {}", e);
 				return Err(e);
 			}
 		}
@@ -109,7 +109,7 @@ pub fn execute(args: &ConfigArgs, mut config: Config) -> Result<(), anyhow::Erro
 	if let Some(model) = &args.model {
 		// Validate model format
 		if !model.contains(':') {
-			eprintln!("Error: Model must be in provider:model format (e.g., openrouter:anthropic/claude-3.5-sonnet)");
+			octomind::log_error!("Error: Model must be in provider:model format (e.g., openrouter:anthropic/claude-3.5-sonnet)");
 			return Ok(());
 		}
 
@@ -123,7 +123,9 @@ pub fn execute(args: &ConfigArgs, mut config: Config) -> Result<(), anyhow::Erro
 		// Parse provider:key format
 		let parts: Vec<&str> = api_key_input.splitn(2, ':').collect();
 		if parts.len() != 2 {
-			eprintln!("Error: API key must be in provider:key format (e.g., openrouter:your-key)");
+			octomind::log_error!(
+				"Error: API key must be in provider:key format (e.g., openrouter:your-key)"
+			);
 			return Ok(());
 		}
 
@@ -131,14 +133,16 @@ pub fn execute(args: &ConfigArgs, mut config: Config) -> Result<(), anyhow::Erro
 		let _key = parts[1]; // Unused but needed for parsing
 
 		// API keys are now only supported via environment variables for security
-		eprintln!("❌ Error: API keys can no longer be set in config file for security reasons.");
-		eprintln!("Please set the API key as an environment variable instead:");
-		eprintln!(
+		octomind::log_error!(
+			"❌ Error: API keys can no longer be set in config file for security reasons."
+		);
+		octomind::log_error!("Please set the API key as an environment variable instead:");
+		octomind::log_error!(
 			"  For {}: export {}_API_KEY=your-key-here",
 			provider.to_uppercase(),
 			provider.to_uppercase()
 		);
-		eprintln!("  Then restart your shell and try again.");
+		octomind::log_error!("  Then restart your shell and try again.");
 		return Ok(());
 	}
 
@@ -158,7 +162,7 @@ pub fn execute(args: &ConfigArgs, mut config: Config) -> Result<(), anyhow::Erro
 				println!("Set log level to Debug");
 			}
 			_ => {
-				eprintln!(
+				octomind::log_error!(
 					"Error: Invalid log level '{}'. Valid options: none, info, debug",
 					log_level_str
 				);
@@ -193,7 +197,7 @@ pub fn execute(args: &ConfigArgs, mut config: Config) -> Result<(), anyhow::Erro
 			println!("Markdown theme set to '{}'", theme);
 			modified = true;
 		} else {
-			eprintln!(
+			octomind::log_error!(
 				"Error: Invalid markdown theme '{}'. Valid themes: {}",
 				theme,
 				valid_themes.join(", ")
@@ -374,7 +378,7 @@ pub fn execute(args: &ConfigArgs, mut config: Config) -> Result<(), anyhow::Erro
 	} else {
 		// Save the updated configuration
 		if let Err(e) = config.save() {
-			eprintln!("Error saving configuration: {}", e);
+			octomind::log_error!("Error saving configuration: {}", e);
 			return Err(e);
 		}
 		println!("Configuration saved successfully");

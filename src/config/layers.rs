@@ -80,9 +80,9 @@ impl RoleLayersConfig {
 				layer.name = layer_name.clone();
 				result.push(layer);
 			} else {
-				// Note: Using println instead of log_debug since we're in a module
-				println!(
-					"DEBUG: Layer '{}' referenced by role but not found in global registry",
+				// Debug: Layer referenced but not found in global registry
+				crate::log_debug!(
+					"Layer '{}' referenced by role but not found in global registry",
 					layer_name
 				);
 			}

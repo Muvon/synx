@@ -511,7 +511,7 @@ async fn start_server_process(server: &McpServerConfig) -> Result<String> {
 			let init_result = initialize_stdin_server(server.name()).await;
 
 			if let Err(e) = &init_result {
-				eprintln!(
+				crate::log_error!(
 					"Failed to initialize stdin MCP server '{}': {}",
 					server.name(),
 					e
@@ -901,7 +901,7 @@ pub async fn get_stdin_server_functions(server: &McpServerConfig) -> Result<Vec<
 
 	// Check for errors in the response
 	if let Some(error) = response.get("error") {
-		eprintln!(
+		crate::log_error!(
 			"Warning: Server returned error during tools/list: {}",
 			error
 		);
@@ -936,7 +936,7 @@ pub async fn get_stdin_server_functions(server: &McpServerConfig) -> Result<Vec<
 			}
 		}
 	} else {
-		println!("Invalid response format from tools/list: {}", response);
+		crate::log_debug!("Invalid response format from tools/list: {}", response);
 	}
 
 	Ok(functions)
@@ -974,7 +974,7 @@ pub async fn execute_stdin_tool_call(
 	{
 		Ok(resp) => resp,
 		Err(e) => {
-			eprintln!("Error executing tool call '{}': {}", call.tool_name, e);
+			crate::log_error!("Error executing tool call '{}': {}", call.tool_name, e);
 			// Return a formatted error as the tool result rather than failing
 			return Ok(McpToolResult::error(
 				call.tool_name.clone(),
@@ -1037,7 +1037,7 @@ pub fn stop_all_servers() -> Result<()> {
 		match process_arc.try_lock() {
 			Ok(mut process) => {
 				if let Err(e) = process.kill() {
-					eprintln!("Failed to kill MCP server '{}': {}", name, e);
+					crate::log_error!("Failed to kill MCP server '{}': {}", name, e);
 				}
 			}
 			Err(_) => {
@@ -1221,7 +1221,7 @@ async fn try_communicate_with_stdin_server(
 	override_id: u64,
 ) -> Result<()> {
 	if let Err(e) = communicate_with_stdin_server(server_name, message, override_id, None).await {
-		eprintln!("Warning: Error sending notification to MCP server: {}", e);
+		crate::log_error!("Warning: Error sending notification to MCP server: {}", e);
 	}
 	Ok(())
 }

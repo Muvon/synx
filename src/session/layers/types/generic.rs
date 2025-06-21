@@ -17,7 +17,6 @@ use crate::config::Config;
 use crate::session::{Message, Session};
 use anyhow::Result;
 use async_trait::async_trait;
-use colored::Colorize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -179,10 +178,9 @@ impl GenericLayer {
 							outputs.push(new_content.clone());
 
 							// Use the same finish_reason logic for recursive continuation
-							let has_tool_calls = if current_tool_calls_param.is_some() {
-								!current_tool_calls_param.as_ref().unwrap().is_empty()
-							} else {
-								!crate::mcp::parse_tool_calls(&current_content).is_empty()
+							let has_tool_calls = match &current_tool_calls_param {
+								Some(tool_calls) => !tool_calls.is_empty(),
+								None => !crate::mcp::parse_tool_calls(&current_content).is_empty(),
 							};
 
 							let should_continue = crate::session::chat::response::tool_result_processor::check_should_continue(
@@ -190,7 +188,7 @@ impl GenericLayer {
 									content: current_content.clone(),
 									exchange: current_exchange.clone(),
 									tool_calls: current_tool_calls_param.clone(),
-									finish_reason: new_exchange.response.get("choices")
+									finish_reason: current_exchange.response.get("choices")
 										.and_then(|c| c.get(0))
 										.and_then(|choice| choice.get("finish_reason"))
 										.and_then(|fr| fr.as_str())
@@ -451,7 +449,7 @@ impl GenericLayer {
 				}
 			}
 			Err(e) => {
-				println!("{} {}", "Error processing layer tool results:".red(), e);
+				crate::log_error!("{} {}", "Error processing layer tool results:", e);
 				Err(e)
 			}
 		}
