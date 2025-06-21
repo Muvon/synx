@@ -258,11 +258,11 @@ impl ImageProcessor {
 
 			// Show metadata
 			if let Some((width, height)) = attachment.dimensions {
-				println!("📸 Image: {}x{} ({})", width, height, attachment.media_type);
+				crate::log_info!("📸 Image: {}x{} ({})", width, height, attachment.media_type);
 			}
 
 			if let Some(size) = attachment.size_bytes {
-				println!("📏 Size: {:.1}KB", size as f64 / 1024.0);
+				crate::log_info!("📏 Size: {:.1}KB", size as f64 / 1024.0);
 			}
 
 			// Display small preview using viuer
@@ -274,7 +274,7 @@ impl ImageProcessor {
 			};
 
 			if let Err(e) = viuer::print(&img, &config) {
-				println!("⚠️  Preview not available: {}", e);
+				crate::log_debug!("⚠️  Preview not available: {}", e);
 			}
 		}
 		Ok(())

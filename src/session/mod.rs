@@ -841,11 +841,10 @@ pub async fn create_system_prompt(
 	mode: &str,
 ) -> String {
 	// Get mode-specific configuration
-	let (_, mcp_config, _, _, system_prompt_opt) = config.get_role_config(mode);
+	let (_, mcp_config, _, _, system_prompt) = config.get_role_config(mode);
 
 	// For developer role, process placeholders to add project context
-	let mut prompt =
-		helper_functions::process_placeholders_async(system_prompt_opt.unwrap(), project_dir).await;
+	let mut prompt = helper_functions::process_placeholders_async(system_prompt, project_dir).await;
 
 	// Add MCP tools information if enabled
 	if !mcp_config.server_refs.is_empty() {

@@ -647,11 +647,7 @@ fn show_configuration(config: &Config) -> Result<(), anyhow::Error> {
 		config.get_effective_model()
 	);
 	println!("    Layers enabled:  {}", dev_config.enable_layers);
-	if let Some(_system) = dev_system {
-		println!("    System prompt:   Custom");
-	} else {
-		println!("    System prompt:   Default");
-	}
+	println!("    System prompt:   {} chars", dev_system.len());
 
 	// Assistant role
 	println!("  Assistant Role:");
@@ -662,11 +658,7 @@ fn show_configuration(config: &Config) -> Result<(), anyhow::Error> {
 		config.get_effective_model()
 	);
 	println!("    Layers enabled:  {}", ass_config.enable_layers);
-	if let Some(_system) = ass_system {
-		println!("    System prompt:   Custom");
-	} else {
-		println!("    System prompt:   Default");
-	}
+	println!("    System prompt:   {} chars", ass_system.len());
 	println!();
 
 	// MCP Configuration

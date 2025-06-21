@@ -15,7 +15,7 @@
 // Project context module for gathering and managing contextual information
 
 use anyhow::Result;
-use colored::*;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -78,7 +78,7 @@ impl ProjectContext {
 					Some(content)
 				}
 				Err(e) => {
-					println!("{} {}: {}", "Error reading".red(), path.display(), e);
+					crate::log_error!("Error reading {}: {}", path.display(), e);
 					None
 				}
 			}

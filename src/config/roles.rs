@@ -22,8 +22,8 @@ pub struct RoleConfig {
 	// Layer configurations
 	#[serde(default)]
 	pub enable_layers: bool,
-	// Custom system prompt
-	pub system: Option<String>,
+	// Custom system prompt (REQUIRED - defined in config template)
+	pub system: String,
 	// Custom welcome message with variable support
 	pub welcome: String,
 	// Temperature for AI responses (0.0 to 1.0) - STRICT: must be in config

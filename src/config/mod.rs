@@ -54,7 +54,7 @@ type RoleConfigResult<'a> = (
 	&'a RoleMcpConfig,
 	Option<&'a Vec<crate::session::layers::LayerConfig>>,
 	Option<&'a Vec<crate::session::layers::LayerConfig>>,
-	Option<&'a String>,
+	&'a String,
 );
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -282,27 +282,11 @@ impl Config {
 				&role_config.mcp,
 				self.layers.as_ref(),
 				self.commands.as_ref(),
-				role_config.config.system.as_ref(),
+				&role_config.config.system,
 			)
 		} else {
-			// Unknown role - create minimal fallback
-			static DEFAULT_ROLE_CONFIG: RoleConfig = RoleConfig {
-				enable_layers: false,
-				system: None,
-				welcome: String::new(), // Empty welcome for unknown roles
-				temperature: 0.7,       // Fallback temperature for unknown roles
-			};
-			static DEFAULT_MCP_CONFIG: RoleMcpConfig = RoleMcpConfig {
-				server_refs: Vec::new(),
-				allowed_tools: Vec::new(),
-			};
-			(
-				&DEFAULT_ROLE_CONFIG,
-				&DEFAULT_MCP_CONFIG,
-				self.layers.as_ref(),
-				self.commands.as_ref(),
-				None,
-			)
+			// STRICT CONFIG: Unknown roles are not allowed - all roles must be explicitly defined
+			panic!("CRITICAL CONFIG ERROR: Role '{}' not found in config. All roles must be explicitly defined in config template.", role);
 		}
 	}
 
@@ -342,7 +326,7 @@ impl Config {
 		// let enabled_layers = self.get_enabled_layers_for_role(mode);
 
 		merged.commands = commands.cloned();
-		merged.system = system_prompt.cloned();
+		merged.system = Some(system_prompt.clone());
 
 		merged
 	}

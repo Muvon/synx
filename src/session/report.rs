@@ -391,6 +391,7 @@ impl SessionReport {
 			.replace("## ", "")
 			.replace("**", "")
 			.replace("*", "");
-		println!("{}", plain_text);
+		// Use print! instead of println! to avoid extra newline since content may already have them
+		print!("{}", plain_text);
 	}
 }

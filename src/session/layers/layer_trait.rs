@@ -296,9 +296,8 @@ impl LayerConfig {
 				.await;
 			self.processed_system_prompt = Some(processed);
 		} else {
-			// Cache the fallback prompt as well
-			let fallback = format!("You are a specialized AI layer named '{}'. Process the input according to your purpose.", self.name);
-			self.processed_system_prompt = Some(fallback);
+			// STRICT CONFIG: system_prompt must be defined in config for all layers
+			panic!("CRITICAL CONFIG ERROR: Layer '{}' missing system_prompt. All layers must have system_prompt defined in config.", self.name);
 		}
 	}
 
