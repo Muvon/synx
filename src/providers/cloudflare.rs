@@ -262,7 +262,7 @@ impl AiProvider for CloudflareWorkersAiProvider {
 		let mut request_body = serde_json::json!({
 			"messages": cloudflare_messages,
 			"temperature": temperature,
-			// "max_tokens": 16384,
+			"max_tokens": 16384,
 		});
 
 		// Add tool definitions if MCP has any servers configured
