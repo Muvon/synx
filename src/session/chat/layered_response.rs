@@ -92,10 +92,6 @@ pub async fn process_layered_response(
 		}
 	};
 
-	// This is important to add message as USER here for automatic processing next
-	// We already added messages from output before as ASSISTANT
-	chat_session.add_user_message(input)?;
-
 	// Stop the animation using the separate animation flag
 	animation_cancel.store(true, Ordering::SeqCst);
 	let _ = animation_task.await;

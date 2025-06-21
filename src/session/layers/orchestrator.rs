@@ -184,7 +184,10 @@ impl LayeredOrchestrator {
 				.process(&current_input, session, config, operation_cancelled.clone())
 				.await?;
 
-			println!("{}", "Output:".bright_green());
+			println!(
+				"{}",
+				format!("───── Result of {} ─────", layer_name).bright_yellow()
+			);
 			for (i, output) in result.outputs.iter().enumerate() {
 				if result.outputs.len() > 1 {
 					println!("--- Output {} ---", i + 1);

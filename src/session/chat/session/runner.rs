@@ -680,15 +680,15 @@ pub async fn run_interactive_session<T: clap::Args + std::fmt::Debug>(
 						// Layers used output_mode append/replace and added messages to session
 						// Skip adding user message to avoid duplicates
 						log_info!(
-							"Layers modified session ({} messages added). Skipping user message addition.",
+							"Layers modified session ({} messages added).",
 							messages_after_layers - messages_before_layers
 						);
 
 						// Mark that we've processed the first message through layers
+						// We will continue here with the user message
+						// to guarantee that the otput from layer next
+						// processed with the main loop
 						first_message_processed = true;
-
-						// Continue to next iteration - session already has the layer messages
-						continue;
 					} else {
 						// Layers didn't modify session (all had output_mode = none)
 						// Use the processed input from layers instead of the original input
