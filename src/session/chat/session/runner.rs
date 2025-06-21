@@ -213,16 +213,17 @@ pub async fn run_interactive_session<T: clap::Args + std::fmt::Debug>(
 
 	// Initialize with system prompt if new session
 	if chat_session.session.messages.is_empty() {
-		// Create system prompt based on role
-		let system_prompt = create_system_prompt(&current_dir, config, &session_args.role).await;
+		// Create system prompt based on role - use merged config for role
+		let system_prompt =
+			create_system_prompt(&current_dir, &config_for_role, &session_args.role).await;
 		chat_session.add_system_message(&system_prompt)?;
 
 		// Process layer system prompts during session initialization
 		// This ensures layer system prompts are processed once and cached for the entire session
-		let (role_config, _, _, _, _) = config.get_role_config(&session_args.role);
+		let (role_config, _, _, _, _) = config_for_role.get_role_config(&session_args.role);
 		if role_config.enable_layers {
 			use crate::session::layers::LayeredOrchestrator;
-			// Create orchestrator with processed system prompts
+			// Create orchestrator with processed system prompts - use original config for layers
 			let _orchestrator = LayeredOrchestrator::from_config_with_processed_prompts(
 				config,
 				&session_args.role,
@@ -235,7 +236,7 @@ pub async fn run_interactive_session<T: clap::Args + std::fmt::Debug>(
 		// CRITICAL FIX: Apply automatic cache markers for system messages AND tool definitions
 		// This ensures consistent caching behavior across all supported models
 		let supports_caching = crate::session::model_supports_caching(&chat_session.model);
-		let has_tools = !config.mcp.servers.is_empty();
+		let has_tools = !config_for_role.mcp.servers.is_empty();
 
 		if supports_caching {
 			let cache_manager = crate::session::cache::CacheManager::new();
@@ -1161,7 +1162,8 @@ pub async fn run_interactive_session_with_input<T: clap::Args + std::fmt::Debug>
 
 	// Initialize with system prompt if new session - same as interactive
 	if chat_session.session.messages.is_empty() {
-		let system_prompt = create_system_prompt(&current_dir, config, &session_args.role).await;
+		let system_prompt =
+			create_system_prompt(&current_dir, &config_for_role, &session_args.role).await;
 		chat_session.add_system_message(&system_prompt)?;
 
 		// Process layer system prompts - same as interactive
@@ -1179,7 +1181,7 @@ pub async fn run_interactive_session_with_input<T: clap::Args + std::fmt::Debug>
 
 		// Apply automatic cache markers - same as interactive
 		let supports_caching = crate::session::model_supports_caching(&chat_session.model);
-		let has_tools = !config.mcp.servers.is_empty();
+		let has_tools = !config_for_role.mcp.servers.is_empty();
 
 		if supports_caching {
 			let cache_manager = crate::session::cache::CacheManager::new();

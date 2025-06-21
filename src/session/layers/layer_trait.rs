@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{Config, McpServerConfig};
+use crate::config::Config;
 use crate::session::{ProviderExchange, Session, TokenUsage};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -188,37 +188,6 @@ impl LayerMcpConfig {
 
 		false
 	}
-
-	/// Expand allowed_tools patterns into actual tool names for a specific server
-	/// This converts patterns like "filesystem:*" or "filesystem:text_*" into concrete tool lists
-	fn expand_patterns_for_server(&self, server_name: &str) -> Vec<String> {
-		let mut expanded_tools = Vec::new();
-
-		for pattern in &self.allowed_tools {
-			// Check for server group pattern (e.g., "filesystem:*" or "filesystem:text_*")
-			if let Some((server_prefix, tool_pattern)) = pattern.split_once(':') {
-				// Check if server matches
-				if server_prefix == server_name {
-					if tool_pattern == "*" {
-						// All tools from this server - return empty to indicate "all tools"
-						return Vec::new();
-					} else if tool_pattern.ends_with('*') {
-						// Prefix matching (e.g., "text_*") - we'll need to get actual tools and filter
-						// For now, store the pattern and let the existing filtering handle it
-						expanded_tools.push(tool_pattern.to_string());
-					} else {
-						// Exact tool name within server namespace
-						expanded_tools.push(tool_pattern.to_string());
-					}
-				}
-			} else {
-				// Exact tool name match (backward compatibility) - include for all servers
-				expanded_tools.push(pattern.clone());
-			}
-		}
-
-		expanded_tools
-	}
 }
 
 // Common configuration properties for all layers - extended for flexibility
@@ -268,68 +237,24 @@ impl LayerConfig {
 
 		// Create role-like MCP config from layer's server_refs
 		if !self.mcp.server_refs.is_empty() {
-			// Get servers from the global registry based on server_refs
-			let mut layer_servers = Vec::new();
+			// CRITICAL FIX: Always use the original global registry, not the base_config.mcp.servers
+			// because base_config might already be role-filtered and we need access to the full registry
 
-			for server_name in &self.mcp.server_refs {
-				// Get from loaded registry
-				let server_config = base_config
-					.mcp
-					.servers
-					.iter()
-					.find(|s| s.name() == *server_name)
-					.cloned();
+			// Get the original config to access the full global registry
+			let original_config = crate::config::Config::load()
+				.expect("CRITICAL: Failed to load original config for layer MCP access - this should never happen");
+			let global_registry = original_config.mcp.servers;
 
-				if let Some(mut server) = server_config {
-					// Name is already set in the server config
-					// Apply layer-specific tool filtering if specified
-					if !self.mcp.allowed_tools.is_empty() {
-						// Convert patterns to actual tool names for this server
-						let filtered_tools = self.mcp.expand_patterns_for_server(server_name);
-						// Recreate server with filtered tools
-						server = match server {
-							McpServerConfig::Builtin {
-								name,
-								timeout_seconds,
-								..
-							} => McpServerConfig::Builtin {
-								name,
-								timeout_seconds,
-								tools: filtered_tools,
-							},
-							McpServerConfig::Http {
-								name,
-								connection,
-								timeout_seconds,
-								..
-							} => McpServerConfig::Http {
-								name,
-								connection,
-								timeout_seconds,
-								tools: filtered_tools,
-							},
-							McpServerConfig::Stdin {
-								name,
-								command,
-								args,
-								timeout_seconds,
-								..
-							} => McpServerConfig::Stdin {
-								name,
-								command,
-								args,
-								timeout_seconds,
-								tools: filtered_tools,
-							},
-						};
-					}
-					layer_servers.push(server);
-				}
-			}
+			// Use the same logic as RoleMcpConfig::get_enabled_servers()
+			let layer_mcp_config = crate::config::RoleMcpConfig {
+				server_refs: self.mcp.server_refs.clone(),
+				allowed_tools: self.mcp.allowed_tools.clone(),
+			};
 
-			// Override the global MCP configuration with layer-specific servers
+			let enabled_servers = layer_mcp_config.get_enabled_servers(&global_registry);
+
 			merged_config.mcp = crate::config::McpConfig {
-				servers: layer_servers,
+				servers: enabled_servers,
 				allowed_tools: self.mcp.allowed_tools.clone(),
 			};
 		} else {

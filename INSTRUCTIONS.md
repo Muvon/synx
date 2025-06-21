@@ -10,6 +10,41 @@
 **Agent System**: `agent_<name>(task="...")` MCP tools route tasks to specialized AI layers
 **Cache & Cost**: 2-marker cache system + automatic cost tracking across sessions/layers/tools
 
+## 🚫 CRITICAL CODE QUALITY RULES
+
+### **NEVER HIDE ERRORS WITH FALLBACKS**
+```rust
+// ❌ SHIT CODE - hides real problems
+let config = if let Ok(cfg) = load_config() {
+    cfg
+} else {
+    default_config() // This hides the real error!
+};
+
+// ✅ GOOD CODE - exposes problems immediately
+let config = load_config()
+    .expect("CRITICAL: Failed to load config - fix the underlying issue");
+```
+
+### **NEVER USE println!() FOR DEBUG - USE PROPER LOGGING**
+```rust
+// ❌ SHIT CODE
+println!("DEBUG: something happened");
+
+// ✅ GOOD CODE
+crate::log_debug!("Something happened");
+```
+
+### **FAIL FAST ON CONFIGURATION ERRORS**
+- Use `.expect()` with clear error messages for critical operations
+- Never fallback to defaults when the real config is needed
+- Configuration errors should stop execution, not continue silently
+
+### **HANDLE REMOTE SERVER FAILURES PROPERLY**
+- If a remote HTTP server's `tools/list` fails, exclude it completely
+- Don't include fallback tools that won't work
+- Cache empty results to avoid repeated failures
+
 ## 📍 WHERE TO LOOK BY TASK
 
 ### 🔧 CONFIGURATION ISSUES

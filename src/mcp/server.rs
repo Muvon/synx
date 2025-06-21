@@ -235,12 +235,32 @@ pub async fn get_server_functions_cached(server: &McpServerConfig) -> Result<Vec
 				Ok(functions)
 			}
 			Err(e) => {
+				// CRITICAL FIX: For remote HTTP servers, if tools/list fails,
+				// we should NOT include any tools from this server in the API request
+				// because they won't work anyway
+				if server.connection_type() == crate::config::McpConnectionType::Http
+					&& server.url().is_some()
+					&& server.command().is_none()
+				{
+					crate::log_debug!(
+						"Remote HTTP server '{}' failed tools/list - excluding from tools: {}",
+						server_id,
+						e
+					);
+					// Cache empty result to avoid repeated attempts
+					{
+						let mut cache = FUNCTION_CACHE.write().unwrap();
+						cache.insert(server_id.to_string(), Vec::new());
+					}
+					return Ok(Vec::new());
+				}
+
+				// For local servers, fall back to configured tools
 				crate::log_error!(
 					"Failed to get functions from running server '{}': {}",
 					server_id,
 					e
 				);
-				// Fall back to configured tools
 				get_fallback_functions(server)
 			}
 		}
