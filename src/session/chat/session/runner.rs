@@ -435,6 +435,11 @@ pub async fn run_interactive_session<T: clap::Args + std::fmt::Debug>(
 		if ctrl_c_pressed.load(Ordering::SeqCst) {
 			log_debug!("Ctrl+C detected - performing smart cleanup based on operation state");
 
+			// CRITICAL FIX: Display cost information before cleanup
+			// This ensures users see the cost spent before cancellation
+			use crate::session::chat::cost_tracker::CostTracker;
+			CostTracker::display_session_usage(&chat_session);
+
 			let current_state = processing_state.lock().unwrap().clone();
 			let operation = current_operation.lock().unwrap().clone();
 

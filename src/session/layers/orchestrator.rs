@@ -184,6 +184,11 @@ impl LayeredOrchestrator {
 				.process(&current_input, session, config, operation_cancelled.clone())
 				.await?;
 
+			// Check for cancellation after layer processing
+			if operation_cancelled.load(Ordering::SeqCst) {
+				return Err(anyhow::anyhow!("Operation cancelled"));
+			}
+
 			println!(
 				"{}",
 				format!("───── Result of {} ─────", layer_name).bright_yellow()

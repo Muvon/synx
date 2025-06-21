@@ -405,15 +405,23 @@ impl GenericLayer {
 		}
 
 		// Make follow-up API call with tool results
-		match crate::session::chat_completion_with_provider(
+		// CRITICAL FIX: Pass cancellation token to make API calls immediately cancellable
+		match crate::session::chat_completion_with_validation(
 			&layer_session.session.messages,
 			model,
 			self.config.temperature,
 			layer_config,
+			None,                              // No chat session for layers
+			Some(operation_cancelled.clone()), // Pass cancellation token
 		)
 		.await
 		{
 			Ok(response) => {
+				// Check for cancellation after API call
+				if operation_cancelled.load(Ordering::SeqCst) {
+					return Ok(None);
+				}
+
 				// Check for tool calls first
 				let has_tool_calls = if let Some(ref calls) = response.tool_calls {
 					!calls.is_empty()
@@ -493,13 +501,21 @@ impl Layer for GenericLayer {
 		let layer_config = self.config.get_merged_config_for_layer(config);
 
 		// Call the model with the layer's effective model and temperature
-		let response = crate::session::chat_completion_with_provider(
+		// CRITICAL FIX: Pass cancellation token to make API calls immediately cancellable
+		let response = crate::session::chat_completion_with_validation(
 			&messages,
 			&effective_model,
 			self.config.temperature,
 			&layer_config,
+			None,                              // No chat session for layers
+			Some(operation_cancelled.clone()), // Pass cancellation token
 		)
 		.await?;
+
+		// Check for cancellation after API call
+		if operation_cancelled.load(Ordering::SeqCst) {
+			return Err(anyhow::anyhow!("Operation cancelled"));
+		}
 
 		let (output, exchange, direct_tool_calls, finish_reason) = (
 			response.content,
