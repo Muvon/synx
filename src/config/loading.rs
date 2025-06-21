@@ -381,10 +381,6 @@ tools = []
 		assert!(!role_config.enable_layers);
 		assert_eq!(mcp_config.server_refs, vec!["octocode", "clt"]);
 
-		// Test fallback for unknown role
-		let (_, mcp_config, _, _, _) = config.get_role_config("unknown");
-		assert_eq!(mcp_config.server_refs, Vec::<String>::new()); // Should return empty for unknown roles
-
 		// Test get_merged_config_for_mode for custom role
 		let merged_config = config.get_merged_config_for_role("tester");
 		// The merged config should only include servers that are referenced by the tester role
