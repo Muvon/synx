@@ -365,34 +365,35 @@ impl Config {
 	}
 
 	/// Get enabled layers for a specific role (filters global layers by role layer_refs)
+	/// STRICT CONFIG: All referenced layers MUST exist in config - no fallbacks
 	pub fn get_enabled_layers(&self, role: &str) -> Vec<crate::session::layers::LayerConfig> {
 		let layer_refs = self.get_layer_refs(role);
 		if layer_refs.is_empty() {
 			return Vec::new();
 		}
 
+		// STRICT CONFIG CHECK: layers registry must exist
+		let all_layers = if let Some(layers) = &self.layers {
+			layers
+		} else {
+			panic!("CRITICAL CONFIG ERROR: No layers defined in config but role '{}' references layers: {:?}. All layers must be explicitly defined in config.", role, layer_refs);
+		};
+
 		let mut result = Vec::new();
 		for layer_name in layer_refs {
-			// Get from global layers registry
-			let layer_config = if let Some(all_layers) = &self.layers {
-				all_layers
-					.iter()
-					.find(|layer| layer.name == *layer_name)
-					.cloned()
-			} else {
-				None
-			};
+			// STRICT CONFIG CHECK: referenced layer must exist
+			let layer_config = all_layers
+				.iter()
+				.find(|layer| layer.name == *layer_name)
+				.cloned();
 
 			if let Some(mut layer) = layer_config {
 				// Auto-set the name from the registry key
 				layer.name = layer_name.clone();
 				result.push(layer);
 			} else {
-				crate::log_debug!(
-					"Layer '{}' referenced by role '{}' but not found in global registry",
-					layer_name,
-					role
-				);
+				// STRICT CONFIG: Missing layer is CRITICAL error
+				panic!("CRITICAL CONFIG ERROR: Layer '{}' referenced by role '{}' but not found in config layers registry. All referenced layers must be explicitly defined in config.", layer_name, role);
 			}
 		}
 

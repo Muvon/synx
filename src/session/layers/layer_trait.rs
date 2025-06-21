@@ -237,13 +237,9 @@ impl LayerConfig {
 
 		// Create role-like MCP config from layer's server_refs
 		if !self.mcp.server_refs.is_empty() {
-			// CRITICAL FIX: Always use the original global registry, not the base_config.mcp.servers
-			// because base_config might already be role-filtered and we need access to the full registry
-
-			// Get the original config to access the full global registry
-			let original_config = crate::config::Config::load()
-				.expect("CRITICAL: Failed to load original config for layer MCP access - this should never happen");
-			let global_registry = original_config.mcp.servers;
+			// CRITICAL BUG FIX: Use the base_config's full server registry instead of reloading
+			// The base_config should already have the complete server registry available
+			// Reloading Config::load() bypasses runtime processing and causes server_refs to fail
 
 			// Use the same logic as RoleMcpConfig::get_enabled_servers()
 			let layer_mcp_config = crate::config::RoleMcpConfig {
@@ -251,7 +247,15 @@ impl LayerConfig {
 				allowed_tools: self.mcp.allowed_tools.clone(),
 			};
 
-			let enabled_servers = layer_mcp_config.get_enabled_servers(&global_registry);
+			// Use base_config's server registry - it should contain all configured servers
+			let enabled_servers = layer_mcp_config.get_enabled_servers(&base_config.mcp.servers);
+
+			crate::log_debug!(
+				"Layer '{}' enabling {} servers from server_refs: {:?}",
+				self.name,
+				enabled_servers.len(),
+				self.mcp.server_refs
+			);
 
 			merged_config.mcp = crate::config::McpConfig {
 				servers: enabled_servers,
@@ -324,65 +328,6 @@ impl LayerConfig {
 		}
 
 		processed
-	}
-
-	/// Create a default configuration for known system layer types
-	pub fn create_system_layer(layer_type: &str) -> Self {
-		match layer_type {
-			"query_processor" => Self {
-				name: layer_type.to_string(),
-				model: Some("openrouter:openai/gpt-4.1-nano".to_string()),
-				system_prompt: None, // Use built-in prompt
-				temperature: 0.2,
-				input_mode: InputMode::Last,
-				output_mode: OutputMode::None, // Intermediate layer - doesn't modify session
-				mcp: LayerMcpConfig {
-					server_refs: vec![],
-					allowed_tools: vec![],
-				},
-				parameters: std::collections::HashMap::new(),
-				processed_system_prompt: None, // Will be processed during session initialization
-			},
-			"context_generator" => Self {
-				name: layer_type.to_string(),
-				model: Some("openrouter:google/gemini-2.5-flash-preview".to_string()),
-				system_prompt: None, // Use built-in prompt
-				temperature: 0.2,
-				input_mode: InputMode::Last,
-				output_mode: OutputMode::Replace, // Replaces input with processed context
-				mcp: LayerMcpConfig {
-					server_refs: vec!["developer".to_string(), "filesystem".to_string()],
-					allowed_tools: vec!["text_editor".to_string(), "list_files".to_string()],
-				},
-				parameters: std::collections::HashMap::new(),
-				processed_system_prompt: None, // Will be processed during session initialization
-			},
-			"reducer" => Self {
-				name: layer_type.to_string(),
-				model: Some("openrouter:openai/o4-mini".to_string()),
-				system_prompt: None, // Use built-in prompt
-				temperature: 0.2,
-				input_mode: InputMode::All,
-				output_mode: OutputMode::Replace, // Replaces entire session with reduced content
-				mcp: LayerMcpConfig {
-					server_refs: vec![],
-					allowed_tools: vec![],
-				},
-				parameters: std::collections::HashMap::new(),
-				processed_system_prompt: None, // Will be processed during session initialization
-			},
-			_ => Self {
-				name: layer_type.to_string(),
-				model: None,         // Use session model
-				system_prompt: None, // Use generic prompt
-				temperature: 0.2,
-				input_mode: InputMode::Last,
-				output_mode: OutputMode::None, // Default: intermediate layer
-				mcp: LayerMcpConfig::default(),
-				parameters: std::collections::HashMap::new(),
-				processed_system_prompt: None, // Will be processed during session initialization
-			},
-		}
 	}
 }
 
