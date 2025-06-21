@@ -188,9 +188,9 @@ impl LayeredOrchestrator {
 				"{}",
 				format!("───── Result of {} ─────", layer_name).bright_yellow()
 			);
-			
+
 			// Display layer outputs with improved formatting
-			self.display_layer_outputs(&result.outputs, &layer_name);
+			self.display_layer_outputs(&result.outputs, layer_name);
 
 			// Track token usage stats
 			if let Some(usage) = &result.token_usage {
@@ -376,7 +376,7 @@ impl LayeredOrchestrator {
 			if outputs.len() > 1 {
 				println!("--- Output {} ---", i + 1);
 			}
-			
+
 			// Check if this output contains assistant response text that should be formatted
 			if !output.trim().is_empty() {
 				// Display the output with assistant response formatting
@@ -386,29 +386,37 @@ impl LayeredOrchestrator {
 	}
 
 	/// Display assistant output with formatting similar to main loop style
-	fn display_formatted_assistant_output(&self, output: &str, layer_name: &str, output_index: usize) {
+	fn display_formatted_assistant_output(
+		&self,
+		output: &str,
+		layer_name: &str,
+		output_index: usize,
+	) {
 		use colored::Colorize;
-		
+
 		// Create a header similar to tool execution style for assistant responses
 		let title = format!(" Assistant Response | {} ", layer_name);
 		let separator_length = 70.max(title.len() + 4);
 		let dashes = "─".repeat(separator_length - title.len());
 		let separator = format!("──{}{}──", title.bright_cyan(), dashes.dimmed());
-		
+
 		println!("{}", separator);
-		
+
 		// Display the content with smart formatting
 		self.display_assistant_content_smart(output);
-		
+
 		// Add completion indicator
-		println!("{}", format!("✓ Layer '{}' output {} completed", layer_name, output_index).bright_green());
+		println!(
+			"{}",
+			format!("✓ Layer '{}' output {} completed", layer_name, output_index).bright_green()
+		);
 		println!("──────────────────");
 	}
 
 	/// Display assistant content with smart formatting (similar to tool output formatting)
 	fn display_assistant_content_smart(&self, content: &str) {
 		let lines: Vec<&str> = content.lines().collect();
-		
+
 		if lines.len() <= 50 && content.chars().count() <= 5000 {
 			// Reasonable size: show as-is
 			println!("{}", content);
@@ -417,7 +425,10 @@ impl LayeredOrchestrator {
 			for line in lines.iter().take(40) {
 				println!("{}", line);
 			}
-			println!("{}", format!("... [+{} more lines]", lines.len().saturating_sub(40)).bright_black());
+			println!(
+				"{}",
+				format!("... [+{} more lines]", lines.len().saturating_sub(40)).bright_black()
+			);
 		} else {
 			// Long content: truncate with indication
 			let truncated: String = content.chars().take(4997).collect();
