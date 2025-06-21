@@ -348,7 +348,7 @@ async fn make_follow_up_api_call(
 }
 
 // Check if conversation should continue based on finish_reason
-fn check_should_continue(
+pub fn check_should_continue(
 	response: &crate::providers::ProviderResponse,
 	_config: &Config,
 	has_more_tools: bool,

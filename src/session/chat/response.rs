@@ -15,7 +15,7 @@
 // Response processing module - main orchestrator
 
 pub mod tool_execution;
-mod tool_result_processor;
+pub mod tool_result_processor;
 
 use super::{CostTracker, MessageHandler, ToolProcessor};
 use crate::config::Config;
@@ -428,7 +428,7 @@ pub async fn process_response(
 				if operation_cancelled.load(Ordering::SeqCst) {
 					println!(
 						"{}",
-						"\\nTool execution cancelled - cleaning up conversation state."
+						"\nTool execution cancelled - cleaning up conversation state."
 							.bright_yellow()
 					);
 

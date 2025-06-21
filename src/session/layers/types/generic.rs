@@ -176,23 +176,43 @@ impl GenericLayer {
 							current_tool_calls_param = new_tool_calls;
 
 							// Add the new content to our outputs collection
-							outputs.push(new_content);
+							outputs.push(new_content.clone());
 
-							// Check if there are more tools to process
-							if current_tool_calls_param.is_some()
-								&& !current_tool_calls_param.as_ref().unwrap().is_empty()
-							{
-								// Continue processing the new content with tool calls
+							// Use the same finish_reason logic for recursive continuation
+							let has_tool_calls = if current_tool_calls_param.is_some() {
+								!current_tool_calls_param.as_ref().unwrap().is_empty()
+							} else {
+								!crate::mcp::parse_tool_calls(&current_content).is_empty()
+							};
+
+							let should_continue = crate::session::chat::response::tool_result_processor::check_should_continue(
+								&crate::providers::ProviderResponse {
+									content: current_content.clone(),
+									exchange: current_exchange.clone(),
+									tool_calls: current_tool_calls_param.clone(),
+									finish_reason: new_exchange.response.get("choices")
+										.and_then(|c| c.get(0))
+										.and_then(|choice| choice.get("finish_reason"))
+										.and_then(|fr| fr.as_str())
+										.map(|s| s.to_string()),
+								},
+								&layer_config,
+								has_tool_calls,
+							);
+
+							crate::log_debug!(
+								"Layer {} recursive loop: has_tool_calls={}, should_continue={}",
+								self.config.name,
+								has_tool_calls,
+								should_continue
+							);
+
+							if should_continue {
+								// Continue processing
 								continue;
 							} else {
-								// Check if there are more tool calls in the content itself
-								let more_tools = crate::mcp::parse_tool_calls(&current_content);
-								if !more_tools.is_empty() {
-									continue;
-								} else {
-									// No more tool calls, break out of the loop
-									break;
-								}
+								// finish_reason says stop, break out of the loop
+								break;
 							}
 						} else {
 							// No follow-up response (cancelled or error), exit
@@ -200,12 +220,35 @@ impl GenericLayer {
 						}
 					} else {
 						// No tool results - check if there were more tools to execute directly
+						// Use finish_reason logic here too
 						let more_tools = crate::mcp::parse_tool_calls(&current_content);
-						if !more_tools.is_empty() {
+						let should_continue = crate::session::chat::response::tool_result_processor::check_should_continue(
+							&crate::providers::ProviderResponse {
+								content: current_content.clone(),
+								exchange: current_exchange.clone(),
+								tool_calls: None, // No direct tool calls in this case
+								finish_reason: current_exchange.response.get("choices")
+									.and_then(|c| c.get(0))
+									.and_then(|choice| choice.get("finish_reason"))
+									.and_then(|fr| fr.as_str())
+									.map(|s| s.to_string()),
+							},
+							&layer_config,
+							!more_tools.is_empty(),
+						);
+
+						crate::log_debug!(
+							"Layer {} no_tool_results: more_tools={}, should_continue={}",
+							self.config.name,
+							!more_tools.is_empty(),
+							should_continue
+						);
+
+						if should_continue {
 							// If there are more tool calls later in the response, continue processing
 							continue;
 						} else {
-							// No more tool calls, exit the loop
+							// No more tool calls or finish_reason says stop, exit the loop
 							break;
 						}
 					}
@@ -373,12 +416,28 @@ impl GenericLayer {
 		.await
 		{
 			Ok(response) => {
-				// Check if there are more tool calls to process
-				let has_more_tools = if let Some(ref calls) = response.tool_calls {
+				// Check for tool calls first
+				let has_tool_calls = if let Some(ref calls) = response.tool_calls {
 					!calls.is_empty()
 				} else {
 					!crate::mcp::parse_tool_calls(&response.content).is_empty()
 				};
+
+				// Use existing finish_reason logic from main session
+				let has_more_tools =
+					crate::session::chat::response::tool_result_processor::check_should_continue(
+						&response,
+						layer_config, // Use the actual layer config
+						has_tool_calls,
+					);
+
+				crate::log_debug!(
+					"Layer {} tool_results: finish_reason={:?}, has_tool_calls={}, has_more_tools={}",
+					self.config.name,
+					response.finish_reason,
+					has_tool_calls,
+					has_more_tools
+				);
 
 				if has_more_tools {
 					Ok(Some((
@@ -444,7 +503,7 @@ impl Layer for GenericLayer {
 		)
 		.await?;
 
-		let (output, exchange, direct_tool_calls, _finish_reason) = (
+		let (output, exchange, direct_tool_calls, finish_reason) = (
 			response.content,
 			response.exchange,
 			response.tool_calls,
@@ -460,15 +519,36 @@ impl Layer for GenericLayer {
 
 		// Check if the layer response contains tool calls and if MCP is enabled for this layer
 		if !self.config.mcp.server_refs.is_empty() {
-			// First try to use directly returned tool calls, then fall back to parsing if needed
-			let tool_calls = if let Some(ref calls) = direct_tool_calls {
-				calls
+			// Check for tool calls first
+			let has_tool_calls = if let Some(ref calls) = direct_tool_calls {
+				!calls.is_empty()
 			} else {
-				&crate::mcp::parse_tool_calls(&output)
+				!crate::mcp::parse_tool_calls(&output).is_empty()
 			};
 
-			// If there are tool calls, process them using this layer's MCP configuration
-			if !tool_calls.is_empty() {
+			// Use existing finish_reason logic from main session
+			let should_continue =
+				crate::session::chat::response::tool_result_processor::check_should_continue(
+					&crate::providers::ProviderResponse {
+						content: output.clone(),
+						exchange: exchange.clone(),
+						tool_calls: direct_tool_calls.clone(),
+						finish_reason: finish_reason.clone(),
+					},
+					config,
+					has_tool_calls,
+				);
+
+			crate::log_debug!(
+				"Layer {}: finish_reason={:?}, has_tool_calls={}, should_continue={}",
+				self.config.name,
+				finish_reason,
+				has_tool_calls,
+				should_continue
+			);
+
+			// If we should continue with tool processing, use recursive tool call handling
+			if should_continue {
 				// Use the unified response processing system for recursive tool call handling
 				// This ensures layers have the same recursive tool call support as main sessions
 				return self
