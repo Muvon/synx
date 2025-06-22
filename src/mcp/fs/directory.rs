@@ -107,56 +107,47 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 		.and_then(|v| v.as_bool())
 		.unwrap_or(false);
 
-	// Build the ripgrep command based on the parameters
-	let mut cmd_args = Vec::new();
+	let max_lines = call
+		.parameters
+		.get("max_lines")
+		.and_then(|v| v.as_i64())
+		.unwrap_or(20) as usize;
 
+	// Build the ripgrep command using proper argument passing
+	let mut cmd = Command::new("rg");
+
+	// Add depth limit if specified
 	if let Some(depth) = max_depth {
-		cmd_args.push(format!("--max-depth={}", depth));
+		cmd.arg("--max-depth").arg(depth.to_string());
 	}
 
 	// Add hidden files flag if requested
 	if include_hidden {
-		cmd_args.push("--hidden".to_string());
+		cmd.arg("--hidden");
 	}
 
-	// Search for content in files or list files matching pattern
-	let (cmd, output_type) = if let Some(ref content_pattern) = content {
-		(
-			format!(
-				"cd '{}' && rg '{}' {}",
-				directory,
-				content_pattern,
-				cmd_args.join(" ")
-			),
-			"content search",
-		)
-	} else if let Some(ref name_pattern) = pattern {
-		// Convert glob pattern to regex pattern
-		let regex_pattern = convert_glob_to_regex(name_pattern);
-		(
-			format!(
-				"cd '{}' && rg --files {} | rg '{}'",
-				directory,
-				cmd_args.join(" "),
-				regex_pattern
-			),
-			"filename pattern",
-		)
+	// Set current directory
+	cmd.current_dir(&directory);
+
+	// Configure the command based on the operation type
+	let output_type = if let Some(ref content_pattern) = content {
+		// Search for content in files
+		cmd.arg(content_pattern);
+		"content search"
+	} else if let Some(ref _name_pattern) = pattern {
+		// List files and filter by pattern
+		cmd.arg("--files");
+		// We'll filter the output by pattern later to avoid shell escaping issues
+		"filename pattern"
 	} else {
 		// Default: list all files using ripgrep
-		(
-			format!("cd '{}' && rg --files {}", directory, cmd_args.join(" ")),
-			"file listing",
-		)
+		cmd.arg("--files");
+		"file listing"
 	};
 
 	// Execute the command
 	let output = tokio::task::spawn_blocking(move || {
-		let output = if cfg!(target_os = "windows") {
-			Command::new("cmd").args(["/C", &cmd]).output()
-		} else {
-			Command::new("sh").args(["-c", &cmd]).output()
-		};
+		let output = cmd.output();
 
 		match output {
 			Ok(output) => {
@@ -164,39 +155,92 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 				let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
 				// Parse the output into a list of files
-				let files: Vec<&str> = stdout.lines().collect();
+				let mut files: Vec<String> = stdout.lines().map(|s| s.to_string()).collect();
+
+				// Filter by pattern if we're doing filename pattern matching
+				if let Some(ref name_pattern) = pattern {
+					let regex_pattern = convert_glob_to_regex(name_pattern);
+					if let Ok(regex) = regex::Regex::new(&regex_pattern) {
+						files.retain(|file| regex.is_match(file));
+					}
+				}
+
+				// Apply truncation if max_lines is set (0 means unlimited)
+				let (truncated_files, truncation_info) = if max_lines > 0 && files.len() > max_lines
+				{
+					let total_count = files.len();
+					let half_limit = max_lines / 2;
+					let remaining = max_lines - half_limit;
+
+					let mut truncated = Vec::new();
+
+					// Add first half
+					truncated.extend(files.iter().take(half_limit).cloned());
+
+					// Add truncation marker
+					let truncated_count = total_count - max_lines;
+					truncated.push(format!(
+						"[{} lines truncated - use more specific patterns or increase max_lines]",
+						truncated_count
+					));
+
+					// Add last portion
+					truncated.extend(files.iter().skip(total_count - remaining).cloned());
+
+					(
+						truncated,
+						Some(format!(
+							"Output truncated: showing {} of {} total files",
+							max_lines, total_count
+						)),
+					)
+				} else {
+					(files.clone(), None)
+				};
+
 				let output_str = if stdout.is_empty() && !stderr.is_empty() {
 					stderr
 				} else {
-					stdout.clone()
+					truncated_files.join("\n")
 				};
 
-				json!({
-						"success": output.status.success(),
-						"output": output_str,
-						"files": files,
-						"count": files.len(),
-						"type": output_type,
-						"parameters": {
+				let mut result = json!({
+					"success": output.status.success(),
+					"output": output_str,
+					"files": truncated_files,
+					"count": files.len(),
+					"displayed_count": truncated_files.len(),
+					"type": output_type,
+					"parameters": {
 						"directory": directory,
 						"pattern": pattern,
 						"content": content,
 						"max_depth": max_depth,
-						"include_hidden": include_hidden
+						"include_hidden": include_hidden,
+						"max_lines": max_lines
 					}
-				})
+				});
+
+				// Add truncation info if present
+				if let Some(info) = truncation_info {
+					result["truncation_info"] = json!(info);
+				}
+
+				result
 			}
 			Err(e) => json!({
-					"success": false,
-					"output": format!("Failed to list files: {}", e),
-					"files": [],
-					"count": 0,
-					"parameters": {
+				"success": false,
+				"output": format!("Failed to list files: {}", e),
+				"files": [],
+				"count": 0,
+				"displayed_count": 0,
+				"parameters": {
 					"directory": directory,
 					"pattern": pattern,
 					"content": content,
 					"max_depth": max_depth,
-					"include_hidden": include_hidden
+					"include_hidden": include_hidden,
+					"max_lines": max_lines
 				}
 			}),
 		}

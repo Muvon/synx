@@ -34,21 +34,22 @@ pub fn get_list_files_function() -> McpFunction {
 			- `content`: Optional content search within files
 			- `max_depth`: Optional depth limit for directory traversal
 			- `include_hidden`: Include hidden files/directories starting with '.' (default: false)
+			- `max_lines`: Maximum lines to return (default: 20, set to 0 for unlimited)
 
 			Best Practices:
 			- Always use specific patterns - avoid listing entire large directories
 			- Use max_depth to limit scope and reduce token usage
 			- Combine with content search when looking for specific functionality
-			- Filter by file type using patterns like '\\*.rs' or '\\*.toml'
+			- Filter by file type using patterns like '*.rs' or '*.toml'
 			- Use include_hidden=false (default) to exclude dotfiles for cleaner results
 
 			Examples:
-			- Find Rust files: `{\"directory\": \"src\", \"pattern\": \"\\*.rs\"}`
-			- Find config files: `{\"directory\": \".\", \"pattern\": \"\\*.toml|\\*.yaml|\\*.json\"}`
+			- Find Rust files: `{\"directory\": \"src\", \"pattern\": \"*.rs\"}`
+			- Find config files: `{\"directory\": \".\", \"pattern\": \"*.toml|*.yaml|*.json\"}`
 			- Search for function: `{\"directory\": \"src\", \"content\": \"fn main\"}`
-			- Limited depth: `{\"directory\": \".\", \"max_depth\": 2, \"pattern\": \"\\*.rs\"}`
+			- Limited depth: `{\"directory\": \".\", \"max_depth\": 2, \"pattern\": \"*.rs\"}`
 			- Include dotfiles: `{\"directory\": \".\", \"pattern\": \".*rc\", \"include_hidden\": true}`
-			- Find hidden configs: `{\"directory\": \".\", \"include_hidden\": true, \"pattern\": \"\\*.json|\\*.yaml\"}`
+			- Find hidden configs: `{\"directory\": \".\", \"include_hidden\": true, \"pattern\": \"*.json|*.yaml\"}`
 
 			Token-Efficient Usage:
 			- Use patterns to target specific file types
@@ -80,6 +81,11 @@ pub fn get_list_files_function() -> McpFunction {
 					"type": "boolean",
 					"default": false,
 					"description": "Include hidden files and directories starting with '.' (default: false)"
+				},
+				"max_lines": {
+					"type": "integer",
+					"default": 20,
+					"description": "Maximum lines to return (default: 20, set to 0 for unlimited)"
 				}
 			}
 		}),

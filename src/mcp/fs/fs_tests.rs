@@ -668,4 +668,84 @@ mod tests {
 	async fn test_insert_text_no_final_newline() {
 		test_insert_text("line 1\nline 2", 1, "INSERTED", "line 1\nINSERTED\nline 2").await;
 	}
+
+	#[tokio::test]
+	async fn test_list_files_truncation() {
+		use crate::mcp::fs::directory::execute_list_files;
+		use std::fs;
+		use tempfile::TempDir;
+
+		// Create a temporary directory with many files
+		let temp_dir = TempDir::new().unwrap();
+		let temp_path = temp_dir.path();
+
+		// Create 30 test files
+		for i in 1..=30 {
+			let file_path = temp_path.join(format!("test_file_{:02}.txt", i));
+			fs::write(&file_path, format!("Content of file {}", i)).unwrap();
+		}
+
+		// Test with default max_lines (20) - should truncate
+		let call = McpToolCall {
+			tool_name: "list_files".to_string(),
+			parameters: json!({
+				"directory": temp_path.to_str().unwrap(),
+				"pattern": "*.txt"
+			}),
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let result = execute_list_files(&call).await.unwrap();
+		let output = result.result.as_object().unwrap();
+
+		// Should have truncation info
+		assert!(output.contains_key("truncation_info"));
+		assert_eq!(output["count"], 30); // Total count
+		assert_eq!(output["displayed_count"], 21); // 20 + 1 truncation marker
+
+		// Test with max_lines = 0 (unlimited) - should not truncate
+		let call_unlimited = McpToolCall {
+			tool_name: "list_files".to_string(),
+			parameters: json!({
+				"directory": temp_path.to_str().unwrap(),
+				"pattern": "*.txt",
+				"max_lines": 0
+			}),
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let result_unlimited = execute_list_files(&call_unlimited).await.unwrap();
+		let output_unlimited = result_unlimited.result.as_object().unwrap();
+
+		// Should not have truncation info
+		assert!(!output_unlimited.contains_key("truncation_info"));
+		assert_eq!(output_unlimited["count"], 30);
+		assert_eq!(output_unlimited["displayed_count"], 30);
+
+		// Test with max_lines = 5 - should truncate more aggressively
+		let call_small = McpToolCall {
+			tool_name: "list_files".to_string(),
+			parameters: json!({
+				"directory": temp_path.to_str().unwrap(),
+				"pattern": "*.txt",
+				"max_lines": 5
+			}),
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let result_small = execute_list_files(&call_small).await.unwrap();
+		let output_small = result_small.result.as_object().unwrap();
+
+		// Should have truncation info
+		assert!(output_small.contains_key("truncation_info"));
+		assert_eq!(output_small["count"], 30);
+		assert_eq!(output_small["displayed_count"], 6); // 5 + 1 truncation marker
+
+		// Check that truncation marker is present in the files array
+		let files = output_small["files"].as_array().unwrap();
+		let has_truncation_marker = files
+			.iter()
+			.any(|f| f.as_str().unwrap_or("").contains("lines truncated"));
+		assert!(has_truncation_marker);
+	}
 }
