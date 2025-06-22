@@ -17,6 +17,7 @@
 use super::super::{McpFunction, McpToolCall, McpToolResult};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use std::path::Path;
 
 // Group ast-grep output by file for token efficiency while preserving line numbers
 fn group_ast_grep_output(output: &str) -> String {
@@ -63,6 +64,52 @@ fn group_ast_grep_output(output: &str) -> String {
 	} else {
 		result.join("\n\n")
 	}
+}
+// Expand glob patterns to actual file paths
+fn expand_glob_patterns(paths: &[String]) -> Result<Vec<String>> {
+	let mut expanded_paths = Vec::new();
+
+	for path in paths {
+		// Check if this looks like a glob pattern
+		if path.contains('*') || path.contains('?') || path.contains('[') {
+			// Use glob to expand the pattern
+			match glob::glob(path) {
+				Ok(entries) => {
+					let mut found_files = false;
+					for entry in entries {
+						match entry {
+							Ok(path_buf) => {
+								if path_buf.is_file() {
+									expanded_paths.push(path_buf.to_string_lossy().to_string());
+									found_files = true;
+								}
+							}
+							Err(e) => {
+								crate::log_debug!("Glob pattern '{}' entry error: {}", path, e);
+							}
+						}
+					}
+					// If no files found for this glob, add a debug message but continue
+					if !found_files {
+						crate::log_debug!("Glob pattern '{}' matched no files", path);
+					}
+				}
+				Err(e) => {
+					return Err(anyhow!("Invalid glob pattern '{}': {}", path, e));
+				}
+			}
+		} else {
+			// Not a glob pattern, add as-is if it exists or is a directory
+			let path_obj = Path::new(path);
+			if path_obj.exists() {
+				expanded_paths.push(path.clone());
+			} else {
+				crate::log_debug!("Path '{}' does not exist, skipping", path);
+			}
+		}
+	}
+
+	Ok(expanded_paths)
 }
 
 // Define the ast_grep function for the MCP protocol with enhanced description
@@ -281,8 +328,24 @@ pub async fn execute_ast_grep_command(
 
 	// Add paths if specified, otherwise default to current directory
 	if let Some(file_paths) = &paths {
-		for path in file_paths {
-			cmd.arg(path);
+		// Expand glob patterns to actual file paths
+		match expand_glob_patterns(file_paths) {
+			Ok(expanded_paths) => {
+				if expanded_paths.is_empty() {
+					// If no files found after expansion, fall back to current directory
+					crate::log_debug!(
+						"No files found after glob expansion, using current directory"
+					);
+					cmd.arg(".");
+				} else {
+					for path in expanded_paths {
+						cmd.arg(path);
+					}
+				}
+			}
+			Err(e) => {
+				return Err(anyhow!("Failed to expand glob patterns: {}", e));
+			}
 		}
 	} else {
 		cmd.arg(".");

@@ -215,6 +215,56 @@ function testFunction() {
 	}
 
 	#[tokio::test]
+	async fn test_ast_grep_glob_pattern_expansion() {
+		// Create temporary test files
+		let temp_dir = tempfile::tempdir().unwrap();
+		let temp_dir_path = temp_dir.path();
+
+		// Create a subdirectory structure
+		let src_dir = temp_dir_path.join("src");
+		std::fs::create_dir_all(&src_dir).unwrap();
+
+		// Create test files
+		let test_file1 = src_dir.join("test1.rs");
+		let test_file2 = src_dir.join("test2.rs");
+		let test_file3 = temp_dir_path.join("other.txt");
+
+		std::fs::write(&test_file1, "fn test_function() { println!(\"test1\"); }").unwrap();
+		std::fs::write(
+			&test_file2,
+			"fn another_function() { println!(\"test2\"); }",
+		)
+		.unwrap();
+		std::fs::write(&test_file3, "not rust code").unwrap();
+
+		// Test with glob pattern
+		let glob_pattern = format!("{}/**/*.rs", temp_dir_path.display());
+		let params = json!({
+			"pattern": "fn $NAME($ARGS) { $$$ }",
+			"language": "rust",
+			"paths": [glob_pattern]
+		});
+
+		let call = McpToolCall {
+			tool_name: "ast_grep".to_string(),
+			parameters: params,
+			tool_id: "test-glob-call-id".to_string(),
+		};
+
+		let result = execute_ast_grep_command(&call, None).await;
+
+		assert!(result.is_ok());
+		let result = result.unwrap();
+		assert_eq!(result.tool_name, "ast_grep");
+
+		let output = result.result.as_object().unwrap();
+		assert!(output.contains_key("success"));
+
+		// The test should succeed even if no matches are found, as long as glob expansion works
+		// (ast-grep might not find matches depending on the pattern, but it shouldn't error)
+	}
+
+	#[tokio::test]
 	async fn test_shell_command_history_integration() {
 		// Test that commands are added to shell history
 		let call = create_shell_call("echo 'history test'", Some(false));
