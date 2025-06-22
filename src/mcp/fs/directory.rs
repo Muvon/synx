@@ -19,6 +19,82 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::process::Command;
 
+// Parse a ripgrep output line to extract filename and rest, handling Windows paths correctly
+fn parse_ripgrep_line(line: &str) -> Option<(&str, &str)> {
+	// Find all colon positions
+	let colon_positions: Vec<usize> = line.match_indices(':').map(|(i, _)| i).collect();
+
+	// We need at least 2 colons for filename:line_number:content format
+	if colon_positions.len() < 2 {
+		return None;
+	}
+
+	// On Windows, the first colon might be after drive letter (C:)
+	// Look for the colon that's followed by digits (line number)
+	for i in 0..colon_positions.len() - 1 {
+		let colon_pos = colon_positions[i];
+		let next_colon_pos = colon_positions[i + 1];
+
+		// Check if the part between these colons is a line number (digits)
+		let potential_line_num = &line[colon_pos + 1..next_colon_pos];
+		if potential_line_num.chars().all(|c| c.is_ascii_digit()) && !potential_line_num.is_empty()
+		{
+			// Found the filename:line_number:content pattern
+			let filename = &line[..colon_pos];
+			let rest = &line[colon_pos + 1..];
+			return Some((filename, rest));
+		}
+	}
+
+	// Fallback: if no digit pattern found, use the last colon before content
+	// This handles edge cases where line numbers might have non-digit characters
+	if colon_positions.len() >= 2 {
+		let colon_pos = colon_positions[colon_positions.len() - 2];
+		let filename = &line[..colon_pos];
+		let rest = &line[colon_pos + 1..];
+		return Some((filename, rest));
+	}
+
+	None
+}
+
+// Parse a ripgrep context line (with dashes) to extract filename and rest, handling Windows paths
+fn parse_ripgrep_dash_line(line: &str) -> Option<(&str, &str)> {
+	// Find all dash positions
+	let dash_positions: Vec<usize> = line.match_indices('-').map(|(i, _)| i).collect();
+
+	// We need at least 2 dashes for filename-line_number-content format
+	if dash_positions.len() < 2 {
+		return None;
+	}
+
+	// On Windows, look for the dash that's followed by digits (line number)
+	for i in 0..dash_positions.len() - 1 {
+		let dash_pos = dash_positions[i];
+		let next_dash_pos = dash_positions[i + 1];
+
+		// Check if the part between these dashes is a line number (digits)
+		let potential_line_num = &line[dash_pos + 1..next_dash_pos];
+		if potential_line_num.chars().all(|c| c.is_ascii_digit()) && !potential_line_num.is_empty()
+		{
+			// Found the filename-line_number-content pattern
+			let filename = &line[..dash_pos];
+			let rest = &line[dash_pos + 1..];
+			return Some((filename, rest));
+		}
+	}
+
+	// Fallback: use the last dash before content
+	if dash_positions.len() >= 2 {
+		let dash_pos = dash_positions[dash_positions.len() - 2];
+		let filename = &line[..dash_pos];
+		let rest = &line[dash_pos + 1..];
+		return Some((filename, rest));
+	}
+
+	None
+}
+
 // Group ripgrep output by file for token efficiency while preserving line numbers
 fn group_ripgrep_output(lines: &[String]) -> String {
 	let mut result = Vec::new();
@@ -37,10 +113,8 @@ fn group_ripgrep_output(lines: &[String]) -> String {
 		}
 
 		// Parse ripgrep output: filename:line_number:content or filename-line_number-content (context)
-		if let Some(colon_pos) = line.find(':') {
-			let filename = &line[..colon_pos];
-			let rest = &line[colon_pos + 1..];
-
+		// Need to handle Windows paths (C:\path\file.rs:123:content) by finding the colon before line number
+		if let Some((filename, rest)) = parse_ripgrep_line(line) {
 			if filename != current_file {
 				// New file - output previous file's lines
 				if !file_lines.is_empty() {
@@ -52,10 +126,8 @@ fn group_ripgrep_output(lines: &[String]) -> String {
 
 			// Add the line content (without filename)
 			file_lines.push(rest.to_string());
-		} else if let Some(dash_pos) = line.find('-') {
+		} else if let Some((filename, rest)) = parse_ripgrep_dash_line(line) {
 			// Context line (filename-line_number-content)
-			let filename = &line[..dash_pos];
-			let rest = &line[dash_pos + 1..];
 
 			if filename != current_file {
 				// New file - output previous file's lines
@@ -405,4 +477,73 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 		tool_id: call.tool_id.clone(),
 		result: output,
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_parse_ripgrep_line_unix_path() {
+		let line = "/home/user/file.rs:123:println!(\"test\");";
+		let result = parse_ripgrep_line(line);
+		assert_eq!(
+			result,
+			Some(("/home/user/file.rs", "123:println!(\"test\");"))
+		);
+	}
+
+	#[test]
+	fn test_parse_ripgrep_line_windows_path() {
+		let line = "C:\\Users\\Test\\file.rs:123:println!(\"test\");";
+		let result = parse_ripgrep_line(line);
+		assert_eq!(
+			result,
+			Some(("C:\\Users\\Test\\file.rs", "123:println!(\"test\");"))
+		);
+	}
+
+	#[test]
+	fn test_parse_ripgrep_line_windows_path_with_spaces() {
+		let line = "C:\\Users\\Test User\\My File.rs:456:let x = 42;";
+		let result = parse_ripgrep_line(line);
+		assert_eq!(
+			result,
+			Some(("C:\\Users\\Test User\\My File.rs", "456:let x = 42;"))
+		);
+	}
+
+	#[test]
+	fn test_parse_ripgrep_dash_line_unix_path() {
+		let line = "/home/user/file.rs-123-some context line";
+		let result = parse_ripgrep_dash_line(line);
+		assert_eq!(
+			result,
+			Some(("/home/user/file.rs", "123-some context line"))
+		);
+	}
+
+	#[test]
+	fn test_parse_ripgrep_dash_line_windows_path() {
+		let line = "C:\\Users\\Test\\file.rs-123-some context line";
+		let result = parse_ripgrep_dash_line(line);
+		assert_eq!(
+			result,
+			Some(("C:\\Users\\Test\\file.rs", "123-some context line"))
+		);
+	}
+
+	#[test]
+	fn test_parse_ripgrep_line_invalid_format() {
+		let line = "just some text without proper format";
+		let result = parse_ripgrep_line(line);
+		assert_eq!(result, None);
+	}
+
+	#[test]
+	fn test_parse_ripgrep_line_single_colon() {
+		let line = "C:\\Users\\file.rs";
+		let result = parse_ripgrep_line(line);
+		assert_eq!(result, None);
+	}
 }
