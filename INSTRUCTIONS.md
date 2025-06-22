@@ -12,11 +12,18 @@
 
 ## 🚫 CRITICAL CODE QUALITY RULES
 
+### **DEVELOPMENT RESTRICTIONS - NEVER TOUCH THESE**
+- **NEVER run tests that affect global configuration** or create session files
+- **NEVER create example configs** or modify existing config structures in system-wide files
+- **Your job**: Build, test compilation, fix code issues ONLY
+- **User handles**: All complex validation with checking if it works or not
+
 ### **DEVELOPMENT BUILD EFFICIENCY**
 - **ALWAYS use `cargo check`** for syntax/compilation verification - fastest option
 - **NEVER use `cargo build --release`** - extremely slow, wastes development time
 - **Use `cargo build` (debug)** only when you need to run the actual binary
 - **Focus on `cargo check`** for iterative development and validation
+- **Run `cargo clippy --all-features --all-targets -- -D warnings`** to fix ALL code quality issues (treat warnings as errors)
 
 ### **NEVER HIDE ERRORS WITH FALLBACKS**
 ```rust
@@ -210,5 +217,7 @@ crate::log_debug!("Something happened");
 
 ### Development Workflow
 - **Build Check**: `cargo check` - fastest compilation verification (PREFERRED)
-- **Debug Build**: `cargo build` - only when you need to run the binary
+- **Code Quality**: `cargo clippy --all-features --all-targets -- -D warnings` - fix ALL code quality issues (treat warnings as errors)
+- **Debug Build**: `cargo build` - only when you need to run the actual binary
 - **NEVER**: `cargo build --release` - extremely slow, avoid during development
+- **NEVER**: Modify configs, create tests, or affect global configuration
