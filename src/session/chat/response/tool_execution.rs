@@ -472,8 +472,9 @@ async fn display_tool_success(
 	execution_context: Option<String>, // New parameter for context display
 ) {
 	// For multiple tools: show header again with index
-	// For single tool: skip header (already shown upfront)
-	if !params.is_single_tool {
+	// For single tool in main session: skip header (already shown upfront)
+	// For layer/agent contexts: always show header (no upfront display in isolated contexts)
+	if !params.is_single_tool || execution_context.is_some() {
 		crate::session::chat::tool_display::display_individual_tool_header_with_context(
 			params.tool_name,
 			params.stored_tool_call,
