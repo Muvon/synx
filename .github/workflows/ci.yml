@@ -81,10 +81,9 @@ jobs:
 
     - name: Install ripgrep and ast-grep
       run: |
-        sudo apt-get install -y ripgrep
-        # Install ast-grep from GitHub releases
-        curl -L https://github.com/ast-grep/ast-grep/releases/latest/download/ast-grep-x86_64-unknown-linux-gnu.tar.gz | tar xz
-        sudo mv ast-grep-x86_64-unknown-linux-gnu/sg /usr/local/bin/
+        cargo install ripgrep --locked
+        cargo install ast-grep --locked
+
 
     - name: Cache dependencies
       uses: actions/cache@v4
@@ -138,30 +137,10 @@ jobs:
       run: |
         choco install protoc
 
-    - name: Install ripgrep and ast-grep (Ubuntu)
-      if: matrix.os == 'ubuntu-latest'
+    - name: Install ripgrep and ast-grep
       run: |
-        sudo apt-get update
-        sudo apt-get install -y ripgrep
-        # Install ast-grep from GitHub releases
-        curl -L https://github.com/ast-grep/ast-grep/releases/latest/download/ast-grep-x86_64-unknown-linux-gnu.tar.gz | tar xz
-        sudo mv ast-grep-x86_64-unknown-linux-gnu/sg /usr/local/bin/
-
-    - name: Install ripgrep and ast-grep (macOS)
-      if: matrix.os == 'macos-latest'
-      run: |
-        brew install ripgrep ast-grep
-
-    - name: Install ripgrep and ast-grep (Windows)
-      if: matrix.os == 'windows-latest'
-      run: |
-        choco install ripgrep
-        # Install ast-grep from GitHub releases
-        $url = "https://github.com/ast-grep/ast-grep/releases/latest/download/ast-grep-x86_64-pc-windows-msvc.zip"
-        $output = "$env:TEMP\ast-grep.zip"
-        Invoke-WebRequest -Uri $url -OutFile $output
-        Expand-Archive -Path $output -DestinationPath "$env:TEMP\ast-grep"
-        Move-Item "$env:TEMP\ast-grep\sg.exe" "C:\Windows\System32\"
+        cargo install ripgrep --locked
+        cargo install ast-grep --locked
 
     - name: Cache dependencies
       uses: actions/cache@v4
@@ -198,10 +177,8 @@ jobs:
 
     - name: Install ripgrep and ast-grep
       run: |
-        sudo apt-get install -y ripgrep
-        # Install ast-grep from GitHub releases
-        curl -L https://github.com/ast-grep/ast-grep/releases/latest/download/ast-grep-x86_64-unknown-linux-gnu.tar.gz | tar xz
-        sudo mv ast-grep-x86_64-unknown-linux-gnu/sg /usr/local/bin/
+        cargo install ripgrep --locked
+        cargo install ast-grep --locked
 
     - name: Install cargo-audit
       run: cargo install cargo-audit --locked
@@ -226,10 +203,8 @@ jobs:
 
     - name: Install ripgrep and ast-grep
       run: |
-        sudo apt-get install -y ripgrep
-        # Install ast-grep from GitHub releases
-        curl -L https://github.com/ast-grep/ast-grep/releases/latest/download/ast-grep-x86_64-unknown-linux-gnu.tar.gz | tar xz
-        sudo mv ast-grep-x86_64-unknown-linux-gnu/sg /usr/local/bin/
+        cargo install ripgrep --locked
+        cargo install ast-grep --locked
 
     - name: Install cargo-tarpaulin
       run: cargo install cargo-tarpaulin --locked
