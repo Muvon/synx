@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for octomind
 # Stage 1: Build
-FROM rust:1.87-slim as builder
+FROM rust:1.87-slim AS builder
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -24,11 +24,24 @@ RUN cargo build --release
 # Stage 2: Runtime
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
+# Install runtime dependencies and development tools
 RUN apt-get update && apt-get install -y \
 		ca-certificates \
+		curl \
+		wget \
+		ripgrep \
 		&& rm -rf /var/lib/apt/lists/* \
 		&& update-ca-certificates
+
+# Install ast-grep (sg) from GitHub releases
+RUN curl -L https://github.com/ast-grep/ast-grep/releases/latest/download/ast-grep-x86_64-unknown-linux-gnu.tar.gz | tar xz \
+		&& mv ast-grep-x86_64-unknown-linux-gnu/sg /usr/local/bin/ \
+		&& rm -rf ast-grep-x86_64-unknown-linux-gnu
+
+# Install octocode from GitHub releases
+RUN curl -L https://github.com/muvon/octocode/releases/latest/download/octocode-x86_64-unknown-linux-gnu.tar.gz | tar xz \
+		&& mv octocode /usr/local/bin/ \
+		&& chmod +x /usr/local/bin/octocode
 
 # Create a non-root user
 RUN groupadd -r octomind && useradd -r -g octomind octomind
