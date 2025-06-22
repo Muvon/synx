@@ -81,6 +81,7 @@ Parameters:
 - `rewrite`: Optional rewrite pattern to apply for refactoring transformations
 - `json_output`: Optional boolean to get output in JSON format (default: false)
 - `context`: Optional number of lines of context to show around matches (default: 0)
+- `max_lines`: Maximum lines to return (default: 20, set to 0 for unlimited)
 - `update_all`: Optional boolean to apply rewrites to all matches without confirmation (default: false)
 
 Pattern Syntax:
@@ -162,6 +163,11 @@ Usage Examples:
 					"type": "boolean",
 					"default": false,
 					"description": "Optional boolean to apply rewrites to all matches without confirmation (default: false)"
+				},
+				"max_lines": {
+					"type": "integer",
+					"default": 20,
+					"description": "Maximum lines to return (default: 20, set to 0 for unlimited)"
 				}
 			}
 		}),
@@ -222,6 +228,12 @@ pub async fn execute_ast_grep_command(
 		.get("update_all")
 		.and_then(|v| v.as_bool())
 		.unwrap_or(false);
+
+	let max_lines = call
+		.parameters
+		.get("max_lines")
+		.and_then(|v| v.as_i64())
+		.unwrap_or(20) as usize;
 
 	// Check for cancellation before starting
 	if let Some(ref token) = cancellation_token {
@@ -318,18 +330,50 @@ pub async fn execute_ast_grep_command(
 					let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 					let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
+					// Apply truncation to stdout if max_lines is set (0 means unlimited)
+					let (truncated_stdout, truncation_info) = if max_lines > 0 && !stdout.is_empty() {
+						let lines: Vec<&str> = stdout.lines().collect();
+						if lines.len() > max_lines {
+							let total_count = lines.len();
+							let half_limit = max_lines / 2;
+							let remaining = max_lines - half_limit;
+
+							let mut truncated = Vec::new();
+
+							// Add first half
+							for line in lines.iter().take(half_limit) {
+								truncated.push(line.to_string());
+							}
+
+							// Add truncation marker
+							let truncated_count = total_count - max_lines;
+							truncated.push(format!("[{} lines truncated - use more specific patterns or increase max_lines]", truncated_count));
+
+							// Add last portion
+							for line in lines.iter().skip(total_count - remaining) {
+								truncated.push(line.to_string());
+							}
+
+							(truncated.join("\n"), Some(format!("Output truncated: showing {} of {} total lines", max_lines, total_count)))
+						} else {
+							(stdout.clone(), None)
+						}
+					} else {
+						(stdout.clone(), None)
+					};
+
 					// Format the output more clearly with error handling
 					let combined = if stderr.is_empty() {
 						// Group ast-grep output for token efficiency
-						group_ast_grep_output(&stdout)
-					} else if stdout.is_empty() {
+						group_ast_grep_output(&truncated_stdout)
+					} else if truncated_stdout.is_empty() {
 						stderr
 					} else {
 						format!(
 							"{}
 
 Error: {}",
-							group_ast_grep_output(&stdout), stderr
+							group_ast_grep_output(&truncated_stdout), stderr
 						)
 					};
 
@@ -344,7 +388,7 @@ Error: {}",
 						"search"
 					};
 
-					json!({
+					let mut result = json!({
 						"success": success,
 						"output": combined,
 						"code": status_code,
@@ -356,14 +400,22 @@ Error: {}",
 							"rewrite": rewrite,
 							"json_output": json_output,
 							"context": context,
-							"update_all": update_all
+							"update_all": update_all,
+							"max_lines": max_lines
 						},
 						"message": if success {
 							format!("AST-grep {} executed successfully with exit code {}", operation_type, status_code)
 						} else {
 							format!("AST-grep {} failed with exit code {}", operation_type, status_code)
 						}
-					})
+					});
+
+					// Add truncation info if present
+					if let Some(info) = truncation_info {
+						result["truncation_info"] = json!(info);
+					}
+
+					result
 				}
 				Err(e) => json!({
 					"success": false,
@@ -377,7 +429,8 @@ Error: {}",
 						"rewrite": rewrite,
 						"json_output": json_output,
 						"context": context,
-						"update_all": update_all
+						"update_all": update_all,
+						"max_lines": max_lines
 					},
 					"message": format!("Failed to execute ast-grep command: {}", e)
 				}),
@@ -420,7 +473,8 @@ Error: {}",
 						"rewrite": rewrite,
 						"json_output": json_output,
 						"context": context,
-						"update_all": update_all
+						"update_all": update_all,
+						"max_lines": max_lines
 					},
 					"message": "AST-grep command execution cancelled by user"
 				})
@@ -438,7 +492,8 @@ Error: {}",
 						"rewrite": rewrite,
 						"json_output": json_output,
 						"context": context,
-						"update_all": update_all
+						"update_all": update_all,
+						"max_lines": max_lines
 					},
 					"message": "Unexpected cancellation state"
 				})

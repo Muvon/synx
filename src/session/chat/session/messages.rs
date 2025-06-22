@@ -20,6 +20,7 @@ use crate::session::ProviderExchange;
 use crate::{log_debug, log_info};
 use anyhow::Result;
 use colored::Colorize;
+use std::io::IsTerminal;
 
 impl ChatSession {
 	// Save the session
@@ -64,6 +65,17 @@ impl ChatSession {
 				"{}",
 				"Continuing may result in additional charges.".bright_yellow()
 			);
+
+			// Auto-decline in non-interactive mode (run command, piped input, etc.)
+			if !std::io::stdin().is_terminal() {
+				println!(
+				"{}",
+				"Spending threshold reached but automatically declining in non-interactive mode. Stopping execution.".bright_red()
+			);
+				return Ok(false);
+			}
+
+			// Interactive mode - ask user for confirmation
 			print!(
 				"{}",
 				"Do you want to continue? (y/N): ".bright_white().bold()

@@ -289,6 +289,164 @@ function testFunction() {
 	}
 
 	#[tokio::test]
+	async fn test_ast_grep_output_grouping() {
+		// Test that ast_grep output is properly grouped by file for token efficiency
+		// Create temporary Rust files for testing
+		let temp_content1 = r#"
+fn main() {
+    println!("Hello from main");
+}
+
+fn helper() {
+    println!("Helper function");
+}
+"#;
+
+		let temp_content2 = r#"
+pub fn public_func() {
+    println!("Public function");
+}
+
+fn private_func() {
+    println!("Private function");
+}
+"#;
+
+		let temp_file1 = "test_ast_grep_group1.rs";
+		let temp_file2 = "test_ast_grep_group2.rs";
+		std::fs::write(temp_file1, temp_content1).unwrap();
+		std::fs::write(temp_file2, temp_content2).unwrap();
+
+		// Test with a pattern that should match multiple functions
+		let params = json!({
+			"pattern": "fn $NAME($ARGS) { $$$ }",
+			"language": "rust",
+			"paths": [temp_file1, temp_file2]
+		});
+
+		let call = McpToolCall {
+			tool_name: "ast_grep".to_string(),
+			parameters: params,
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let result = execute_ast_grep_command(&call, None).await;
+
+		// Clean up
+		let _ = std::fs::remove_file(temp_file1);
+		let _ = std::fs::remove_file(temp_file2);
+
+		// The command should execute without shell parsing errors
+		assert!(result.is_ok());
+		let result = result.unwrap();
+		assert_eq!(result.tool_name, "ast_grep");
+
+		let output = result.result.as_object().unwrap();
+		assert!(output.contains_key("success"));
+
+		// Check that we don't get shell parsing errors
+		let output_text = output["output"].as_str().unwrap_or("");
+		assert!(
+			!output_text.contains("syntax error near unexpected token"),
+			"Shell parsing error detected: {}",
+			output_text
+		);
+		assert!(
+			!output_text.contains("sh: -c: line 0:"),
+			"Shell command line error detected: {}",
+			output_text
+		);
+
+		// Print the output to see the grouping format
+		println!("ast_grep grouped output:\n{}", output_text);
+	}
+
+	#[tokio::test]
+	async fn test_ast_grep_truncation() {
+		// Test that ast_grep supports smart truncation like list_files
+		// Create a temporary Rust file with many functions
+		let temp_content = r#"
+fn function1() { println!("1"); }
+fn function2() { println!("2"); }
+fn function3() { println!("3"); }
+fn function4() { println!("4"); }
+fn function5() { println!("5"); }
+fn function6() { println!("6"); }
+fn function7() { println!("7"); }
+fn function8() { println!("8"); }
+fn function9() { println!("9"); }
+fn function10() { println!("10"); }
+fn function11() { println!("11"); }
+fn function12() { println!("12"); }
+fn function13() { println!("13"); }
+fn function14() { println!("14"); }
+fn function15() { println!("15"); }
+"#;
+
+		let temp_file = "test_ast_grep_truncation.rs";
+		std::fs::write(temp_file, temp_content).unwrap();
+
+		// Test with max_lines = 5 (should truncate)
+		let params = json!({
+			"pattern": "fn $NAME() { $$$ }",
+			"language": "rust",
+			"paths": [temp_file],
+			"max_lines": 5
+		});
+
+		let call = McpToolCall {
+			tool_name: "ast_grep".to_string(),
+			parameters: params,
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let result = execute_ast_grep_command(&call, None).await;
+
+		// Clean up
+		let _ = std::fs::remove_file(temp_file);
+
+		// Should execute successfully
+		assert!(result.is_ok());
+		let result = result.unwrap();
+		let output = result.result.as_object().unwrap();
+
+		// Check that parameters include max_lines
+		let params = &output["parameters"];
+		assert_eq!(params["max_lines"], 5);
+
+		// If ast-grep finds matches and we have more than 5 lines, should have truncation info
+		let output_text = output["output"].as_str().unwrap_or("");
+		println!("ast_grep truncation test output:\n{}", output_text);
+
+		// Test with max_lines = 0 (unlimited)
+		let params_unlimited = json!({
+			"pattern": "fn $NAME() { $$$ }",
+			"language": "rust",
+			"paths": [temp_file],
+			"max_lines": 0
+		});
+
+		let call_unlimited = McpToolCall {
+			tool_name: "ast_grep".to_string(),
+			parameters: params_unlimited,
+			tool_id: "test-call-id".to_string(),
+		};
+
+		// Recreate the file for the second test
+		std::fs::write(temp_file, temp_content).unwrap();
+		let result_unlimited = execute_ast_grep_command(&call_unlimited, None).await;
+		let _ = std::fs::remove_file(temp_file);
+
+		assert!(result_unlimited.is_ok());
+		let result_unlimited = result_unlimited.unwrap();
+		let output_unlimited = result_unlimited.result.as_object().unwrap();
+
+		// Should not have truncation with max_lines = 0
+		assert!(!output_unlimited.contains_key("truncation_info"));
+		assert_eq!(output_unlimited["parameters"]["max_lines"], 0);
+	}
+
+	#[tokio::test]
 	async fn test_ast_grep_complex_pattern_with_special_characters() {
 		// Test that complex patterns with special characters are properly escaped
 		// Create a temporary Rust file for testing

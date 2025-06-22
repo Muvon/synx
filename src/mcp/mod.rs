@@ -19,7 +19,7 @@ use crate::log_debug;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::sync::{Arc, RwLock};
 use uuid;
 
@@ -847,7 +847,24 @@ async fn handle_large_response(
 			"This may consume significant tokens and impact your usage limits.".bright_yellow()
 		);
 
-		// Ask user for confirmation before proceeding
+		// Auto-decline in non-interactive mode (run command, piped input, etc.)
+		if !std::io::stdin().is_terminal() {
+			println!(
+				"{}",
+				format!(
+					"Large output from '{}' ({}) automatically declined in non-interactive mode. Continuing...",
+					result.tool_name, server_name
+				)
+				.bright_red()
+			);
+			return Ok(McpToolResult::error(
+				result.tool_name.clone(),
+				result.tool_id.clone(),
+				format!("Large output from tool '{}' ({} tokens) was automatically declined in non-interactive mode to avoid excessive token usage. The tool executed successfully but the output was too large.", result.tool_name, estimated_tokens)
+			));
+		}
+
+		// Interactive mode - ask user for confirmation before proceeding
 		print!(
 			"{}",
 			"Do you want to continue with this large output? [y/N]: ".bright_cyan()
