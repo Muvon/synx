@@ -1,5 +1,93 @@
 # Changelog
 
+## [0.5.0] - 2025-06-22
+
+### 📋 Release Summary
+
+This release adds support for the DeepSeek AI provider, introduces new session output modes, and enhances code search with the AST-based ast_grep tool. Improvements include more flexible configuration options, detailed cost reporting, and better handling of layered processing contexts. Several bug fixes address file system operations, session stability, tool execution, and server health monitoring to ensure a smoother user experience.
+
+
+### ✨ Features
+
+- **providers**: add DeepSeek AI provider support (aeb7e707)
+- **mcp**: add max_lines and smart truncation to ast_grep output (ab0d498a)
+- **session/chat**: improve tool header rendering with context suffix (8157b501)
+- **dev**: add ast_grep tool for AST-based code search and refactor (8e4ae7cc)
+- **agents**: unify agent configuration with full layer support and a... (056e13c0)
+- **session**: add 'last' and 'restart' output modes for layers (5c8a0cf9)
+- **cli, config**: add max_tokens option to CLI and config files (49723adf)
+- **fs**: add include_hidden option to list_Files function (77f50288)
+- **config**: add context_gatherer agent and update workflow instruct... (89553837)
+- **session**: display detailed cost breakdown at info log level (9fe01fcc)
+- **session**: add sg command version support in helper functions (b4883653)
+
+### 🐛 Bug Fixes
+
+- **ci**: install ripgrep and ast-grep in test workflows (40760793)
+- **fs**: correct file listing and content search with ripgrep (def2b93d)
+- **fs**: correct ripgrep args and limit list_files output (5cdd1e5e)
+- **ast_grep**: pass arguments directly to avoid shell escaping issues (8822e4eb)
+- **session**: show tool header for layered processing contexts (f1c896ac)
+- **session**: preserve animation during layered response processing (cf00d2b4)
+- **agent**: include detailed cost data in agent command results (d62a79ac)
+- **session**: resolve rendering issues with layered pipeline output (3773e9ab)
+- **session/chat**: correct tool parameter and cost display for agents (956e38d1)
+- **fs**: correct line_replace method to replace lines precisely (ae31815e)
+- **config**: use root-level max_tokens for all roles (edd6fad8)
+- **providers**: remove explicit max_tokens to use default limits (397ee091)
+- **layers**: improve Ctrl+C cancellation handling in layers and session (f3031757)
+- **layers**: prevent recursive tool calls by checking finish_reason (f773932a)
+- **session**: correct layered response user message handling (69b66b4c)
+- **config**: remove text_editor tool and developer server ref from MC... (b9c8a8bc)
+- **config**: enforce strict layer existence checks for roles (8b3987ff)
+- **mcp**: exclude remote HTTP servers on tools/list failure (baa2a82b)
+- **animation**: show animation correctly in run command mode (d5dcd16f)
+- **session**: correct cache marker placement in parallel tool processing (c11e7659)
+- **mcp**: use JSON-RPC POST for HTTP health checks (106e8684)
+- **health_monitor**: improve server health checks by type (d7338105)
+- **health_monitor**: avoid restarting remote servers as local ones (95f0a5ef)
+- **mcp**: improve large output warning with server info and async han... (d95db1e1)
+- **session**: enforce session existence on explicit resume (e1870fef)
+- **session**: prevent panic by counting chars for content truncation (cf131ee0)
+- **mcp**: apply large response threshold consistently in tool calls (b22b22c3)
+- **session**: remove assistant messages if any tool results missing (2c3c5d7c)
+- **config**: improve developer system prompt clarity and focus (148562b9)
+- **tool-execution**: enable immediate cancellation on parallel tool runs (7a8609d5)
+- **session/chat**: correct tool header rendering in parallel execution (748f5d63)
+
+### 🔧 Other Changes
+
+- **docker**: add ast-grep and octocode tools to runtime image (f71a3e1a)
+- **ast_grep**: group output by file to reduce token usage (38917779)
+- **instructions**: clarify development restrictions and code quality... (3f5eac5f)
+- add guidelines for efficient Rust development builds (db80bcde)
+- **agent**: simplify output merge logic for append mode (4bf2e000)
+- clarify code search tools and update usage guidelines (066cbdfa)
+- **fs**: add extensive async tests for str_replace function (1d7f81a9)
+- **config**: remove hardcoded octocode references from MCP servers (8646c1b7)
+- **config**: remove invalid fallback test for unknown role (b97085af)
+- **providers**: remove explicit max_tokens to use default limits" (df71e134)
+- **logging**: replace eprintln with octomind logging macros (04709e81)
+- **layers**: improve layered output formatting and readability (507c4c2f)
+- **config**: rename query_processor and context_generator layers... (cc273a9a)
+- **config**: enforce explicit system prompt and strict role config (3a4c9563)
+- **config**: improve default developer role config and usage guidance (5fd74c50)
+- **INSTRUCTIONS**: tune md file with proper guidanance (cc1852b6)
+- **tool_map**: derive Default and simplify function pointers (a6d98eb2)
+- **mcp**: use static tool map for tool-to-server routing (1168b388)
+- **config**: simplify and clarify developer prompt instructions (1ada9b9f)
+- **config**: improve mcp.servers config parsing and templates (c05d1fff)
+- **config**: revise default developer system prompt for clarity and ... (3b340567)
+- **mcp**: split web module into api_client and formatters files (8f1b9fc3)
+- **session**: improve MCP tool call rendering for single and mul... (0bdf99f9)
+
+### 📊 Commit Summary
+
+**Total commits**: 65
+- ✨ 11 new features
+- 🐛 31 bug fixes
+- 🔧 23 other changes
+
 ## [0.4.0] - 2025-06-17
 
 ### 📋 Release Summary
