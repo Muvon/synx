@@ -748,4 +748,158 @@ mod tests {
 			.any(|f| f.as_str().unwrap_or("").contains("lines truncated"));
 		assert!(has_truncation_marker);
 	}
+
+	#[tokio::test]
+	async fn test_list_files_content_search_preserves_format() {
+		use crate::mcp::fs::directory::execute_list_files;
+		use std::fs;
+		use tempfile::TempDir;
+
+		// Create a temporary directory with test files containing searchable content
+		let temp_dir = TempDir::new().unwrap();
+		let temp_path = temp_dir.path();
+
+		// Create test files with specific content
+		let file1_path = temp_path.join("test1.rs");
+		fs::write(
+			&file1_path,
+			"fn main() {\n    println!(\"Hello, world!\");\n    let x = 42;\n}\n",
+		)
+		.unwrap();
+
+		let file2_path = temp_path.join("test2.rs");
+		fs::write(&file2_path, "pub fn helper() {\n    println!(\"Helper function\");\n}\n\nfn main() {\n    helper();\n}\n").unwrap();
+
+		// Test content search with line numbers
+		let call = McpToolCall {
+			tool_name: "list_files".to_string(),
+			parameters: json!({
+				"directory": temp_path.to_str().unwrap(),
+				"content": "println!",
+				"line_numbers": true,
+				"max_lines": 0  // unlimited
+			}),
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let result = execute_list_files(&call).await.unwrap();
+		let output = result.result.as_object().unwrap();
+
+		// Should be content search
+		assert_eq!(output["type"], "content search");
+		assert!(output["success"].as_bool().unwrap());
+
+		// Should have lines (not files) for content search
+		assert!(output.contains_key("lines"));
+		assert!(output.contains_key("total_lines"));
+		assert!(output.contains_key("displayed_lines"));
+
+		// Check that output preserves ripgrep format with line numbers
+		let output_str = output["output"].as_str().unwrap();
+		println!("Content search output:\n{}", output_str);
+
+		// Should contain filenames and line numbers (ripgrep format)
+		assert!(output_str.contains("test1.rs:") || output_str.contains("test2.rs:"));
+
+		// Test content search with context
+		let call_with_context = McpToolCall {
+			tool_name: "list_files".to_string(),
+			parameters: json!({
+				"directory": temp_path.to_str().unwrap(),
+				"content": "println!",
+				"line_numbers": true,
+				"context": 1,
+				"max_lines": 0
+			}),
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let result_with_context = execute_list_files(&call_with_context).await.unwrap();
+		let output_with_context = result_with_context.result.as_object().unwrap();
+
+		let output_str_with_context = output_with_context["output"].as_str().unwrap();
+		println!("Content search with context:\n{}", output_str_with_context);
+
+		// With context, should have more lines
+		let lines_no_context = output["lines"].as_array().unwrap().len();
+		let lines_with_context = output_with_context["lines"].as_array().unwrap().len();
+		assert!(
+			lines_with_context >= lines_no_context,
+			"Context should add more lines: {} vs {}",
+			lines_with_context,
+			lines_no_context
+		);
+	}
+
+	#[tokio::test]
+	async fn test_list_files_vs_content_search_different_output() {
+		use crate::mcp::fs::directory::execute_list_files;
+		use std::fs;
+		use tempfile::TempDir;
+
+		// Create a temporary directory with test files
+		let temp_dir = TempDir::new().unwrap();
+		let temp_path = temp_dir.path();
+
+		// Create test files
+		for i in 1..=5 {
+			let file_path = temp_path.join(format!("test_{}.rs", i));
+			fs::write(
+				&file_path,
+				format!("fn test_{}() {{\n    println!(\"Test {}\");\n}}\n", i, i),
+			)
+			.unwrap();
+		}
+
+		// Test 1: File listing (should return just filenames)
+		let file_list_call = McpToolCall {
+			tool_name: "list_files".to_string(),
+			parameters: json!({
+				"directory": temp_path.to_str().unwrap(),
+				"pattern": "*.rs"
+			}),
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let file_list_result = execute_list_files(&file_list_call).await.unwrap();
+		let file_list_output = file_list_result.result.as_object().unwrap();
+
+		// Should be file listing
+		assert_eq!(file_list_output["type"], "file listing");
+		assert!(file_list_output.contains_key("files"));
+		assert!(file_list_output.contains_key("count"));
+
+		// Test 2: Content search (should return formatted matches)
+		let content_search_call = McpToolCall {
+			tool_name: "list_files".to_string(),
+			parameters: json!({
+				"directory": temp_path.to_str().unwrap(),
+				"content": "println!"
+			}),
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let content_search_result = execute_list_files(&content_search_call).await.unwrap();
+		let content_search_output = content_search_result.result.as_object().unwrap();
+
+		// Should be content search
+		assert_eq!(content_search_output["type"], "content search");
+		assert!(content_search_output.contains_key("lines"));
+		assert!(content_search_output.contains_key("total_lines"));
+
+		// Outputs should be completely different
+		let file_list_str = file_list_output["output"].as_str().unwrap();
+		let content_search_str = content_search_output["output"].as_str().unwrap();
+
+		println!("File listing output:\n{}", file_list_str);
+		println!("Content search output:\n{}", content_search_str);
+
+		// File listing should just be filenames
+		assert!(file_list_str.contains("test_1.rs"));
+		assert!(!file_list_str.contains(":")); // No line numbers
+
+		// Content search should have line numbers and content
+		assert!(content_search_str.contains(":")); // Line numbers
+		assert!(content_search_str.contains("println!")); // Actual content
+	}
 }
