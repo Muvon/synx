@@ -88,7 +88,7 @@ async fn process_layer_as_agent(
 	config: &crate::config::Config,
 ) -> Result<(String, crate::session::AgentCostData)> {
 	// Create isolated session for agent
-	let mut agent_session = crate::session::Session::new(
+	let agent_session = crate::session::Session::new(
 		format!("agent_{}", layer_config.name),
 		layer_config.get_effective_model(&config.model),
 		"agent".to_string(),
@@ -104,7 +104,7 @@ async fn process_layer_as_agent(
 	// Process task through layer with full MCP tools support
 	let operation_cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 	let result = layer
-		.process(task, &mut agent_session, config, operation_cancelled)
+		.process(task, &agent_session, config, operation_cancelled)
 		.await?;
 
 	// Extract cost data from agent session

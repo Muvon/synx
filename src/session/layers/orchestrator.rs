@@ -116,11 +116,24 @@ impl LayeredOrchestrator {
 		let mut total_output_tokens = 0;
 		let mut total_cost = 0.0;
 
-		// Debug information for user
-		println!(
-			"{}",
-			format!("Layer Processing Pipeline ({} layers)", self.layers.len()).bright_cyan()
-		);
+		// Debug information for user - minimize in interactive mode to avoid interfering with animation
+		if std::io::stdin().is_terminal() {
+			// In interactive mode, the animation will show the main progress
+			// Only show pipeline info in debug mode
+			if config.get_log_level().is_debug_enabled() {
+				println!(
+					"{}",
+					format!("Layer Processing Pipeline ({} layers)", self.layers.len())
+						.bright_cyan()
+				);
+			}
+		} else {
+			// Non-interactive mode - always show pipeline info
+			println!(
+				"{}",
+				format!("Layer Processing Pipeline ({} layers)", self.layers.len()).bright_cyan()
+			);
+		}
 
 		// Process through each layer sequentially
 		// Each layer operates in its own isolated session and handles its own function calls
@@ -132,27 +145,43 @@ impl LayeredOrchestrator {
 
 			let layer_name = layer.name();
 
-			// Show layer progress with cost - single clean line
+			// Show layer progress with cost - single clean line that doesn't interfere with animation
 			if std::io::stdin().is_terminal() {
-				println!(
-					"{} {} (${:.5})",
-					"Processing:".bright_yellow(),
-					layer_name.bright_white(),
-					total_cost
-				);
+				// In interactive mode, show minimal progress - animation handles the main "Generating response" display
+				print!("\r{} {} ", "→".bright_yellow(), layer_name.bright_white());
+				use std::io::Write;
+				std::io::stdout().flush().ok();
 			} else {
+				// Non-interactive mode - show full progress
 				println!("Processing: {} (${:.5})", layer_name, total_cost);
 			}
 
 			if !layer.config().mcp.server_refs.is_empty() {
-				if layer.config().mcp.allowed_tools.is_empty() {
-					println!("{}", "All tools enabled for this layer".bright_magenta());
+				if std::io::stdin().is_terminal() {
+					// In interactive mode, minimize tool info to avoid interfering with animation
+					// Only show if debug mode is enabled
+					if config.get_log_level().is_debug_enabled() {
+						if layer.config().mcp.allowed_tools.is_empty() {
+							println!("{}", "All tools enabled for this layer".bright_magenta());
+						} else {
+							println!(
+								"{} {}",
+								"Tools enabled:".bright_magenta(),
+								layer.config().mcp.allowed_tools.join(", ")
+							);
+						}
+					}
 				} else {
-					println!(
-						"{} {}",
-						"Tools enabled:".bright_magenta(),
-						layer.config().mcp.allowed_tools.join(", ")
-					);
+					// Non-interactive mode - show full tool info
+					if layer.config().mcp.allowed_tools.is_empty() {
+						println!("{}", "All tools enabled for this layer".bright_magenta());
+					} else {
+						println!(
+							"{} {}",
+							"Tools enabled:".bright_magenta(),
+							layer.config().mcp.allowed_tools.join(", ")
+						);
+					}
 				}
 			}
 
@@ -330,6 +359,10 @@ impl LayeredOrchestrator {
 		let total_tool_time_ms = session.info.total_tool_time_ms;
 		let total_layer_time_ms = session.info.total_layer_time_ms;
 
+		// Clear any remaining progress line and show completion summary
+		if std::io::stdin().is_terminal() {
+			print!("\r                                                  \r");
+		}
 		println!(
 			"\n{} | {} tokens | ${:.5} | {}ms",
 			"Processing completed".bright_green(),
