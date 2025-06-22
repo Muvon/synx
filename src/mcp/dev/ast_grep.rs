@@ -183,69 +183,63 @@ pub async fn execute_ast_grep_command(
 		}
 	}
 
-	// Build the ast-grep command
-	let mut cmd_args = vec!["sg".to_string()];
+	// Build the ast-grep command using proper argument passing
+	let mut cmd = TokioCommand::new("sg");
 
 	// Add pattern
-	cmd_args.push("-p".to_string());
-	cmd_args.push(pattern.clone());
+	cmd.arg("-p");
+	cmd.arg(&pattern);
 
 	// Add language if specified
 	if let Some(lang) = &language {
-		cmd_args.push("-l".to_string());
-		cmd_args.push(lang.clone());
+		cmd.arg("-l");
+		cmd.arg(lang);
 	}
 
 	// Add rewrite if specified
 	if let Some(rewrite_pattern) = &rewrite {
-		cmd_args.push("--rewrite".to_string());
-		cmd_args.push(rewrite_pattern.clone());
+		cmd.arg("--rewrite");
+		cmd.arg(rewrite_pattern);
 
 		// Add update-all flag if specified for rewrite operations
 		if update_all {
-			cmd_args.push("--update-all".to_string());
+			cmd.arg("--update-all");
 		}
 	}
 
 	// Add JSON output if requested
 	if json_output {
-		cmd_args.push("--json".to_string());
+		cmd.arg("--json");
 	}
 
 	// Add context if specified
 	if context > 0 {
-		cmd_args.push("-A".to_string());
-		cmd_args.push(context.to_string());
-		cmd_args.push("-B".to_string());
-		cmd_args.push(context.to_string());
+		cmd.arg("-A");
+		cmd.arg(context.to_string());
+		cmd.arg("-B");
+		cmd.arg(context.to_string());
 	}
 
 	// Add paths if specified, otherwise default to current directory
 	if let Some(file_paths) = &paths {
-		cmd_args.extend(file_paths.clone());
+		for path in file_paths {
+			cmd.arg(path);
+		}
 	} else {
-		cmd_args.push(".".to_string());
+		cmd.arg(".");
 	}
-
-	// Join command for execution
-	let cmd_str = cmd_args.join(" ");
-
-	// Use tokio::process::Command for better cancellation support
-	let mut cmd = if cfg!(target_os = "windows") {
-		let mut cmd = TokioCommand::new("cmd");
-		cmd.args(["/C", &cmd_str]);
-		cmd
-	} else {
-		let mut cmd = TokioCommand::new("sh");
-		cmd.args(["-c", &cmd_str]);
-		cmd
-	};
 
 	// Configure the command
 	cmd.stdout(std::process::Stdio::piped())
 		.stderr(std::process::Stdio::piped())
 		.stdin(std::process::Stdio::null())
 		.kill_on_drop(true); // CRITICAL: Kill process when dropped
+
+	// Debug: Log the command being executed
+	crate::log_debug!(
+		"Executing ast-grep command: sg with args: {:?}",
+		vec!["-p", &pattern, "-l", &language.clone().unwrap_or_default()]
+	);
 
 	// Spawn the process
 	let child = cmd

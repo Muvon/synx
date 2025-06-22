@@ -287,4 +287,67 @@ function testFunction() {
 			.to_string()
 			.contains("Missing or invalid 'pattern' parameter"));
 	}
+
+	#[tokio::test]
+	async fn test_ast_grep_complex_pattern_with_special_characters() {
+		// Test that complex patterns with special characters are properly escaped
+		// Create a temporary Rust file for testing
+		let temp_content = r#"
+async fn process(input: String) -> Result<String, Error> {
+    println!("Processing: {}", input);
+    Ok(format!("Processed: {}", input))
+}
+
+pub async fn handle_request(req: Request) -> Response {
+    let result = process(req.body).await;
+    Response::new(result)
+}
+"#;
+
+		let temp_file = "test_ast_grep_complex.rs";
+		std::fs::write(temp_file, temp_content).unwrap();
+
+		// Test with a complex pattern that includes special characters
+		let params = json!({
+			"pattern": "async fn process($ARGS) { $$$ }",
+			"language": "rust",
+			"paths": [temp_file]
+		});
+
+		let call = McpToolCall {
+			tool_name: "ast_grep".to_string(),
+			parameters: params,
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let result = execute_ast_grep_command(&call, None).await;
+
+		// Clean up
+		let _ = std::fs::remove_file(temp_file);
+
+		// The command should execute without shell parsing errors
+		assert!(result.is_ok());
+		let result = result.unwrap();
+		assert_eq!(result.tool_name, "ast_grep");
+
+		let output = result.result.as_object().unwrap();
+		assert!(output.contains_key("success"));
+
+		// Most importantly, check that we don't get shell parsing errors
+		let output_text = output["output"].as_str().unwrap_or("");
+		assert!(
+			!output_text.contains("syntax error near unexpected token"),
+			"Shell parsing error detected: {}",
+			output_text
+		);
+		assert!(
+			!output_text.contains("sh: -c: line 0:"),
+			"Shell command line error detected: {}",
+			output_text
+		);
+
+		// The test passes if we don't get shell parsing errors
+		// Whether ast-grep finds matches depends on if sg is installed
+		println!("ast_grep output: {}", output_text);
+	}
 }
