@@ -896,10 +896,17 @@ mod tests {
 
 		// File listing should just be filenames
 		assert!(file_list_str.contains("test_1.rs"));
-		assert!(!file_list_str.contains(":")); // No line numbers
+		// Check that file listing doesn't contain line numbers
+		// Look for line number patterns: either ":digit:" or newline followed by "digit:"
+		// Use regex to avoid false positives from Windows drive letters (C:)
+		let line_number_pattern = regex::Regex::new(r"(:\d+:|^\d+:)").unwrap();
+		assert!(!line_number_pattern.is_match(file_list_str)); // No line numbers
 
 		// Content search should have line numbers and content
-		assert!(content_search_str.contains(":")); // Line numbers
+		// Content search format is either "filename:line:content" or "filename:\nline:content"
+		let has_line_numbers = content_search_str.contains("2:    println!")
+			|| line_number_pattern.is_match(content_search_str);
+		assert!(has_line_numbers); // Line numbers
 		assert!(content_search_str.contains("println!")); // Actual content
 	}
 }
