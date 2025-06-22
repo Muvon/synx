@@ -194,15 +194,19 @@ pub fn get_text_editor_function() -> McpFunction {
 			- Want maximum efficiency (10x faster than individual calls)
 
 			CHOOSE line_replace when:
-			- You just viewed the file and know exact line numbers
-			- Changing single parameters, variable assignments, function calls
+			- You know exact line numbers and need to change one or more lines with new
 			- Want 3x faster performance (no content searching needed)
 			- ONLY ONE line_replace per file before re-viewing
 
 			CHOOSE str_replace when:
+			- Modifying existing code/content (not building new)
 			- You know exact text content but not line numbers
-			- Text might be at different line positions across files
-			- Making multiple sequential edits (line numbers become unreliable)
+			- Changing existing function implementations or config values
+
+			CHOOSE insert when:
+			- Building new documents or adding new sections
+			- Adding content that doesn't exist yet
+			- Creating plans, documentation, or structured content
 
 			CRITICAL LINE NUMBER RULES:
 			- Line numbers become INVALID after ANY edit operation
