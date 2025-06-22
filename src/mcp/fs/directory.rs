@@ -211,9 +211,6 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 		cmd.arg("--hidden");
 	}
 
-	// Set current directory
-	cmd.current_dir(&directory);
-
 	// Configure the command based on the operation type
 	let (output_type, is_content_search) = if let Some(ref content_pattern) = content {
 		// Content search: search for content within files
@@ -229,10 +226,17 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 		// Add the search pattern
 		cmd.arg(content_pattern);
 
+		// Add the directory as the search path
+		cmd.arg(&directory);
+
 		("content search", true)
 	} else {
 		// File listing: list files (optionally filtered by pattern)
 		cmd.arg("--files");
+
+		// Add the directory as the search path
+		cmd.arg(&directory);
+
 		("file listing", false)
 	};
 
