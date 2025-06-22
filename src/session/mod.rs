@@ -122,6 +122,20 @@ pub struct LayerStats {
 	pub total_time_ms: u64, // Total time for this layer processing
 }
 
+/// Agent cost data for aggregating into main session
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCostData {
+	pub agent_name: String,
+	pub model: String,
+	pub input_tokens: u64,
+	pub output_tokens: u64,
+	pub cached_tokens: u64,
+	pub cost: f64,
+	pub api_time_ms: u64,
+	pub tool_time_ms: u64,
+	pub layer_time_ms: u64,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Session {
 	pub info: SessionInfo,
@@ -279,6 +293,33 @@ impl Session {
 		self.info.total_api_time_ms += api_time_ms;
 		self.info.total_tool_time_ms += tool_time_ms;
 		self.info.total_layer_time_ms += total_time_ms;
+	}
+
+	/// Add agent execution costs to the main session
+	pub fn add_agent_cost(&mut self, agent_costs: AgentCostData) {
+		// Add agent as a special layer stat for detailed tracking
+		self.add_layer_stats_with_time(
+			&format!("agent_{}", agent_costs.agent_name),
+			&agent_costs.model,
+			agent_costs.input_tokens,
+			agent_costs.output_tokens,
+			agent_costs.cost,
+			agent_costs.api_time_ms,
+			agent_costs.tool_time_ms,
+			agent_costs.layer_time_ms,
+		);
+
+		// Also update cached tokens (not included in layer stats)
+		self.info.cached_tokens += agent_costs.cached_tokens;
+
+		crate::log_debug!(
+			"Added agent '{}' costs to session: ${:.5} ({} input, {} output, {} cached tokens)",
+			agent_costs.agent_name,
+			agent_costs.cost,
+			agent_costs.input_tokens,
+			agent_costs.output_tokens,
+			agent_costs.cached_tokens
+		);
 	}
 
 	// Save the session to a file - append-only approach

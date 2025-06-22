@@ -300,7 +300,19 @@ async fn execute_tools_parallel_internal(
 					)
 					.await;
 
-					tool_results.push(res);
+					tool_results.push(res.clone());
+
+					// AGENT COST TRACKING: Extract and apply agent costs if present
+					if let Some(metadata) = res.result.get("metadata") {
+						if let Ok(agent_costs) = serde_json::from_value::<crate::session::AgentCostData>(metadata.clone()) {
+							// Apply agent costs to main session (only for MainSession context)
+							if let ToolExecutionContext::MainSession { chat_session, .. } = context {
+								chat_session.session.add_agent_cost(agent_costs);
+								crate::log_debug!("Applied agent costs to main session from tool '{}'", tool_name);
+							}
+						}
+					}
+
 					// Accumulate tool execution time
 					total_tool_time_ms += tool_time_ms;
 				}

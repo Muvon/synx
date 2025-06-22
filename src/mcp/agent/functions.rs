@@ -70,13 +70,14 @@ pub async fn execute_agent_command(
 		.ok_or_else(|| anyhow::anyhow!("Agent '{}' not configured", layer_name))?;
 
 	// Process task through the agent layer using the provider system
-	let result = process_layer_as_agent(agent_config, task, config).await?;
+	let (result, agent_costs) = process_layer_as_agent(agent_config, task, config).await?;
 
-	// Return MCP-compliant result
-	Ok(McpToolResult::success(
+	// Return MCP-compliant result with cost metadata
+	Ok(McpToolResult::success_with_metadata(
 		call.tool_name.clone(),
 		call.tool_id.clone(),
 		result,
+		serde_json::to_value(agent_costs)?,
 	))
 }
 
@@ -85,9 +86,9 @@ async fn process_layer_as_agent(
 	layer_config: &crate::session::layers::LayerConfig,
 	task: &str,
 	config: &crate::config::Config,
-) -> Result<String> {
+) -> Result<(String, crate::session::AgentCostData)> {
 	// Create isolated session for agent
-	let agent_session = crate::session::Session::new(
+	let mut agent_session = crate::session::Session::new(
 		format!("agent_{}", layer_config.name),
 		layer_config.get_effective_model(&config.model),
 		"agent".to_string(),
@@ -103,28 +104,43 @@ async fn process_layer_as_agent(
 	// Process task through layer with full MCP tools support
 	let operation_cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 	let result = layer
-		.process(task, &agent_session, config, operation_cancelled)
+		.process(task, &mut agent_session, config, operation_cancelled)
 		.await?;
+
+	// Extract cost data from agent session
+	let agent_costs = crate::session::AgentCostData {
+		agent_name: layer_config.name.clone(),
+		model: agent_session.info.model.clone(),
+		input_tokens: agent_session.info.input_tokens,
+		output_tokens: agent_session.info.output_tokens,
+		cached_tokens: agent_session.info.cached_tokens,
+		cost: agent_session.info.total_cost,
+		api_time_ms: agent_session.info.total_api_time_ms,
+		tool_time_ms: agent_session.info.total_tool_time_ms,
+		layer_time_ms: agent_session.info.total_layer_time_ms,
+	};
 
 	// Handle output_mode to determine what gets returned by the agent tool
 	use crate::session::layers::layer_trait::OutputMode;
-	match layer_config.output_mode {
+	let output = match layer_config.output_mode {
 		OutputMode::None => {
 			// Return only the final layer output (cleanest for tool use)
-			Ok(result.outputs.last().unwrap_or(&String::new()).clone())
+			result.outputs.last().unwrap_or(&String::new()).clone()
 		}
-		OutputMode::Append => Ok(result.outputs.join("\n---\n")),
+		OutputMode::Append => result.outputs.join("\n---\n"),
 		OutputMode::Replace => {
 			// For agents, same as None - return only the layer output
-			Ok(result.outputs.last().unwrap_or(&String::new()).clone())
+			result.outputs.last().unwrap_or(&String::new()).clone()
 		}
 		OutputMode::Last => {
 			// Return only the last layer output
-			Ok(result.outputs.last().unwrap_or(&String::new()).clone())
+			result.outputs.last().unwrap_or(&String::new()).clone()
 		}
 		OutputMode::Restart => {
 			// For agents, same as Last - return only the last layer output
-			Ok(result.outputs.last().unwrap_or(&String::new()).clone())
+			result.outputs.last().unwrap_or(&String::new()).clone()
 		}
-	}
+	};
+
+	Ok((output, agent_costs))
 }
