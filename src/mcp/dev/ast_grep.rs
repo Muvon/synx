@@ -18,6 +18,53 @@ use super::super::{McpFunction, McpToolCall, McpToolResult};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
+// Group ast-grep output by file for token efficiency while preserving line numbers
+fn group_ast_grep_output(output: &str) -> String {
+	let lines: Vec<&str> = output.lines().collect();
+	let mut result = Vec::new();
+	let mut current_file = String::new();
+	let mut file_lines = Vec::new();
+
+	for line in lines {
+		// ast-grep output format: filename:line_number:column:content
+		if let Some(colon_pos) = line.find(':') {
+			let filename = &line[..colon_pos];
+			let rest = &line[colon_pos + 1..];
+
+			if filename != current_file {
+				// New file - output previous file's lines
+				if !file_lines.is_empty() {
+					result.push(format!("{}:\n{}", current_file, file_lines.join("\n")));
+					file_lines.clear();
+				}
+				current_file = filename.to_string();
+			}
+
+			// Add the line content (without filename)
+			file_lines.push(rest.to_string());
+		} else {
+			// Non-matching lines (errors, etc.) - keep as-is
+			if !file_lines.is_empty() {
+				result.push(format!("{}:\n{}", current_file, file_lines.join("\n")));
+				file_lines.clear();
+				current_file.clear();
+			}
+			result.push(line.to_string());
+		}
+	}
+
+	// Output the last file's lines
+	if !file_lines.is_empty() {
+		result.push(format!("{}:\n{}", current_file, file_lines.join("\n")));
+	}
+
+	if result.is_empty() {
+		output.to_string()
+	} else {
+		result.join("\n\n")
+	}
+}
+
 // Define the ast_grep function for the MCP protocol with enhanced description
 pub fn get_ast_grep_function() -> McpFunction {
 	McpFunction {
@@ -273,7 +320,8 @@ pub async fn execute_ast_grep_command(
 
 					// Format the output more clearly with error handling
 					let combined = if stderr.is_empty() {
-						stdout
+						// Group ast-grep output for token efficiency
+						group_ast_grep_output(&stdout)
 					} else if stdout.is_empty() {
 						stderr
 					} else {
@@ -281,7 +329,7 @@ pub async fn execute_ast_grep_command(
 							"{}
 
 Error: {}",
-							stdout, stderr
+							group_ast_grep_output(&stdout), stderr
 						)
 					};
 

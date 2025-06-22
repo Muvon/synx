@@ -19,6 +19,72 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::process::Command;
 
+// Group ripgrep output by file for token efficiency while preserving line numbers
+fn group_ripgrep_output(lines: &[String]) -> String {
+	let mut result = Vec::new();
+	let mut current_file = String::new();
+	let mut file_lines = Vec::new();
+
+	for line in lines {
+		if line.contains("[") && line.contains("truncated") {
+			// Handle truncation markers
+			if !file_lines.is_empty() {
+				result.push(format!("{}:\n{}", current_file, file_lines.join("\n")));
+				file_lines.clear();
+			}
+			result.push(line.clone());
+			continue;
+		}
+
+		// Parse ripgrep output: filename:line_number:content or filename-line_number-content (context)
+		if let Some(colon_pos) = line.find(':') {
+			let filename = &line[..colon_pos];
+			let rest = &line[colon_pos + 1..];
+
+			if filename != current_file {
+				// New file - output previous file's lines
+				if !file_lines.is_empty() {
+					result.push(format!("{}:\n{}", current_file, file_lines.join("\n")));
+					file_lines.clear();
+				}
+				current_file = filename.to_string();
+			}
+
+			// Add the line content (without filename)
+			file_lines.push(rest.to_string());
+		} else if let Some(dash_pos) = line.find('-') {
+			// Context line (filename-line_number-content)
+			let filename = &line[..dash_pos];
+			let rest = &line[dash_pos + 1..];
+
+			if filename != current_file {
+				// New file - output previous file's lines
+				if !file_lines.is_empty() {
+					result.push(format!("{}:\n{}", current_file, file_lines.join("\n")));
+					file_lines.clear();
+				}
+				current_file = filename.to_string();
+			}
+
+			// Add the context line (with dash to indicate context)
+			file_lines.push(format!("-{}", rest));
+		} else if line == "--" {
+			// Separator between match groups - preserve it
+			file_lines.push("--".to_string());
+		} else {
+			// Other lines (shouldn't happen in normal ripgrep output, but handle gracefully)
+			file_lines.push(line.clone());
+		}
+	}
+
+	// Output the last file's lines
+	if !file_lines.is_empty() {
+		result.push(format!("{}:\n{}", current_file, file_lines.join("\n")));
+	}
+
+	result.join("\n\n")
+}
+
 // Convert glob pattern to regex pattern for use with ripgrep
 fn convert_glob_to_regex(glob_pattern: &str) -> String {
 	// Handle multiple patterns separated by |
@@ -210,7 +276,8 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
                     let output_str = if stdout.is_empty() && !stderr.is_empty() {
                         stderr
                     } else {
-                        truncated_lines.join("\n")
+                        // Use grouped output for token efficiency
+                        group_ripgrep_output(&truncated_lines)
                     };
 
                     // For content search, we return the formatted output with matches
