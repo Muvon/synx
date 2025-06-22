@@ -28,6 +28,7 @@ mod message_handler;
 pub mod response;
 pub mod session;
 mod syntax;
+mod tool_display;
 mod tool_error_tracker;
 mod tool_processor;
 
@@ -56,6 +57,10 @@ pub use message_handler::MessageHandler;
 pub use response::process_response;
 pub use session::{
 	format_number, run_interactive_session, run_interactive_session_with_input, ChatSession,
+};
+pub use tool_display::{
+	display_individual_tool_header_with_params, display_tool_output_smart,
+	display_tool_parameters_full,
 };
 pub use tool_processor::ToolProcessor;
 

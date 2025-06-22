@@ -452,7 +452,7 @@ async fn display_tool_success(
 	// For multiple tools: show header again with index
 	// For single tool: skip header (already shown upfront)
 	if !params.is_single_tool {
-		display_individual_tool_header_with_params(
+		crate::session::chat::tool_display::display_individual_tool_header_with_params(
 			params.tool_name,
 			params.stored_tool_call,
 			config,
@@ -472,7 +472,7 @@ async fn display_tool_success(
 				println!("{}", content);
 			} else {
 				// Info mode: Show smart output (with some reasonable limits)
-				display_tool_output_smart(&content);
+				crate::session::chat::tool_display::display_tool_output_smart(&content);
 			}
 		}
 	}
@@ -492,60 +492,6 @@ async fn display_tool_success(
 		&res.result,
 		tool_time_ms,
 	);
-}
-
-/// Display individual tool header with parameters (for parallel execution results)
-async fn display_individual_tool_header_with_params(
-	tool_name: &str,
-	stored_tool_call: &Option<crate::mcp::McpToolCall>,
-	config: &Config,
-	tool_index: usize,
-) {
-	use colored::Colorize;
-
-	// Get server name using same logic as execution
-	let server_name =
-		crate::session::chat::response::get_tool_server_name_async(tool_name, config).await;
-
-	// Create formatted header matching the original style with index
-	let title = format!(
-		" [{}] {} | {} ",
-		tool_index,
-		tool_name.bright_cyan(),
-		server_name.bright_blue()
-	);
-	let separator_length = 70.max(title.len() + 4);
-	let dashes = "─".repeat(separator_length - title.len());
-	let separator = format!("──{}{}──", title, dashes.dimmed());
-	println!("{}", separator);
-
-	// Show parameters if available and log level allows
-	if let Some(tool_call) = stored_tool_call {
-		if config.get_log_level().is_info_enabled() || config.get_log_level().is_debug_enabled() {
-			crate::session::chat::response::display_tool_parameters_full(tool_call, config);
-			println!(); // Extra newline after parameters for better spacing
-		}
-	}
-}
-
-// Display tool output in smart format (for info mode)
-fn display_tool_output_smart(output_str: &str) {
-	let lines: Vec<&str> = output_str.lines().collect();
-
-	if lines.len() <= 20 && output_str.chars().count() <= 2000 {
-		// Small output: show as-is
-		println!("{}", output_str);
-	} else if lines.len() > 20 {
-		// Many lines: show first 15 lines + summary
-		for line in lines.iter().take(15) {
-			println!("{}", line);
-		}
-		println!("... [{} more lines]", lines.len().saturating_sub(15));
-	} else {
-		// Long single line or few long lines: truncate
-		let truncated: String = output_str.chars().take(1997).collect();
-		println!("{}...", truncated);
-	}
 }
 
 // Display tool error in consolidated format
