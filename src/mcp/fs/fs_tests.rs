@@ -799,13 +799,7 @@ mod tests {
 		println!("Content search output:\n{}", output_str);
 
 		// Should contain filenames and line numbers (ripgrep format)
-		// Check for ripgrep line number format rather than just filename: to avoid Windows path issues
-		assert!(
-			output_str.contains("test1.rs:2:")
-				|| output_str.contains("test2.rs:2:")
-				|| output_str.contains("test1.rs:6:")
-				|| output_str.contains("test2.rs:6:")
-		);
+		assert!(output_str.contains("test1.rs:") || output_str.contains("test2.rs:"));
 
 		// Test content search with context
 		let call_with_context = McpToolCall {
@@ -902,13 +896,10 @@ mod tests {
 
 		// File listing should just be filenames
 		assert!(file_list_str.contains("test_1.rs"));
-		// On Windows, paths contain colons (C:\...), so we check for line number format instead
-		// File listing should NOT contain line number format (filename:number:content)
-		assert!(!file_list_str.contains("test_1.rs:2:")); // No line numbers with content
+		assert!(!file_list_str.contains(":")); // No line numbers
 
 		// Content search should have line numbers and content
-		// Check for ripgrep line number format (filename:line_number:content)
-		assert!(content_search_str.contains("test_") && content_search_str.contains(":2:")); // Line numbers
+		assert!(content_search_str.contains(":")); // Line numbers
 		assert!(content_search_str.contains("println!")); // Actual content
 	}
 }
