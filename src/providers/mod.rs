@@ -23,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod amazon;
 pub mod anthropic;
 pub mod cloudflare;
+pub mod deepseek;
 pub mod google;
 pub mod openai;
 pub mod openrouter;
@@ -31,6 +32,7 @@ pub mod openrouter;
 pub use amazon::AmazonBedrockProvider;
 pub use anthropic::AnthropicProvider;
 pub use cloudflare::CloudflareWorkersAiProvider;
+pub use deepseek::DeepSeekProvider;
 pub use google::GoogleVertexProvider;
 pub use openai::OpenAiProvider;
 pub use openrouter::OpenRouterProvider;
@@ -166,7 +168,8 @@ impl ProviderFactory {
 			"google" => Ok(Box::new(GoogleVertexProvider::new())),
 			"amazon" => Ok(Box::new(AmazonBedrockProvider::new())),
 			"cloudflare" => Ok(Box::new(CloudflareWorkersAiProvider::new())),
-			_ => Err(anyhow::anyhow!("Unsupported provider: {}. Supported providers: openrouter, openai, anthropic, google, amazon, cloudflare", provider_name)),
+			"deepseek" => Ok(Box::new(DeepSeekProvider::new())),
+			_ => Err(anyhow::anyhow!("Unsupported provider: {}. Supported providers: openrouter, openai, anthropic, google, amazon, cloudflare, deepseek", provider_name)),
 		}
 	}
 
@@ -208,6 +211,19 @@ mod tests {
 		assert_eq!(provider, "openai");
 		assert_eq!(model, "gpt-4o");
 
+		// Test DeepSeek provider
+		let result = ProviderFactory::parse_model("deepseek:deepseek-chat");
+		assert!(result.is_ok());
+		let (provider, model) = result.unwrap();
+		assert_eq!(provider, "deepseek");
+		assert_eq!(model, "deepseek-chat");
+
+		let result = ProviderFactory::parse_model("deepseek:deepseek-reasoner");
+		assert!(result.is_ok());
+		let (provider, model) = result.unwrap();
+		assert_eq!(provider, "deepseek");
+		assert_eq!(model, "deepseek-reasoner");
+
 		// Test without provider prefix (should fail now)
 		let result = ProviderFactory::parse_model("anthropic/claude-3.5-sonnet");
 		assert!(result.is_err());
@@ -240,6 +256,9 @@ mod tests {
 		assert!(provider.is_ok());
 
 		let provider = ProviderFactory::create_provider("cloudflare");
+		assert!(provider.is_ok());
+
+		let provider = ProviderFactory::create_provider("deepseek");
 		assert!(provider.is_ok());
 
 		// Test invalid provider

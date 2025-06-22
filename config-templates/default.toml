@@ -22,7 +22,7 @@ log_level = "none"
 
 # Default model for all operations (provider:model format)
 # This is the fallback model when role-specific models aren't specified
-# Examples: "openrouter:anthropic/claude-3.5-sonnet", "openai:gpt-4o"
+# Examples: "openrouter:anthropic/claude-3.5-sonnet", "openai:gpt-4o", "deepseek:deepseek-chat"
 model = "openrouter:anthropic/claude-sonnet-4"
 
 # Default max_tokens for all operations
@@ -79,6 +79,7 @@ max_session_spending_threshold = 0.0
 #   • OPENROUTER_API_KEY - for OpenRouter (https://openrouter.ai/)
 #   • OPENAI_API_KEY - for OpenAI (https://platform.openai.com/)
 #   • ANTHROPIC_API_KEY - for Anthropic (https://console.anthropic.com/)
+#   • DEEPSEEK_API_KEY - for DeepSeek (https://platform.deepseek.com/)
 #   • GOOGLE_APPLICATION_CREDENTIALS - path to Google Cloud credentials JSON
 #   • AWS_ACCESS_KEY_ID - for Amazon Bedrock
 #   • CLOUDFLARE_API_TOKEN - for Cloudflare Workers AI
