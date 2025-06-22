@@ -29,19 +29,13 @@ RUN apt-get update && apt-get install -y \
 		ca-certificates \
 		curl \
 		wget \
-		ripgrep \
 		&& rm -rf /var/lib/apt/lists/* \
 		&& update-ca-certificates
 
 # Install ast-grep (sg) from GitHub releases
-RUN curl -L https://github.com/ast-grep/ast-grep/releases/latest/download/ast-grep-x86_64-unknown-linux-gnu.tar.gz | tar xz \
-		&& mv ast-grep-x86_64-unknown-linux-gnu/sg /usr/local/bin/ \
-		&& rm -rf ast-grep-x86_64-unknown-linux-gnu
-
-# Install octocode from GitHub releases
-RUN curl -L https://github.com/muvon/octocode/releases/latest/download/octocode-x86_64-unknown-linux-gnu.tar.gz | tar xz \
-		&& mv octocode /usr/local/bin/ \
-		&& chmod +x /usr/local/bin/octocode
+RUN cargo install ripgrep --locked && \
+ 		cargo install ast-grep --locked && \
+		curl -fsSL https://raw.githubusercontent.com/Muvon/octocode/master/install.sh | sh
 
 # Create a non-root user
 RUN groupadd -r octomind && useradd -r -g octomind octomind

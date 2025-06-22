@@ -30,10 +30,8 @@ jobs:
 
     - name: Install ripgrep and ast-grep
       run: |
-        sudo apt-get install -y ripgrep
-        # Install ast-grep from GitHub releases
-        curl -L https://github.com/ast-grep/ast-grep/releases/latest/download/ast-grep-x86_64-unknown-linux-gnu.tar.gz | tar xz
-        sudo mv ast-grep-x86_64-unknown-linux-gnu/sg /usr/local/bin/
+        cargo install ripgrep --locked
+        cargo install ast-grep --locked
 
     - name: Cache dependencies
       uses: actions/cache@v4
