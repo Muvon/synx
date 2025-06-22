@@ -411,7 +411,7 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 		let temp_call = McpToolCall {
 			tool_id: format!("{}_batch_{}", call.tool_id, index),
 			tool_name: call.tool_name.clone(),
-			parameters: operation.clone(),
+			parameters: (*operation).clone(),
 		};
 
 		// Execute the operation based on type
@@ -569,9 +569,16 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 		}
 	}
 
+	// Check if this is a corrected AI format issue
+	let ai_format_warning = call
+		.parameters
+		.get("_ai_format_warning")
+		.and_then(|v| v.as_bool())
+		.unwrap_or(false);
+
 	// Determine overall success
 	let overall_success = failed_operations == 0;
-	let summary_message = if overall_success {
+	let mut summary_message = if overall_success {
 		format!(
 			"Successfully completed all {} batch operations",
 			successful_operations
@@ -582,6 +589,11 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 			successful_operations, failed_operations
 		)
 	};
+
+	// Add warning if AI used incorrect parameter format
+	if ai_format_warning {
+		summary_message.push_str("\n\nNOTE: Operations completed successfully, but next time please pass 'operations' as an array directly instead of a JSON string for better performance.");
+	}
 
 	Ok(McpToolResult {
 		tool_name: "text_editor".to_string(),

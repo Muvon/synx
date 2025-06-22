@@ -334,17 +334,39 @@ pub async fn execute_text_editor(
 				}
 			}
 
-			let operations = match call.parameters.get("operations") {
+			let (operations_vec, ai_format_warning) = match call.parameters.get("operations") {
 				Some(Value::Array(ops)) => {
+					// Correct format - AI passed array directly
 					if ops.len() > 50 {
 						return Err(anyhow!("Too many operations in batch. Maximum 50 operations allowed."));
 					}
-					ops
+					(ops.clone(), false)
+				},
+				Some(Value::String(ops_str)) => {
+					// AI incorrectly passed operations as JSON string - try to parse it
+					match serde_json::from_str::<Vec<Value>>(ops_str) {
+						Ok(parsed_ops) => {
+							if parsed_ops.len() > 50 {
+								return Err(anyhow!("Too many operations in batch. Maximum 50 operations allowed."));
+							}
+							crate::log_debug!("AI passed operations as JSON string instead of array - parsing defensively");
+							(parsed_ops, true)
+						},
+						Err(_) => {
+							return Err(anyhow!("Invalid 'operations' parameter for batch_edit command - must be an array or valid JSON array string"));
+						}
+					}
 				},
 				_ => return Err(anyhow!("Missing or invalid 'operations' parameter for batch_edit command - must be an array")),
 			};
 
-			text_editing::batch_edit_spec(call, operations).await
+			// Create a modified call with the AI format warning flag
+			let mut modified_call = call.clone();
+			if ai_format_warning {
+				modified_call.parameters.as_object_mut().unwrap().insert("_ai_format_warning".to_string(), Value::Bool(true));
+			}
+
+			text_editing::batch_edit_spec(&modified_call, &operations_vec).await
 		},
 		_ => Err(anyhow!("Invalid command: {}. Allowed commands are: view, view_many, create, str_replace, insert, line_replace, undo_edit, batch_edit", command)),
 	}
