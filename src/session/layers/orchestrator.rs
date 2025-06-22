@@ -119,13 +119,8 @@ impl LayeredOrchestrator {
 		// Debug information for user
 		println!(
 			"{}",
-			"═════════════ Layer Processing Pipeline ═════════════".bright_cyan()
+			format!("Layer Processing Pipeline ({} layers)", self.layers.len()).bright_cyan()
 		);
-		println!(
-			"{}",
-			format!("Starting processing with {} layers", self.layers.len()).bright_green()
-		);
-		println!();
 
 		// Process through each layer sequentially
 		// Each layer operates in its own isolated session and handles its own function calls
@@ -136,34 +131,17 @@ impl LayeredOrchestrator {
 			}
 
 			let layer_name = layer.name();
-			println!(
-				"{}",
-				format!("───── Layer: {} ─────", layer_name).bright_yellow()
-			);
 
-			// Process the layer
-			println!("{}", "Input:".bright_blue());
-			println!("{}", current_input);
-
-			// Clear any previous animation line and show current cost (only in interactive mode)
+			// Show layer progress with cost - single clean line
 			if std::io::stdin().is_terminal() {
-				print!("\r                                                                  \r");
 				println!(
-					"{} ${:.5}",
-					"Generating response with current cost:".bright_cyan(),
+					"{} {} (${:.5})",
+					"Processing:".bright_yellow(),
+					layer_name.bright_white(),
 					total_cost
 				);
-
-				// Debug info for model and settings
-				println!(
-					"{} {} (temp: {})",
-					"Using model:".bright_magenta(),
-					layer.config().get_effective_model(&session.info.model),
-					layer.config().temperature
-				);
 			} else {
-				// Non-interactive mode - simple static message
-				println!("Generating response... ${:.5}", total_cost);
+				println!("Processing: {} (${:.5})", layer_name, total_cost);
 			}
 
 			if !layer.config().mcp.server_refs.is_empty() {
@@ -189,11 +167,6 @@ impl LayeredOrchestrator {
 				return Err(anyhow::anyhow!("Operation cancelled"));
 			}
 
-			println!(
-				"{}",
-				format!("───── Result of {} ─────", layer_name).bright_yellow()
-			);
-
 			// Display layer outputs with improved formatting
 			self.display_layer_outputs(&result.outputs, layer_name);
 
@@ -201,10 +174,17 @@ impl LayeredOrchestrator {
 			if let Some(usage) = &result.token_usage {
 				// Try to get cost from the TokenUsage struct first
 				if let Some(cost) = usage.cost {
-					// Display the layer cost with time information
-					println!("{}", format!("Layer cost: ${:.5} (Input: {} tokens, Output: {} tokens) | Time: API {}ms, Tools {}ms, Total {}ms",
-						cost, usage.prompt_tokens, usage.output_tokens,
-						result.api_time_ms, result.tool_time_ms, result.total_time_ms).bright_magenta());
+					// Display compact layer cost and time info
+					println!(
+						"{}",
+						format!(
+							"${:.5} | {} tokens | {}ms",
+							cost,
+							usage.prompt_tokens + usage.output_tokens,
+							result.total_time_ms
+						)
+						.bright_magenta()
+					);
 
 					// Add the stats to the session with time tracking
 					session.add_layer_stats_with_time(
@@ -345,44 +325,17 @@ impl LayeredOrchestrator {
 			current_input = result.outputs.last().unwrap_or(&String::new()).clone();
 		}
 
-		// Display completion info
-		println!();
-		println!("{}", "Processing completed".bright_green());
-
-		// Calculate total time across all layers
+		// Display compact completion summary
 		let total_api_time_ms = session.info.total_api_time_ms;
 		let total_tool_time_ms = session.info.total_tool_time_ms;
 		let total_layer_time_ms = session.info.total_layer_time_ms;
 
-		// Display cumulative token usage across all layers
 		println!(
-			"{}",
-			format!(
-				"Total tokens used: {} (Input: {}, Output: {})",
-				total_input_tokens + total_output_tokens,
-				total_input_tokens,
-				total_output_tokens
-			)
-			.bright_blue()
-		);
-		println!(
-			"{}",
-			format!("Estimated cost for all layers: ${:.5}", total_cost).bright_blue()
-		);
-		println!(
-			"{}",
-			format!(
-				"Total time: {}ms (API: {}ms, Tools: {}ms, Layer Processing: {}ms)",
-				total_api_time_ms + total_tool_time_ms + total_layer_time_ms,
-				total_api_time_ms,
-				total_tool_time_ms,
-				total_layer_time_ms
-			)
-			.bright_blue()
-		);
-		println!(
-			"{}",
-			"Use /info for detailed cost breakdown by layer".bright_blue()
+			"\n{} | {} tokens | ${:.5} | {}ms",
+			"Processing completed".bright_green(),
+			total_input_tokens + total_output_tokens,
+			total_cost,
+			total_api_time_ms + total_tool_time_ms + total_layer_time_ms
 		);
 
 		// Return the final layer's output to be used as starting point for the main chat session

@@ -14,12 +14,11 @@
 
 // Layered response processing implementation
 
-use super::animation::show_smart_animation;
 use crate::config::Config;
 use crate::session::chat::session::ChatSession;
 use anyhow::Result;
 use colored::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 // Process a response using the layered architecture
@@ -59,14 +58,12 @@ pub async fn process_layered_response(
 		}
 	}
 
-	// Create a task to show loading animation with current cost
-	// Use a separate flag for animation to avoid conflicts with user cancellation detection
-	let animation_cancel = Arc::new(AtomicBool::new(false));
-	let animation_cancel_clone = animation_cancel.clone();
-	let current_cost = chat_session.session.info.total_cost;
-	let animation_task = tokio::spawn(async move {
-		let _ = show_smart_animation(animation_cancel_clone, current_cost).await;
-	});
+	// Display status message BEFORE processing starts - cleaner flow
+	if config.get_log_level().is_debug_enabled() {
+		println!("{}", "Using layered processing with model-specific caching - only supported models will use caching".bright_cyan());
+	} else {
+		println!("{}", "Using layered processing".bright_cyan());
+	}
 
 	// Process through the layers using the modular layered architecture
 	// Each layer operates on its own session context and passes only the necessary output
@@ -74,34 +71,16 @@ pub async fn process_layered_response(
 	//
 	// IMPORTANT: Each layer handles its own function calls internally with its own model
 	// using the process method in processor.rs
-	let layer_output: String = match crate::session::layers::process_with_layers(
+	//
+	// NO ANIMATION: Layer orchestrator handles all progress display to avoid conflicts
+	let layer_output: String = crate::session::layers::process_with_layers(
 		input,
 		&mut chat_session.session,
 		config,
 		role,
 		operation_cancelled.clone(),
 	)
-	.await
-	{
-		Ok(output) => output,
-		Err(e) => {
-			// Stop the animation using the separate animation flag
-			animation_cancel.store(true, Ordering::SeqCst);
-			let _ = animation_task.await;
-			return Err(e);
-		}
-	};
-
-	// Stop the animation using the separate animation flag
-	animation_cancel.store(true, Ordering::SeqCst);
-	let _ = animation_task.await;
-
-	// Display status message for layered sessions - minimal for non-debug
-	if config.get_log_level().is_debug_enabled() {
-		println!("{}", "Using layered processing with model-specific caching - only supported models will use caching".bright_cyan());
-	} else {
-		println!("{}", "Using layered processing".bright_cyan());
-	}
+	.await?;
 
 	// Return the processed output from layers for use in the main model conversation
 	// This output already includes the results of any function calls handled by each layer
