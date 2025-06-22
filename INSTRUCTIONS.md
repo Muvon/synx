@@ -12,6 +12,12 @@
 
 ## 🚫 CRITICAL CODE QUALITY RULES
 
+### **DEVELOPMENT BUILD EFFICIENCY**
+- **ALWAYS use `cargo check`** for syntax/compilation verification - fastest option
+- **NEVER use `cargo build --release`** - extremely slow, wastes development time
+- **Use `cargo build` (debug)** only when you need to run the actual binary
+- **Focus on `cargo check`** for iterative development and validation
+
 ### **NEVER HIDE ERRORS WITH FALLBACKS**
 ```rust
 // ❌ SHIT CODE - hides real problems
@@ -201,3 +207,8 @@ crate::log_debug!("Something happened");
 - **Custom Commands**: `/run <command_name>` to execute configured layers
 - **Agents**: Use `agent_<name>(task="description")` MCP tools for specialized AI tasks
 - **Cache**: `/cache` to manually mark cache points, `/info` to see costs/tokens
+
+### Development Workflow
+- **Build Check**: `cargo check` - fastest compilation verification (PREFERRED)
+- **Debug Build**: `cargo build` - only when you need to run the binary
+- **NEVER**: `cargo build --release` - extremely slow, avoid during development
