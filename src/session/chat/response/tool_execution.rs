@@ -502,10 +502,14 @@ async fn display_tool_success(
 	}
 	// None mode: No output shown (as requested)
 
-	// Always show completion status with timing
+	// Always show completion status with timing and token count
+	let content = crate::mcp::extract_mcp_content(&res.result);
+	let token_count = crate::session::token_counter::estimate_tokens(&content);
+	let formatted_tokens = crate::session::chat::format_number(token_count as u64);
+
 	println!(
-		"✓ Tool '{}' completed in {}ms",
-		params.tool_name, tool_time_ms
+		"✓ Tool '{}' completed in {}ms [{}]",
+		params.tool_name, tool_time_ms, formatted_tokens
 	);
 	println!("──────────────────");
 
