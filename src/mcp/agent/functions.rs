@@ -93,8 +93,12 @@ async fn process_layer_as_agent(
 		"agent".to_string(),
 	);
 
-	// Create GenericLayer from config (reuse existing pattern)
-	let layer = GenericLayer::new(layer_config.clone());
+	// Create a modified layer config with agent prefix for display context
+	let mut agent_layer_config = layer_config.clone();
+	agent_layer_config.name = format!("agent_{}", layer_config.name);
+
+	// Create GenericLayer from modified config (reuse existing pattern)
+	let layer = GenericLayer::new(agent_layer_config);
 
 	// Process task through layer with full MCP tools support
 	let operation_cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

@@ -24,17 +24,46 @@ pub async fn display_individual_tool_header_with_params(
 	config: &Config,
 	tool_index: usize,
 ) {
+	display_individual_tool_header_with_context(
+		tool_name,
+		stored_tool_call,
+		config,
+		tool_index,
+		None, // No context suffix for main session
+	)
+	.await;
+}
+
+/// Display individual tool header with optional execution context (layer/agent)
+pub async fn display_individual_tool_header_with_context(
+	tool_name: &str,
+	stored_tool_call: &Option<crate::mcp::McpToolCall>,
+	config: &Config,
+	tool_index: usize,
+	execution_context: Option<&str>, // e.g., "layer_name" or "agent_context_gatherer"
+) {
 	// Get server name using same logic as execution
 	let server_name =
 		crate::session::chat::response::get_tool_server_name_async(tool_name, config).await;
 
-	// Create formatted header matching the original style with index
-	let title = format!(
-		" [{}] {} | {} ",
-		tool_index,
-		tool_name.bright_cyan(),
-		server_name.bright_blue()
-	);
+	// Create formatted header with optional context suffix
+	let title = if let Some(context) = execution_context {
+		format!(
+			" [{}] {} | {} | {} ",
+			tool_index,
+			tool_name.bright_cyan(),
+			server_name.bright_blue(),
+			context.bright_yellow()
+		)
+	} else {
+		format!(
+			" [{}] {} | {} ",
+			tool_index,
+			tool_name.bright_cyan(),
+			server_name.bright_blue()
+		)
+	};
+
 	let separator_length = 70.max(title.len() + 4);
 	let dashes = "─".repeat(separator_length - title.len());
 	let separator = format!("──{}{}──", title, dashes.dimmed());

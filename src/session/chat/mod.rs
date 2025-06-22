@@ -59,8 +59,8 @@ pub use session::{
 	format_number, run_interactive_session, run_interactive_session_with_input, ChatSession,
 };
 pub use tool_display::{
-	display_individual_tool_header_with_params, display_tool_output_smart,
-	display_tool_parameters_full,
+	display_individual_tool_header_with_context, display_individual_tool_header_with_params,
+	display_tool_output_smart, display_tool_parameters_full,
 };
 pub use tool_processor::ToolProcessor;
 

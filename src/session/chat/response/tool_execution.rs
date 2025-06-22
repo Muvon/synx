@@ -50,6 +50,14 @@ impl ToolExecutionContext<'_> {
 		}
 	}
 
+	/// Get execution context for display (None for main session, Some(context) for layers/agents)
+	pub fn execution_context(&self) -> Option<String> {
+		match self {
+			ToolExecutionContext::MainSession { .. } => None, // No suffix for main session
+			ToolExecutionContext::Layer { layer_name, .. } => Some(layer_name.clone()),
+		}
+	}
+
 	/// Check if tool is allowed in this context
 	pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
 		match self {
@@ -288,6 +296,7 @@ async fn execute_tools_parallel_internal(
 						tool_time_ms,
 						config,
 						context.session_name(),
+						context.execution_context(), // Pass the execution context
 					)
 					.await;
 
@@ -448,15 +457,17 @@ async fn display_tool_success(
 	tool_time_ms: u64,
 	config: &Config,
 	session_name: &str,
+	execution_context: Option<String>, // New parameter for context display
 ) {
 	// For multiple tools: show header again with index
 	// For single tool: skip header (already shown upfront)
 	if !params.is_single_tool {
-		crate::session::chat::tool_display::display_individual_tool_header_with_params(
+		crate::session::chat::tool_display::display_individual_tool_header_with_context(
 			params.tool_name,
 			params.stored_tool_call,
 			config,
 			params.tool_index,
+			execution_context.as_deref(), // Pass the execution context
 		)
 		.await;
 	}
