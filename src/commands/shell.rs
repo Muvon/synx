@@ -88,8 +88,8 @@ pub struct ShellArgs {
 	pub model: Option<String>,
 
 	/// Maximum tokens for the AI response (runtime only, not saved)
-	#[arg(long, default_value = "2048")]
-	pub max_tokens: u32,
+	#[arg(long)]
+	pub max_tokens: Option<u32>,
 
 	/// Skip confirmation and execute command directly
 	#[arg(long, short)]
@@ -185,7 +185,8 @@ pub async fn execute(args: &ShellArgs, config: &Config) -> Result<()> {
 		&messages,
 		&model,
 		args.temperature,
-		args.max_tokens,
+		args.max_tokens
+			.unwrap_or_else(|| clean_config.get_effective_max_tokens()),
 		&clean_config,
 	)
 	.await?;

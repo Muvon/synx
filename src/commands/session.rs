@@ -29,8 +29,8 @@ pub struct SessionArgs {
 	pub model: Option<String>,
 
 	/// Maximum tokens for the AI response (runtime only, not saved)
-	#[arg(long, default_value = "16384")]
-	pub max_tokens: u32,
+	#[arg(long)]
+	pub max_tokens: Option<u32>,
 
 	/// Temperature for the AI response (0.0 to 1.0, runtime only, not saved)
 	#[arg(long, default_value = "0.7")]

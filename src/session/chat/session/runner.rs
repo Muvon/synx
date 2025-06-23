@@ -56,8 +56,8 @@ pub async fn run_interactive_session<T: clap::Args + std::fmt::Debug>(
 		temperature: f32,
 
 		/// Maximum tokens for the AI response
-		#[arg(long, default_value = "16384")]
-		max_tokens: u32,
+		#[arg(long)]
+		max_tokens: Option<u32>,
 
 		/// Session role: developer (default with layers and tools) or assistant (simple chat without tools)
 		#[arg(long, default_value = "developer")]
@@ -124,9 +124,9 @@ pub async fn run_interactive_session<T: clap::Args + std::fmt::Debug>(
 					.find('}')
 					.unwrap_or(args_str.len() - start),
 			) + start;
-			args_str[start..end].trim().parse::<u32>().unwrap_or(16384)
+			args_str[start..end].trim().parse::<u32>().ok()
 		} else {
-			16384 // Default max_tokens
+			None // No max_tokens specified
 		};
 
 		SessionArgs {
@@ -151,7 +151,9 @@ pub async fn run_interactive_session<T: clap::Args + std::fmt::Debug>(
 		session_args.resume,
 		session_args.model.clone(),
 		Some(session_args.temperature),
-		Some(session_args.max_tokens),
+		session_args
+			.max_tokens
+			.or_else(|| Some(config_for_role.get_effective_max_tokens())),
 		&config_for_role,
 		&session_args.role, // Pass role to read temperature from config
 	)?;
@@ -1044,8 +1046,8 @@ pub async fn run_interactive_session_with_input<T: clap::Args + std::fmt::Debug>
 		temperature: f32,
 
 		/// Maximum tokens for the AI response
-		#[arg(long, default_value = "16384")]
-		max_tokens: u32,
+		#[arg(long)]
+		max_tokens: Option<u32>,
 
 		/// Session role: developer (default with layers and tools) or assistant (simple chat without tools)
 		#[arg(long, default_value = "developer")]
@@ -1112,9 +1114,9 @@ pub async fn run_interactive_session_with_input<T: clap::Args + std::fmt::Debug>
 					.find('}')
 					.unwrap_or(args_str.len() - start),
 			) + start;
-			args_str[start..end].trim().parse::<u32>().unwrap_or(16384)
+			args_str[start..end].trim().parse::<u32>().ok()
 		} else {
-			16384 // Default max_tokens
+			None // No max_tokens specified
 		};
 
 		SessionArgs {
@@ -1139,7 +1141,9 @@ pub async fn run_interactive_session_with_input<T: clap::Args + std::fmt::Debug>
 		session_args.resume,
 		session_args.model.clone(),
 		Some(session_args.temperature),
-		Some(session_args.max_tokens),
+		session_args
+			.max_tokens
+			.or_else(|| Some(config_for_role.get_effective_max_tokens())),
 		&config_for_role,
 		&session_args.role,
 	)?;
