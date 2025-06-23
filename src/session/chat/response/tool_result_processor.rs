@@ -181,7 +181,7 @@ pub async fn process_tool_results(
 		supports_caching,
 		role,
 	) {
-		log_info!("Auto-cache threshold reached after processing all tool results - cache checkpoint applied before follow-up API request.");
+		log_debug!("Auto-cache threshold reached after processing all tool results - cache checkpoint applied before follow-up API request.");
 	}
 	cache_check_time += cache_start.elapsed().as_millis();
 
