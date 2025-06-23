@@ -73,8 +73,14 @@ fn handle_final_response(
 	// Print assistant response with color
 	print_assistant_response(&clean_content, config, role);
 
-	// Display short cost line using CostTracker
-	CostTracker::display_cost_line(chat_session);
+	// Display cost line only for non-interactive mode or specific scenarios
+	// Skip for interactive mode to avoid duplication before user input prompt
+	use std::io::IsTerminal;
+	if !std::io::stdin().is_terminal() {
+		// Non-interactive mode - always show cost line
+		CostTracker::display_cost_line(chat_session);
+	}
+	// Interactive mode: Skip cost line here to avoid duplication before user input
 
 	Ok(())
 }

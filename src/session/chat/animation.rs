@@ -22,11 +22,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 // Show loading animation while waiting for response (interactive mode)
-pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, _cost: f64) -> Result<()> {
-	// Create a spinner with clean "Generating response..." message
+pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Result<()> {
+	// Create a spinner with cost-aware message in prompt format
 	let spinner = ProgressBar::new_spinner();
 
-	// Set a clean style with just the spinner and message
+	// Set a clean style with spinner and cost-aware message
 	spinner.set_style(
 		ProgressStyle::default_spinner()
 			.template(" {spinner:.cyan} {msg}")
@@ -34,7 +34,13 @@ pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, _cost: f64) ->
 			.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧"),
 	);
 
-	spinner.set_message("Generating response...");
+	// Format message with cost in prompt-like format
+	let message = if cost > 0.0 {
+		format!("[~${:.2}] Generating response...", cost)
+	} else {
+		"Generating response...".to_string()
+	};
+	spinner.set_message(message);
 	spinner.enable_steady_tick(Duration::from_millis(100));
 
 	// Wait for cancellation

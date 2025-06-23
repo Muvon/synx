@@ -83,6 +83,25 @@ impl CostTracker {
 		}
 	}
 
+	/// Display detailed cost breakdown for intermediate results (after tool calls)
+	pub fn display_intermediate_cost_breakdown(chat_session: &ChatSession) {
+		use crate::log_info;
+
+		let total_cost = chat_session.session.info.total_cost;
+		if total_cost <= 0.0 {
+			return; // No cost to show
+		}
+
+		// Show cost breakdown after tool execution, before next AI call
+		log_info!(
+			" ── cost: ${:.5} ────────────────────────────────────────",
+			total_cost
+		);
+
+		// Show detailed breakdown
+		Self::display_cost_breakdown(chat_session);
+	}
+
 	/// Display session usage statistics
 	pub fn display_session_usage(chat_session: &ChatSession) {
 		use crate::log_info;

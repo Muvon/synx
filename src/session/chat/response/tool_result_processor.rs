@@ -242,6 +242,11 @@ pub async fn process_tool_results(
 	animation_cancel.store(true, Ordering::SeqCst);
 	let _ = animation_task.await;
 
+	// Show cost breakdown for intermediate results (after tool calls, before follow-up AI call)
+	// Always show simple cost line, detailed breakdown only at info log level
+	use crate::session::chat::cost_tracker::CostTracker;
+	CostTracker::display_intermediate_cost_breakdown(chat_session);
+
 	match follow_up_result {
 		Ok(response) => {
 			// Store direct tool calls for efficient processing if they exist
