@@ -17,6 +17,8 @@
 use super::super::{McpToolCall, McpToolResult};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::path::Path;
 use std::process::Command;
 
 // Parse a ripgrep output line to extract filename and rest, handling Windows paths correctly
@@ -155,6 +157,82 @@ fn group_ripgrep_output(lines: &[String]) -> String {
 	}
 
 	result.join("\n\n")
+}
+
+// Analyze search results to extract file types and directories
+fn analyze_search_results(
+	lines: &[String],
+	is_content_search: bool,
+) -> (HashMap<String, usize>, HashMap<String, usize>) {
+	let mut file_extensions = HashMap::new();
+	let mut directories = HashMap::new();
+
+	for line in lines {
+		let filepath = if is_content_search {
+			// For content search: extract filename from "filename:line:content" format
+			if let Some((filename, _)) = parse_ripgrep_line(line) {
+				filename
+			} else {
+				continue;
+			}
+		} else {
+			// For file listing: line is the filepath
+			line.as_str()
+		};
+
+		// Extract file extension
+		if let Some(ext) = Path::new(filepath).extension() {
+			let ext_str = format!(".{}", ext.to_string_lossy());
+			*file_extensions.entry(ext_str).or_insert(0) += 1;
+		}
+
+		// Extract directory
+		if let Some(parent) = Path::new(filepath).parent() {
+			let dir_str = parent.to_string_lossy().to_string();
+			if !dir_str.is_empty() {
+				*directories.entry(dir_str).or_insert(0) += 1;
+			}
+		}
+	}
+
+	(file_extensions, directories)
+}
+
+// Format statistics for file types and directories
+fn format_statistics(
+	file_extensions: &HashMap<String, usize>,
+	directories: &HashMap<String, usize>,
+) -> String {
+	let mut result = String::new();
+
+	if !file_extensions.is_empty() {
+		let mut sorted_ext: Vec<_> = file_extensions.iter().collect();
+		sorted_ext.sort_by(|a, b| b.1.cmp(a.1));
+		let ext_str = sorted_ext
+			.iter()
+			.take(5)
+			.map(|(ext, count)| format!("{}({})", ext, count))
+			.collect::<Vec<_>>()
+			.join(", ");
+		result.push_str(&format!("Found in file types: {}", ext_str));
+	}
+
+	if !directories.is_empty() {
+		let mut sorted_dirs: Vec<_> = directories.iter().collect();
+		sorted_dirs.sort_by(|a, b| b.1.cmp(a.1));
+		let dir_str = sorted_dirs
+			.iter()
+			.take(3)
+			.map(|(dir, count)| format!("{}({})", dir, count))
+			.collect::<Vec<_>>()
+			.join(", ");
+		if !result.is_empty() {
+			result.push('\n');
+		}
+		result.push_str(&format!("Top directories: {}", dir_str));
+	}
+
+	result
 }
 
 // Convert glob pattern to regex pattern for use with ripgrep
@@ -337,9 +415,16 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
                         // Add first half
                         truncated.extend(lines.iter().take(half_limit).cloned());
 
-                        // Add truncation marker
+                        // Add truncation marker with statistics
                         let truncated_count = total_count - max_lines;
-                        truncated.push(format!("[{} lines truncated - use more specific patterns or increase max_lines]", truncated_count));
+                        let (file_extensions, directories) = analyze_search_results(&lines, true);
+                        let statistics = format_statistics(&file_extensions, &directories);
+                        let truncation_msg = if statistics.is_empty() {
+                            format!("[{} lines truncated - use more specific patterns or increase max_lines]", truncated_count)
+                        } else {
+                            format!("[{} lines truncated - use more specific patterns or increase max_lines]\n\n{}", truncated_count, statistics)
+                        };
+                        truncated.push(truncation_msg);
 
                         // Add last portion
                         truncated.extend(lines.iter().skip(total_count - remaining).cloned());
@@ -405,9 +490,16 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
                         // Add first half
                         truncated.extend(files.iter().take(half_limit).cloned());
 
-                        // Add truncation marker
+                        // Add truncation marker with statistics
                         let truncated_count = total_count - max_lines;
-                        truncated.push(format!("[{} lines truncated - use more specific patterns or increase max_lines]", truncated_count));
+                        let (file_extensions, directories) = analyze_search_results(&files, false);
+                        let statistics = format_statistics(&file_extensions, &directories);
+                        let truncation_msg = if statistics.is_empty() {
+                            format!("[{} lines truncated - use more specific patterns or increase max_lines]", truncated_count)
+                        } else {
+                            format!("[{} lines truncated - use more specific patterns or increase max_lines]\n\n{}", truncated_count, statistics)
+                        };
+                        truncated.push(truncation_msg);
 
                         // Add last portion
                         truncated.extend(files.iter().skip(total_count - remaining).cloned());
