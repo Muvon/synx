@@ -312,6 +312,13 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 		("file listing", false)
 	};
 
+	// Debug: Log the actual command being executed
+	crate::log_debug!(
+		"Executing list_files ({}): rg {:?}",
+		output_type,
+		cmd.get_args().collect::<Vec<_>>()
+	);
+
 	// Execute the command
 	let output = tokio::task::spawn_blocking(move || {
 		let output = cmd.output();

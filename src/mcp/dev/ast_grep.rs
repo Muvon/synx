@@ -19,6 +19,9 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::path::Path;
 
+// Maximum number of files allowed after glob expansion to prevent command line overflow
+const MAX_EXPANDED_FILES: usize = 1000;
+
 // Group ast-grep output by file for token efficiency while preserving line numbers
 fn group_ast_grep_output(output: &str) -> String {
 	let lines: Vec<&str> = output.lines().collect();
@@ -69,6 +72,8 @@ fn group_ast_grep_output(output: &str) -> String {
 fn expand_glob_patterns(paths: &[String]) -> Result<Vec<String>> {
 	let mut expanded_paths = Vec::new();
 
+	crate::log_debug!("Expanding {} glob patterns: {:?}", paths.len(), paths);
+
 	for path in paths {
 		// Check if this looks like a glob pattern
 		if path.contains('*') || path.contains('?') || path.contains('[') {
@@ -76,12 +81,14 @@ fn expand_glob_patterns(paths: &[String]) -> Result<Vec<String>> {
 			match glob::glob(path) {
 				Ok(entries) => {
 					let mut found_files = false;
+					let mut pattern_file_count = 0;
 					for entry in entries {
 						match entry {
 							Ok(path_buf) => {
 								if path_buf.is_file() {
 									expanded_paths.push(path_buf.to_string_lossy().to_string());
 									found_files = true;
+									pattern_file_count += 1;
 								}
 							}
 							Err(e) => {
@@ -89,8 +96,14 @@ fn expand_glob_patterns(paths: &[String]) -> Result<Vec<String>> {
 							}
 						}
 					}
-					// If no files found for this glob, add a debug message but continue
-					if !found_files {
+					// Log results for this pattern
+					if found_files {
+						crate::log_debug!(
+							"Glob pattern '{}' matched {} files",
+							path,
+							pattern_file_count
+						);
+					} else {
 						crate::log_debug!("Glob pattern '{}' matched no files", path);
 					}
 				}
@@ -103,10 +116,29 @@ fn expand_glob_patterns(paths: &[String]) -> Result<Vec<String>> {
 			let path_obj = Path::new(path);
 			if path_obj.exists() {
 				expanded_paths.push(path.clone());
+				crate::log_debug!("Added explicit path: {}", path);
 			} else {
 				crate::log_debug!("Path '{}' does not exist, skipping", path);
 			}
 		}
+	}
+
+	// Deduplicate files in case multiple patterns match the same file
+	expanded_paths.sort();
+	expanded_paths.dedup();
+
+	crate::log_debug!(
+		"Total expanded files after deduplication: {}",
+		expanded_paths.len()
+	);
+
+	// Check if we have too many files
+	if expanded_paths.len() > MAX_EXPANDED_FILES {
+		return Err(anyhow!(
+			"Too many files expanded from glob patterns: {} files (max allowed: {}). Consider using more specific patterns to reduce the file count.",
+			expanded_paths.len(),
+			MAX_EXPANDED_FILES
+		));
 	}
 
 	Ok(expanded_paths)
@@ -326,30 +358,37 @@ pub async fn execute_ast_grep_command(
 		cmd.arg(context.to_string());
 	}
 
+	// Expand glob patterns to actual file paths first
+	let expanded_paths_result = if let Some(file_paths) = &paths {
+		expand_glob_patterns(file_paths)
+	} else {
+		Ok(vec![])
+	};
+
 	// Add paths if specified, otherwise default to current directory
-	if let Some(file_paths) = &paths {
-		// Expand glob patterns to actual file paths
-		match expand_glob_patterns(file_paths) {
-			Ok(expanded_paths) => {
-				if expanded_paths.is_empty() {
-					// If no files found after expansion, fall back to current directory
-					crate::log_debug!(
-						"No files found after glob expansion, using current directory"
-					);
-					cmd.arg(".");
-				} else {
-					for path in expanded_paths {
-						cmd.arg(path);
-					}
+	let actual_file_paths = match expanded_paths_result {
+		Ok(expanded_paths) => {
+			if expanded_paths.is_empty() && paths.is_some() {
+				// If no files found after expansion, fall back to current directory
+				crate::log_debug!("No files found after glob expansion, using current directory");
+				cmd.arg(".");
+				vec![".".to_string()]
+			} else if expanded_paths.is_empty() {
+				// No paths specified at all, use current directory
+				cmd.arg(".");
+				vec![".".to_string()]
+			} else {
+				// Add all expanded paths
+				for path in &expanded_paths {
+					cmd.arg(path);
 				}
-			}
-			Err(e) => {
-				return Err(anyhow!("Failed to expand glob patterns: {}", e));
+				expanded_paths
 			}
 		}
-	} else {
-		cmd.arg(".");
-	}
+		Err(e) => {
+			return Err(anyhow!("Failed to expand glob patterns: {}", e));
+		}
+	};
 
 	// Configure the command
 	cmd.stdout(std::process::Stdio::piped())
@@ -357,10 +396,46 @@ pub async fn execute_ast_grep_command(
 		.stdin(std::process::Stdio::null())
 		.kill_on_drop(true); // CRITICAL: Kill process when dropped
 
-	// Debug: Log the command being executed
+	// Debug: Log the complete command being executed with all arguments
+	let mut debug_args = vec!["-p".to_string(), pattern.clone()];
+	if let Some(lang) = &language {
+		debug_args.push("-l".to_string());
+		debug_args.push(lang.clone());
+	}
+	if let Some(rewrite_pattern) = &rewrite {
+		debug_args.push("--rewrite".to_string());
+		debug_args.push(rewrite_pattern.clone());
+		if update_all {
+			debug_args.push("--update-all".to_string());
+		}
+	}
+	if json_output {
+		debug_args.push("--json".to_string());
+	}
+	if context > 0 {
+		debug_args.push("-A".to_string());
+		debug_args.push(context.to_string());
+		debug_args.push("-B".to_string());
+		debug_args.push(context.to_string());
+	}
+
+	// Add file arguments to debug info (show first few and count if many)
+	let file_count = actual_file_paths.len();
+	if file_count <= 5 {
+		for path in &actual_file_paths {
+			debug_args.push(path.clone());
+		}
+	} else {
+		for path in actual_file_paths.iter().take(3) {
+			debug_args.push(path.clone());
+		}
+		debug_args.push(format!("... and {} more files", file_count - 3));
+	}
+
 	crate::log_debug!(
-		"Executing ast-grep command: sg with args: {:?}",
-		vec!["-p", &pattern, "-l", &language.clone().unwrap_or_default()]
+		"Executing ast-grep command: sg {:?} (targeting {} files)",
+		debug_args,
+		file_count
 	);
 
 	// Spawn the process
