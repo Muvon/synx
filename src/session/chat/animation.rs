@@ -12,51 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Animation module for loading indicators
+// Animation module for loading indicators using indicatif
 
 use anyhow::Result;
-use colored::*;
-use crossterm::{cursor, execute};
-use std::io::{stdout, IsTerminal, Write};
+use indicatif::{ProgressBar, ProgressStyle};
+use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
-// Animation frames for loading indicator
-const LOADING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
-
-// Show loading animation while waiting for response
+// Show loading animation while waiting for response (interactive mode)
 pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, _cost: f64) -> Result<()> {
-	let mut stdout = stdout();
-	let mut frame_idx = 0;
+	// Create a spinner with clean "Generating response..." message
+	let spinner = ProgressBar::new_spinner();
 
-	// Save cursor position
-	execute!(stdout, cursor::SavePosition)?;
+	// Set a clean style with just the spinner and message
+	spinner.set_style(
+		ProgressStyle::default_spinner()
+			.template(" {spinner:.cyan} {msg}")
+			.unwrap()
+			.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧"),
+	);
 
+	spinner.set_message("Generating response...");
+	spinner.enable_steady_tick(Duration::from_millis(100));
+
+	// Wait for cancellation
 	while !cancel_flag.load(Ordering::SeqCst) {
-		// Display frame with color if supported
-		execute!(stdout, cursor::RestorePosition)?;
-
-		print!(
-			" {} {}",
-			LOADING_FRAMES[frame_idx].cyan(),
-			"Generating response...".bright_blue()
-		);
-
-		stdout.flush()?;
-
-		// Update frame index
-		frame_idx = (frame_idx + 1) % LOADING_FRAMES.len();
-
-		// Shorter delay to be more responsive to cancellation
-		tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+		tokio::time::sleep(Duration::from_millis(50)).await;
 	}
 
-	// Clear loading message completely and print a newline
-	execute!(stdout, cursor::RestorePosition)?;
-	print!("                                        "); // Clear the entire loading message with spaces
-	execute!(stdout, cursor::RestorePosition)?;
-	stdout.flush()?;
-
+	// Clean finish - removes the spinner completely
+	spinner.finish_and_clear();
 	Ok(())
 }
 
@@ -72,7 +59,7 @@ pub async fn show_no_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Resul
 
 	// Wait for cancellation without showing any visual animation
 	while !cancel_flag.load(Ordering::SeqCst) {
-		tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+		tokio::time::sleep(Duration::from_millis(100)).await;
 	}
 	Ok(())
 }
@@ -80,10 +67,10 @@ pub async fn show_no_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Resul
 // Smart animation that automatically detects interactive vs non-interactive mode
 pub async fn show_smart_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Result<()> {
 	if std::io::stdin().is_terminal() {
-		// Interactive mode - show full animation
+		// Interactive mode - show spinner animation
 		show_loading_animation(cancel_flag, cost).await
 	} else {
-		// Non-interactive mode (piped, run command, etc.) - no animation
+		// Non-interactive mode - show static cost line
 		show_no_animation(cancel_flag, cost).await
 	}
 }
