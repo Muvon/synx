@@ -70,6 +70,19 @@ impl CostTracker {
 		Ok(())
 	}
 
+	/// Display short, single-line cost information
+	pub fn display_cost_line(chat_session: &ChatSession) {
+		use crate::log_info;
+
+		let total_cost = chat_session.session.info.total_cost;
+		if total_cost > 0.0 {
+			log_info!(
+				" ── cost: ${:.5} ────────────────────────────────────────",
+				total_cost
+			);
+		}
+	}
+
 	/// Display session usage statistics
 	pub fn display_session_usage(chat_session: &ChatSession) {
 		use crate::log_info;

@@ -25,7 +25,7 @@ use std::sync::Arc;
 const LOADING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 // Show loading animation while waiting for response
-pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Result<()> {
+pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, _cost: f64) -> Result<()> {
 	let mut stdout = stdout();
 	let mut frame_idx = 0;
 
@@ -37,10 +37,9 @@ pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> 
 		execute!(stdout, cursor::RestorePosition)?;
 
 		print!(
-			" {} {} ${:.5}",
+			" {} {}",
 			LOADING_FRAMES[frame_idx].cyan(),
-			"Generating response...".bright_blue(),
-			cost
+			"Generating response...".bright_blue()
 		);
 
 		stdout.flush()?;
@@ -61,9 +60,17 @@ pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> 
 	Ok(())
 }
 
-// No-op animation for non-interactive mode (like run command)
-pub async fn show_no_animation(cancel_flag: Arc<AtomicBool>, _cost: f64) -> Result<()> {
-	// Just wait for cancellation without showing any visual animation
+// Show static pricing line for non-interactive mode
+pub async fn show_no_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Result<()> {
+	// Display static pricing line for non-interactive mode
+	if !std::io::stdin().is_terminal() {
+		println!(
+			" ── cost: ${:.5} ────────────────────────────────────────",
+			cost
+		);
+	}
+
+	// Wait for cancellation without showing any visual animation
 	while !cancel_flag.load(Ordering::SeqCst) {
 		tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 	}
@@ -84,8 +91,11 @@ pub async fn show_smart_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Re
 // Display generation message for non-interactive mode (without animation)
 pub fn show_generation_message_static(cost: f64) {
 	if !std::io::stdin().is_terminal() {
-		// Non-interactive mode - show static message with pricing
-		println!("Generating response... ${:.5}", cost);
+		// Non-interactive mode - show static pricing line
+		println!(
+			" ── cost: ${:.5} ────────────────────────────────────────",
+			cost
+		);
 	}
 	// Interactive mode - do nothing (animation will handle it)
 }

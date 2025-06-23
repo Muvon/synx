@@ -73,8 +73,8 @@ fn handle_final_response(
 	// Print assistant response with color
 	print_assistant_response(&clean_content, config, role);
 
-	// Display cumulative token usage using CostTracker
-	CostTracker::display_session_usage(chat_session);
+	// Display short cost line using CostTracker
+	CostTracker::display_cost_line(chat_session);
 
 	Ok(())
 }
