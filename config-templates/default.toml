@@ -269,7 +269,7 @@ layer_refs = ["task_refiner", "task_researcher"]
 
 [roles.mcp]
 server_refs = ["developer", "filesystem", "web", "octocode", "agent"]
-allowed_tools = ["developer:*", "filesystem:*", "web_search", "read_html", "octocode:*", "agent:*"]
+allowed_tools = ["developer:*", "filesystem:*", "web_search", "read_html", "octocode:*", "agent_*"]
 
 # Assistant role - optimized for general assistance tasks
 [[roles]]

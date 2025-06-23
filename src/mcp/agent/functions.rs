@@ -23,11 +23,11 @@ use std::sync::Arc;
 
 // Get all available agent functions based on config
 pub fn get_all_functions(config: &crate::config::Config) -> Vec<McpFunction> {
+	let mut functions = Vec::new();
+
 	// Generate one function per agent configuration
-	config
-		.agents
-		.iter()
-		.map(|agent_config| McpFunction {
+	for agent_config in &config.agents {
+		functions.push(McpFunction {
 			name: format!("agent_{}", agent_config.name),
 			description: agent_config.description.clone(),
 			parameters: json!({
@@ -40,8 +40,45 @@ pub fn get_all_functions(config: &crate::config::Config) -> Vec<McpFunction> {
 				},
 				"required": ["task"]
 			}),
-		})
-		.collect()
+		});
+	}
+
+	// Add call_llm function
+	functions.push(McpFunction {
+		name: "call_llm".to_string(),
+		description: "Make a direct LLM call with runtime parameters, bypassing agent configuration".to_string(),
+		parameters: json!({
+			"type": "object",
+			"properties": {
+				"prompt": {
+					"type": "string",
+					"description": "The input/prompt to process"
+				},
+				"model": {
+					"type": "string",
+					"description": "Model in 'provider:model' format (e.g., 'openai:gpt-4o', 'openrouter:anthropic/claude-3.5-sonnet')"
+				},
+				"system": {
+					"type": "string",
+					"description": "System prompt for the LLM"
+				},
+				"temperature": {
+					"type": "number",
+					"description": "Temperature for randomness (0.0-2.0, default: 0.7)",
+					"minimum": 0.0,
+					"maximum": 2.0
+				},
+				"max_tokens": {
+					"type": "integer",
+					"description": "Maximum output tokens (default: 4096)",
+					"minimum": 1
+				}
+			},
+			"required": ["prompt", "model", "system"]
+		}),
+	});
+
+	functions
 }
 
 // Execute agent tool call
@@ -50,6 +87,11 @@ pub async fn execute_agent_command(
 	config: &crate::config::Config,
 	_cancellation_token: Option<Arc<AtomicBool>>,
 ) -> Result<McpToolResult> {
+	// Handle call_llm tool
+	if call.tool_name == "call_llm" {
+		return execute_call_llm(call, config).await;
+	}
+
 	// Extract layer name from tool name (agent_<layer_name>)
 	let layer_name = call
 		.tool_name
@@ -143,4 +185,71 @@ async fn process_layer_as_agent(
 	};
 
 	Ok((output, agent_costs))
+}
+
+// Execute call_llm tool - direct LLM call with runtime parameters
+async fn execute_call_llm(
+	call: &McpToolCall,
+	config: &crate::config::Config,
+) -> Result<McpToolResult> {
+	// Extract required parameters
+	let task = call
+		.parameters
+		.get("prompt")
+		.and_then(|v| v.as_str())
+		.ok_or_else(|| anyhow::anyhow!("call_llm requires 'prompt' parameter"))?;
+
+	let model = call
+		.parameters
+		.get("model")
+		.and_then(|v| v.as_str())
+		.ok_or_else(|| anyhow::anyhow!("call_llm requires 'model' parameter"))?;
+
+	let system_prompt = call
+		.parameters
+		.get("system")
+		.and_then(|v| v.as_str())
+		.ok_or_else(|| anyhow::anyhow!("call_llm requires 'system' parameter"))?;
+
+	// Extract optional parameters with defaults
+	let temperature = call
+		.parameters
+		.get("temperature")
+		.and_then(|v| v.as_f64())
+		.unwrap_or(0.7) as f32;
+
+	let max_tokens = call
+		.parameters
+		.get("max_tokens")
+		.and_then(|v| v.as_u64())
+		.unwrap_or(4096) as u32;
+
+	// Create temporary LayerConfig with runtime parameters
+	let layer_config = crate::session::layers::LayerConfig {
+		name: "call_llm".to_string(),
+		model: Some(model.to_string()),
+		system_prompt: Some(system_prompt.to_string()),
+		description: "Direct LLM call with runtime parameters".to_string(),
+		temperature,
+		max_tokens,
+		input_mode: crate::session::layers::layer_trait::InputMode::Last, // Doesn't matter as input is provided
+		output_mode: crate::session::layers::layer_trait::OutputMode::Last, // Return only the last output
+		mcp: crate::session::layers::layer_trait::LayerMcpConfig {
+			server_refs: vec![], // No MCP tools
+			allowed_tools: vec![],
+		},
+		parameters: std::collections::HashMap::new(), // No custom parameters
+		processed_system_prompt: None,                // Will be processed during execution
+	};
+
+	// Process task through the layer using existing logic
+	let (result, agent_costs) = process_layer_as_agent(&layer_config, task, config).await?;
+
+	// Return MCP-compliant result with cost metadata
+	Ok(McpToolResult::success_with_metadata(
+		call.tool_name.clone(),
+		call.tool_id.clone(),
+		result,
+		serde_json::to_value(agent_costs)?,
+	))
 }
