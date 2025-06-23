@@ -103,13 +103,16 @@ pub async fn perform_context_reduction(
 		Ok(summary_content) => {
 			println!("{}", "Context summarization complete".bright_green());
 
-			// SMART TRUNCATION: Keep only system message + summary as assistant message
+			// SMART TRUNCATION: Keep only system message + the LAST message (which is the assistant's summary)
 			let system_message = chat_session
 				.session
 				.messages
 				.iter()
 				.find(|m| m.role == "system")
 				.cloned();
+
+			// Get the LAST message (the assistant's summary that was just added)
+			let last_message = chat_session.session.messages.last().cloned();
 
 			// Clear all messages
 			chat_session.session.messages.clear();
@@ -119,25 +122,31 @@ pub async fn perform_context_reduction(
 				chat_session.session.messages.push(system);
 			}
 
-			// Add the summary as an assistant message (this is our new context)
-			chat_session
-				.session
-				.add_message("assistant", &summary_content);
-			let last_index = chat_session.session.messages.len() - 1;
-			chat_session.session.messages[last_index].cached = true; // Mark for caching
+			// Restore the LAST message (the assistant's summary)
+			if let Some(mut last) = last_message {
+				last.cached = true; // Mark for caching
+				chat_session.session.messages.push(last.clone());
 
-			// NOW log restoration point AFTER the assistant message is properly added
-			let _ = crate::session::logger::log_restoration_point(
-				&chat_session.session.info.name,
-				"/done - Task completion and context optimization",
-				&summary_content,
-			);
+				// Log restoration point using the actual assistant message content
+				let _ = crate::session::logger::log_restoration_point(
+					&chat_session.session.info.name,
+					"/done - Task completion and context optimization",
+					&last.content,
+				);
+			}
 
 			// Log to session file as well
 			if let Some(session_file) = &chat_session.session.session_file {
+				// Get the actual assistant message content for logging (it's the last message now)
+				let actual_summary = if let Some(last_msg) = chat_session.session.messages.last() {
+					&last_msg.content
+				} else {
+					&summary_content
+				};
+
 				let restoration_data = serde_json::json!({
 					"type": "context_reduction",
-					"summary": summary_content,
+					"summary": actual_summary,
 					"original_message_count": original_message_count,
 					"timestamp": std::time::SystemTime::now()
 						.duration_since(std::time::UNIX_EPOCH)
