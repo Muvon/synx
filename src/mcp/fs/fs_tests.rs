@@ -701,7 +701,7 @@ mod tests {
 		// Should have truncation info
 		assert!(output.contains_key("truncation_info"));
 		assert_eq!(output["count"], 30); // Total count
-		assert_eq!(output["displayed_count"], 21); // 20 + 1 truncation marker
+		assert_eq!(output["displayed_count"], 20); // 19 files + 1 truncation marker (max_lines=20)
 
 		// Test with max_lines = 0 (unlimited) - should not truncate
 		let call_unlimited = McpToolCall {
@@ -739,7 +739,7 @@ mod tests {
 		// Should have truncation info
 		assert!(output_small.contains_key("truncation_info"));
 		assert_eq!(output_small["count"], 30);
-		assert_eq!(output_small["displayed_count"], 6); // 5 + 1 truncation marker
+		assert_eq!(output_small["displayed_count"], 5); // 4 files + 1 truncation marker (max_lines=5)
 
 		// Check that truncation marker is present in the files array
 		let files = output_small["files"].as_array().unwrap();
