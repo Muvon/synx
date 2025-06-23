@@ -15,6 +15,7 @@
 // Shell execution functionality for the Developer MCP provider
 
 use super::super::{McpFunction, McpToolCall, McpToolResult};
+use crate::session::estimate_tokens;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
@@ -77,6 +78,35 @@ fn add_to_shell_history(command: &str) -> Result<()> {
 	Ok(())
 }
 
+// Truncate shell output if it exceeds token limit
+fn truncate_shell_output(output: &str, max_tokens: usize) -> String {
+	let token_count = estimate_tokens(output);
+
+	if token_count <= max_tokens {
+		return output.to_string();
+	}
+
+	// Simple truncation - cut at character boundary
+	// Estimate roughly where to cut (tokens are ~4 chars average)
+	let estimated_chars = max_tokens * 3; // Conservative estimate
+	let truncated = if output.len() > estimated_chars {
+		&output[..estimated_chars]
+	} else {
+		output
+	};
+
+	// Find last newline to avoid cutting mid-line
+	let last_newline = truncated.rfind('\n').unwrap_or(truncated.len());
+	let final_truncated = &truncated[..last_newline];
+
+	format!(
+		"{}\n\n[Output truncated - {} tokens estimated, max {} allowed. Use more specific commands to reduce output size]",
+		final_truncated,
+		token_count,
+		max_tokens
+	)
+}
+
 // Define the shell function for the MCP protocol with enhanced description
 pub fn get_shell_function() -> McpFunction {
 	McpFunction {
@@ -90,6 +120,12 @@ of if the command succeeded or failed.
 Parameters:
 - `command`: The shell command to execute (required)
 - `background`: Run command in background and return PID instead of waiting for completion (default: false)
+- `max_tokens`: Maximum tokens allowed in output before truncation (default: 2000)
+
+**Output Truncation:**
+To prevent huge outputs from consuming excessive tokens, output is automatically truncated
+if it exceeds max_tokens. Avoid commands that produce large outputs (like `cat large_file`
+or `find /` without filters). When large output is needed, increase max_tokens parameter.
 
 **Background Execution:**
 When `background` is true, the command runs in the background and returns immediately with the process PID.
@@ -108,6 +144,7 @@ may show ignored or hidden files. For example *do not* use `find` or `ls -r`
 Examples:
 - Foreground: `{\"command\": \"ls -la\"}`
 - Background: `{\"command\": \"python -m http.server 8000\", \"background\": true}`
+- Large output: `{\"command\": \"cat large_file.txt\", \"max_tokens\": 5000}`
 - Kill background: `{\"command\": \"kill 12345\"}` (where 12345 is the returned PID)
 ".to_string(),
 		parameters: json!({
@@ -121,6 +158,12 @@ Examples:
 					"type": "boolean",
 					"default": false,
 					"description": "Run command in background and return PID instead of waiting for completion"
+				},
+				"max_tokens": {
+					"type": "integer",
+					"default": 2000,
+					"minimum": 100,
+					"description": "Maximum tokens allowed in output before truncation (default: 2000)"
 				}
 			},
 			"required": ["command"]
@@ -148,6 +191,14 @@ pub async fn execute_shell_command(
 		.get("background")
 		.and_then(|v| v.as_bool())
 		.unwrap_or(false);
+
+	// Extract max_tokens parameter
+	let max_tokens = call
+		.parameters
+		.get("max_tokens")
+		.and_then(|v| v.as_u64())
+		.map(|n| n as usize)
+		.unwrap_or(2000);
 
 	// Check for cancellation before starting
 	if let Some(ref token) = cancellation_token {
@@ -255,13 +306,16 @@ Error: {}",
 							)
 						};
 
+						// Apply token-based truncation to prevent huge outputs
+						let truncated_output = truncate_shell_output(&combined, max_tokens);
+
 						// Add detailed execution results including status code
 						let status_code = output.status.code().unwrap_or(-1);
 						let success = output.status.success();
 
 						json!({
 							"success": success,
-							"output": combined,
+							"output": truncated_output,
 							"code": status_code,
 							"parameters": {
 								"command": command
