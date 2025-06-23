@@ -393,51 +393,23 @@ pub async fn execute_ast_grep_command(
 					let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 					let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-					// Apply truncation to stdout if max_lines is set (0 means unlimited)
-					let (truncated_stdout, truncation_info) = if max_lines > 0 && !stdout.is_empty() {
-						let lines: Vec<&str> = stdout.lines().collect();
-						if lines.len() > max_lines {
-							let total_count = lines.len();
-							let half_limit = max_lines / 2;
-							let remaining = max_lines - half_limit;
+					// Group FIRST to preserve file-based organization
+					let grouped_output = group_ast_grep_output(&stdout);
 
-							let mut truncated = Vec::new();
+					// Then apply truncation to the grouped output
+					let output_lines: Vec<String> = grouped_output.lines().map(|s| s.to_string()).collect();
+					let (truncated_lines, truncation_info) = crate::mcp::shared_utils::apply_head_truncation(
+						&output_lines,
+						max_lines
+					);
 
-							// Add first half
-							for line in lines.iter().take(half_limit) {
-								truncated.push(line.to_string());
-							}
-
-							// Add truncation marker
-							let truncated_count = total_count - max_lines;
-							truncated.push(format!("[{} lines truncated - use more specific patterns or increase max_lines]", truncated_count));
-
-							// Add last portion
-							for line in lines.iter().skip(total_count - remaining) {
-								truncated.push(line.to_string());
-							}
-
-							(truncated.join("\n"), Some(format!("Output truncated: showing {} of {} total lines", max_lines, total_count)))
-						} else {
-							(stdout.clone(), None)
-						}
-					} else {
-						(stdout.clone(), None)
-					};
-
-					// Format the output more clearly with error handling
+					// Format the final output
 					let combined = if stderr.is_empty() {
-						// Group ast-grep output for token efficiency
-						group_ast_grep_output(&truncated_stdout)
-					} else if truncated_stdout.is_empty() {
+						truncated_lines.join("\n")
+					} else if truncated_lines.is_empty() {
 						stderr
 					} else {
-						format!(
-							"{}
-
-Error: {}",
-							group_ast_grep_output(&truncated_stdout), stderr
-						)
+						format!("{}\n\nError: {}", truncated_lines.join("\n"), stderr)
 					};
 
 					// Add detailed execution results including status code

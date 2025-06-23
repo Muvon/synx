@@ -38,6 +38,7 @@ pub mod fs;
 pub mod health_monitor;
 pub mod process;
 pub mod server;
+pub mod shared_utils;
 pub mod web;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
