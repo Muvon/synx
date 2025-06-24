@@ -29,7 +29,7 @@ pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> 
 	// Set a clean style with spinner and cost-aware message
 	spinner.set_style(
 		ProgressStyle::default_spinner()
-			.template(" {spinner:.cyan} {msg}")
+			.template(" {spinner:.cyan} {msg:.cyan}")
 			.unwrap()
 			.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧"),
 	);
