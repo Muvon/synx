@@ -405,6 +405,9 @@ impl AiProvider for AnthropicProvider {
 				let retry_delay_ms = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
 					crate::log_info!("🚦 Anthropic rate limit exceeded (429) - analyzing headers for optimal retry timing...");
 
+					// Debug: Log all headers received in response for troubleshooting
+					crate::log_debug!("📋 Anthropic 429 response headers: {:?}", headers);
+
 					// Check for Anthropic's retry-after header first
 					if let Some(retry_after) = headers.get("retry-after") {
 						if let Ok(retry_after_str) = retry_after.to_str() {
