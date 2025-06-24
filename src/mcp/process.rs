@@ -1020,7 +1020,7 @@ pub async fn execute_stdin_tool_call(
 	let tool_result = McpToolResult::success(
 		call.tool_name.clone(),
 		call.tool_id.clone(),
-		serde_json::to_string_pretty(&output).unwrap_or_else(|_| output.to_string()),
+		crate::mcp::extract_mcp_content(&output),
 	);
 
 	Ok(tool_result)

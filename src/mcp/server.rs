@@ -681,7 +681,7 @@ async fn execute_tool_call_internal(
 			let tool_result = McpToolResult::success(
 				tool_name.clone(),
 				call.tool_id.clone(),
-				serde_json::to_string_pretty(&output).unwrap_or_else(|_| output.to_string()),
+				crate::mcp::extract_mcp_content(&output),
 			);
 
 			Ok(tool_result)
