@@ -94,8 +94,7 @@ pub struct Config {
 
 	// System-wide configuration settings (not role-specific)
 	pub mcp_response_warning_threshold: usize,
-	pub max_request_tokens_threshold: usize,
-	pub enable_auto_truncation: bool,
+	pub max_session_tokens_threshold: usize,
 	pub cache_tokens_threshold: u64,
 	pub cache_timeout_seconds: u64,
 	pub enable_markdown_rendering: bool,

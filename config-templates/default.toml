@@ -42,11 +42,8 @@ custom_instructions_file_name = "INSTRUCTIONS.md"
 # Warn when MCP tool responses exceed this token count (0 = disable warnings)
 mcp_response_warning_threshold = 10000
 
-# Maximum tokens per request before auto-truncation kicks in (0 = no limit)
-max_request_tokens_threshold = 20000
-
-# Enable automatic truncation of large inputs to fit within token limits
-enable_auto_truncation = false
+# Maximum tokens per session before truncation kicks in (0 = disabled, >0 = enabled)
+max_session_tokens_threshold = 0
 
 # Cache responses when they exceed this token count (0 = no caching)
 cache_tokens_threshold = 2048

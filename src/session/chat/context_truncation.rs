@@ -30,8 +30,8 @@ pub async fn check_and_truncate_context(
 	_role: &str,
 	_operation_cancelled: Arc<AtomicBool>,
 ) -> Result<()> {
-	// Check if auto truncation is enabled in config
-	if !config.enable_auto_truncation {
+	// Check if session token truncation is enabled in config (0 = disabled)
+	if config.max_session_tokens_threshold == 0 {
 		return Ok(());
 	}
 
@@ -39,7 +39,7 @@ pub async fn check_and_truncate_context(
 	let current_tokens = crate::session::estimate_message_tokens(&chat_session.session.messages);
 
 	// If we're under the threshold, nothing to do
-	if current_tokens < config.max_request_tokens_threshold {
+	if current_tokens < config.max_session_tokens_threshold {
 		return Ok(());
 	}
 
@@ -164,7 +164,7 @@ pub async fn perform_smart_truncation(
 
 	log_conditional!(
 		debug: format!("\nℹ️  Message history exceeds configured token limit ({} > {})\nApplying enhanced safe boundary truncation with intelligent summarization.",
-			current_tokens, config.max_request_tokens_threshold).bright_blue(),
+			current_tokens, config.max_session_tokens_threshold).bright_blue(),
 		default: "Applying enhanced safe boundary truncation with intelligent summarization".bright_blue()
 	);
 
@@ -197,7 +197,7 @@ pub async fn perform_smart_truncation(
 		.unwrap_or(0);
 
 	let available_tokens = config
-		.max_request_tokens_threshold
+		.max_session_tokens_threshold
 		.saturating_sub(system_tokens);
 	let target_tokens = (available_tokens as f64 * 0.85) as usize; // 85% of available tokens
 

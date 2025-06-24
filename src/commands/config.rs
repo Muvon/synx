@@ -591,12 +591,9 @@ fn show_configuration(config: &Config) -> Result<(), anyhow::Error> {
 		config.mcp_response_warning_threshold
 	);
 	println!(
-		"  Max request tokens:        {} tokens",
-		config.max_request_tokens_threshold
-	);
-	println!(
-		"  Auto-truncation:           {}",
-		if config.enable_auto_truncation {
+		"  Max session tokens:        {} tokens ({})",
+		config.max_session_tokens_threshold,
+		if config.max_session_tokens_threshold > 0 {
 			"enabled"
 		} else {
 			"disabled"

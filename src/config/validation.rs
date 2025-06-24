@@ -69,29 +69,12 @@ impl Config {
 			));
 		}
 
-		// Validate max request tokens threshold
-		// Only validate if auto-truncation is enabled
-		if self.enable_auto_truncation {
-			if self.max_request_tokens_threshold == 0 {
-				return Err(anyhow!(
-					"Max request tokens threshold cannot be 0 when auto-truncation is enabled. Use a positive value or disable auto-truncation."
-				));
-			}
-
-			if self.max_request_tokens_threshold > 2_000_000 {
-				return Err(anyhow!(
-					"Max request tokens threshold too high: {}. Maximum allowed: 2,000,000",
-					self.max_request_tokens_threshold
-				));
-			}
-		} else {
-			// When auto-truncation is disabled, we still validate the upper bound if a value is set
-			if self.max_request_tokens_threshold > 2_000_000 {
-				return Err(anyhow!(
-					"Max request tokens threshold too high: {}. Maximum allowed: 2,000,000",
-					self.max_request_tokens_threshold
-				));
-			}
+		// Validate max session tokens threshold (0 = disabled, >0 = enabled)
+		if self.max_session_tokens_threshold > 2_000_000 {
+			return Err(anyhow!(
+				"Max session tokens threshold too high: {}. Maximum allowed: 2,000,000",
+				self.max_session_tokens_threshold
+			));
 		}
 
 		// Validate cache timeout
