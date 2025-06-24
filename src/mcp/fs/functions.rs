@@ -124,7 +124,8 @@ pub fn get_text_editor_function() -> McpFunction {
 			- View entire file: `{\"command\": \"view\", \"path\": \"src/main.rs\"}`
 			- View specific lines: `{\"command\": \"view\", \"path\": \"src/main.rs\", \"view_range\": [10, 20]}`
 			- List directory: `{\"command\": \"view\", \"path\": \"src/\"}`
-			- Returns content with line numbers for editing reference
+			- Returns content as plain text with line numbers (1-indexed) for editing reference
+			- Smart elision: when using view_range, shows context with [...X lines more] indicators
 
 			`create`: Create new file with specified content
 			- `{\"command\": \"create\", \"path\": \"src/new_module.rs\", \"file_text\": \"pub fn hello() {\\n    println!(\\\"Hello!\\\");\\n}\"}`

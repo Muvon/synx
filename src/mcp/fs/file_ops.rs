@@ -32,8 +32,11 @@ pub async fn view_file_spec(
 			tool_name: "text_editor".to_string(),
 			tool_id: call.tool_id.clone(),
 			result: json!({
-				"error": "File not found",
-				"is_error": true
+				"content": [{
+					"type": "text",
+					"text": "File not found"
+				}],
+				"isError": true
 			}),
 		});
 	}
@@ -67,8 +70,11 @@ pub async fn view_file_spec(
 			tool_name: "text_editor".to_string(),
 			tool_id: call.tool_id.clone(),
 			result: json!({
-				"content": content,
-				"type": "directory"
+				"content": [{
+					"type": "text",
+					"text": content
+				}],
+				"isError": false
 			}),
 		});
 	}
@@ -78,8 +84,11 @@ pub async fn view_file_spec(
 			tool_name: "text_editor".to_string(),
 			tool_id: call.tool_id.clone(),
 			result: json!({
-				"error": "Path is not a file",
-				"is_error": true
+				"content": [{
+					"type": "text",
+					"text": "Path is not a file"
+				}],
+				"isError": true
 			}),
 		});
 	}
@@ -94,8 +103,11 @@ pub async fn view_file_spec(
 			tool_name: "text_editor".to_string(),
 			tool_id: call.tool_id.clone(),
 			result: json!({
-				"error": "File is too large (>5MB)",
-				"is_error": true
+				"content": [{
+					"type": "text",
+					"text": "File is too large (>5MB)"
+				}],
+				"isError": true
 			}),
 		});
 	}
@@ -106,8 +118,8 @@ pub async fn view_file_spec(
 		.map_err(|e| anyhow!("Permission denied. Cannot read file: {}", e))?;
 	let lines: Vec<&str> = content.lines().collect();
 
-	let (content_with_numbers, displayed_lines) = if let Some((start, end)) = view_range {
-		// Handle view_range parameter
+	let content_with_numbers = if let Some((start, end)) = view_range {
+		// Handle view_range parameter with smart elision
 		let start_idx = if start == 0 {
 			0
 		} else {
@@ -124,8 +136,11 @@ pub async fn view_file_spec(
 				tool_name: "text_editor".to_string(),
 				tool_id: call.tool_id.clone(),
 				result: json!({
-					"error": format!("Start line {} exceeds file length ({} lines)", start, lines.len()),
-					"is_error": true
+					"content": [{
+						"type": "text",
+						"text": format!("Start line {} exceeds file length ({} lines)", start, lines.len())
+					}],
+					"isError": true
 				}),
 			});
 		}
@@ -135,40 +150,87 @@ pub async fn view_file_spec(
 				tool_name: "text_editor".to_string(),
 				tool_id: call.tool_id.clone(),
 				result: json!({
-					"error": format!("Start line {} must be less than or equal to end line {}", start, end),
-					"is_error": true
+					"content": [{
+						"type": "text",
+						"text": format!("Start line {} must be less than or equal to end line {}", start, end)
+					}],
+					"isError": true
 				}),
 			});
 		}
 
-		let selected_lines = &lines[start_idx..end_idx];
-		let content_with_nums = selected_lines
-			.iter()
-			.enumerate()
-			.map(|(i, line)| format!("{}: {}", start_idx + i + 1, line))
-			.collect::<Vec<_>>()
-			.join("\n");
+		// Smart elision: show context around the requested range
+		let mut result_lines = Vec::new();
 
-		(content_with_nums, end_idx - start_idx)
+		// Show lines before the range if there's a significant gap
+		if start_idx > 3 {
+			// Show first few lines
+			for (i, line) in lines.iter().enumerate().take(2) {
+				result_lines.push(format!("{}: {}", i + 1, line));
+			}
+			if start_idx > 5 {
+				result_lines.push(format!("[...{} lines more]", start_idx - 2));
+			} else {
+				// Show the gap lines
+				for (i, line) in lines.iter().enumerate().take(start_idx).skip(2) {
+					result_lines.push(format!("{}: {}", i + 1, line));
+				}
+			}
+		} else {
+			// Show all lines from beginning to start
+			for (i, line) in lines.iter().enumerate().take(start_idx) {
+				result_lines.push(format!("{}: {}", i + 1, line));
+			}
+		}
+
+		// Show the requested range
+		for (i, line) in lines.iter().enumerate().take(end_idx).skip(start_idx) {
+			result_lines.push(format!("{}: {}", i + 1, line));
+		}
+
+		// Show lines after the range if there's a significant gap
+		let remaining_lines = lines.len() - end_idx;
+		if remaining_lines > 3 {
+			if remaining_lines > 5 {
+				result_lines.push(format!("[...{} lines more]", remaining_lines - 2));
+				// Show last few lines
+				for (i, line) in lines.iter().enumerate().skip(lines.len() - 2) {
+					result_lines.push(format!("{}: {}", i + 1, line));
+				}
+			} else {
+				// Show the remaining lines
+				for (i, line) in lines.iter().enumerate().skip(end_idx) {
+					result_lines.push(format!("{}: {}", i + 1, line));
+				}
+			}
+		} else {
+			// Show all remaining lines
+			for (i, line) in lines.iter().enumerate().skip(end_idx) {
+				result_lines.push(format!("{}: {}", i + 1, line));
+			}
+		}
+
+		result_lines.join("\n")
 	} else {
 		// Show entire file with line numbers
-		let content_with_nums = lines
+		lines
 			.iter()
 			.enumerate()
 			.map(|(i, line)| format!("{}: {}", i + 1, line))
 			.collect::<Vec<_>>()
-			.join("\n");
-
-		(content_with_nums, lines.len())
+			.join("\n")
 	};
 
+	// Return plain text content with proper MCP format
 	Ok(McpToolResult {
 		tool_name: "text_editor".to_string(),
 		tool_id: call.tool_id.clone(),
 		result: json!({
-			"content": content_with_numbers,
-			"lines": displayed_lines,
-			"total_lines": lines.len()
+			"content": [{
+				"type": "text",
+				"text": content_with_numbers
+			}],
+			"isError": false
 		}),
 	})
 }
