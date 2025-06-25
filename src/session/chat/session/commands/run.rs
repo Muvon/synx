@@ -98,6 +98,34 @@ allowed_tools = []"#
 			.unwrap_or_else(|| "No recent user input found".to_string())
 	};
 
+	// Check spending threshold before executing command layer
+	// For /run commands, any threshold breach results in instant decline and stop
+	match session.check_spending_threshold(config) {
+		Ok(should_continue) => {
+			if !should_continue {
+				// Spending threshold reached - instant decline for /run commands
+				println!(
+					"{}",
+					"✗ Command execution cancelled due to spending threshold.".bright_red()
+				);
+				return Ok(false);
+			}
+		}
+		Err(e) => {
+			// Error checking threshold, log warning and stop execution
+			println!(
+				"{}: {}",
+				"Warning: Error checking spending threshold".bright_yellow(),
+				e
+			);
+			println!(
+				"{}",
+				"✗ Command execution cancelled due to threshold check error.".bright_red()
+			);
+			return Ok(false);
+		}
+	}
+
 	// Execute the command layer
 	println!();
 	let operation_cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
