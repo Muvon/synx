@@ -22,50 +22,109 @@ use std::path::Path;
 
 // All constants kept internal - no configuration needed
 pub const SUMMARY_REQUEST_PROMPT: &str = r#"
-CRITICAL: Session approaching token limits. Provide STRUCTURED summary for seamless continuation:
+CRITICAL: Session approaching token limits. Provide COMPREHENSIVE handoff summary to continue work seamlessly from scratch:
 
-## OBJECTIVE
-Current main task/goal being worked on.
+## MAIN OBJECTIVE & SCOPE
+What we're building/fixing/implementing:
+- Primary goal and why it matters
+- Scope boundaries and what's included/excluded
+- Success criteria and expected outcomes
 
-## PROGRESS
-What has been accomplished:
-- Specific code changes made
-- Files modified with key changes
-- Tools used and results
-- Problems solved
+## DETAILED PROGRESS ACCOMPLISHED
+Complete breakdown of what's been done:
+- Specific code changes made (functions, files, logic)
+- Configuration changes and settings modified
+- Tools executed and their results/outputs
+- Problems identified and solutions implemented
+- Key insights discovered during implementation
+- Any debugging steps taken and findings
 
-## CURRENT STATE
-Exact current situation:
-- Active work in progress
-- Pending operations
-- Current focus area
+## CURRENT IMPLEMENTATION STATE
+Exact technical situation right now:
+- What's working vs what's broken/incomplete
+- Active work in progress (half-finished implementations)
+- Current file states and modifications pending
+- Any compilation/runtime issues encountered
+- Dependencies or prerequisites that are ready/missing
 
 ## REQUIRED FILE CONTEXTS
-List ALL files needed as context to continue work. Use EXACT format:
+CRITICAL: List ALL files needed as context using EXACT format below. This will be automatically parsed to load file contents.
+
+**MANDATORY FORMAT - Use code block with exact pattern:**
 ```
 filename:startline:endline
 filename:startline:endline
+filename:startline:endline
 ```
-- Use absolute paths from project root
-- Include only essential line ranges
-- Focus on relevant functions/classes/sections
+
+**PARSING REQUIREMENTS:**
+- Each line must be exactly: filepath:number:number
+- No spaces around colons
+- Use absolute paths from project root (src/main.rs not ./src/main.rs)
+- Line numbers must be positive integers
+- Start line must be ≤ end line
+- End line must be ≤ 10000
 - Maximum 10 file ranges total
 
-## NEXT ACTIONS
-Immediate next steps:
-- Specific actions to take
-- Expected approach
-- Anticipated outcomes
+**INCLUDE THESE FILES:**
+- Core implementation files with key functions/classes
+- Configuration files with relevant sections
+- Test files if testing is involved
+- Any modified or newly created files
+- Files containing error patterns or debugging areas
 
-## CRITICAL NOTES
-Key details/decisions/constraints that must be preserved.
+**EXAMPLE CORRECT FORMAT:**
+```
+src/session/chat/session_continuation.rs:100:200
+src/config/mod.rs:50:100
+tests/integration_test.rs:1:50
+```
 
-Follow this structure EXACTLY for optimal continuation.
+**WRONG FORMATS (will not be parsed):**
+- src/main.rs : 1 : 50 (spaces around colons)
+- ./src/main.rs:1:50 (relative path with ./)
+- src/main.rs lines 1-50 (text description)
+- src/main.rs:1:50, src/lib.rs:1:100 (comma separated)
+
+## IMMEDIATE NEXT STEPS
+Specific actionable steps to continue (in order):
+- Exact next implementation tasks
+- Files to modify and what changes to make
+- Commands to run or tools to execute
+- Testing or verification steps needed
+- Expected challenges and how to handle them
+
+## CRITICAL TECHNICAL DETAILS
+Essential information for seamless continuation:
+- Important variable names, function signatures, or data structures
+- Key algorithms or logic patterns being used
+- Error handling approaches or edge cases discovered
+- Performance considerations or constraints
+- Integration points with existing systems
+- Any architectural decisions made and why
+
+## CONTEXT FOR UNDERSTANDING
+Background information needed to work effectively:
+- How this work fits into the larger system
+- Related components or dependencies involved
+- Previous attempts or approaches that didn't work
+- Domain knowledge or business logic relevant
+- Any user requirements or constraints to remember
+
+PROVIDE COMPLETE DETAILS - imagine explaining to a new developer who needs to pick up exactly where you left off.
 "#;
 
-pub const CONTINUATION_USER_MESSAGE_TEMPLATE: &str = r#"Thank you for the summary. Here's the required file context:
+pub const CONTINUATION_USER_MESSAGE_TEMPLATE: &str = r#"Thank you for the summary.
 
+Currently we are working on the following requests:
+<tasks>
 {}
+</tasks>
+
+Here's the required file context:
+<files>
+{}
+</files>
 
 Let's continue our work from where we left off.
 Please proceed with the next steps as outlined in your summary.
@@ -193,14 +252,19 @@ pub fn process_continuation_response(
 	};
 	chat_session.session.messages.push(summary_message);
 
+	// Collect user request history before clearing session
+	let user_history = collect_user_request_history(&chat_session.session.messages);
+
 	// Parse file context requirements from the AI's summary
 	let file_contexts = parse_file_contexts(response_content);
 
 	// Generate file context content
 	let context_content = generate_file_context_content(&file_contexts);
 
-	// Create continuation message with file context
-	let continuation_content = CONTINUATION_USER_MESSAGE_TEMPLATE.replace("{}", &context_content);
+	// Create continuation message with user history and file context
+	let continuation_content = CONTINUATION_USER_MESSAGE_TEMPLATE
+		.replace("{}", &user_history)
+		.replace("{}", &context_content);
 
 	let continue_message = crate::session::Message {
 		role: "user".to_string(),
@@ -226,6 +290,18 @@ pub fn process_continuation_response(
 		for (filepath, start, end) in &file_contexts {
 			log_info!("   {} (lines {}-{})", filepath, start, end);
 		}
+	} else {
+		log_info!("No file contexts found in AI summary - check format");
+		crate::log_debug!("Summary content for context parsing: {}", response_content);
+	}
+
+	// Log user history preservation
+	let history_lines = user_history.lines().count();
+	if history_lines > 1 {
+		log_info!(
+			"Preserved {} user request(s) for continuation context",
+			history_lines
+		);
 	}
 
 	log_info!("Session context preserved - continuing automatically...");
@@ -251,35 +327,175 @@ pub fn check_and_handle_continuation(
 	Ok(false) // No continuation needed
 }
 
+/// Collect meaningful user requests from session history for continuation context
+/// Filters out system-generated messages and keeps last 5-7 user requests
+fn collect_user_request_history(messages: &[crate::session::Message]) -> String {
+	let mut user_requests = Vec::new();
+
+	for message in messages {
+		// Only collect user messages
+		if message.role != "user" {
+			continue;
+		}
+
+		// Skip system-generated continuation requests
+		if message
+			.content
+			.contains("CRITICAL: Session approaching token limits")
+		{
+			continue;
+		}
+
+		// Skip empty or very short messages
+		let content = message.content.trim();
+		if content.is_empty() || content.len() < 10 {
+			continue;
+		}
+
+		// Skip session commands (starting with /)
+		if content.starts_with('/') {
+			continue;
+		}
+
+		// Truncate very long requests for readability
+		let truncated_content = if content.len() > 200 {
+			format!("{}...", content.chars().take(200).collect::<String>())
+		} else {
+			content.to_string()
+		};
+
+		user_requests.push(truncated_content);
+	}
+
+	// Keep only the last 5-7 requests to avoid overwhelming context
+	if user_requests.len() > 7 {
+		user_requests = user_requests[user_requests.len() - 7..].to_vec();
+	}
+
+	if user_requests.is_empty() {
+		return "No specific user requests found in session history.".to_string();
+	}
+
+	// Format as numbered list with proactive language
+	let mut result = String::new();
+	for (i, request) in user_requests.iter().enumerate() {
+		result.push_str(&format!("{}. {}\n", i + 1, request));
+	}
+
+	result
+}
+
 /// Parse file context requirements from AI summary response
-/// Expected format: filename:startline:endline
+/// Expected format: filename:startline:endline (in code blocks or specific sections)
 fn parse_file_contexts(summary_content: &str) -> Vec<(String, usize, usize)> {
 	let mut contexts = Vec::new();
 
-	// Look for code blocks or lines with filename:startline:endline pattern
-	let file_pattern = Regex::new(r"([^\s:]+):(\d+):(\d+)").unwrap();
+	// Pre-compile regex patterns outside loops
+	let code_block_pattern =
+		Regex::new(r"```(?:\w+)?\s*\n((?:[^\n`]+:[0-9]+:[0-9]+\s*\n?)+)\s*```").unwrap();
+	let file_pattern = Regex::new(r"^([^:\n]+):(\d+):(\d+)\s*$").unwrap();
+	let general_file_pattern = Regex::new(r"(?:^|\s|-)([^\s\n:]+):(\d+):(\d+)").unwrap();
+	let fallback_pattern = Regex::new(r"([^\s:]+):(\d+):(\d+)").unwrap();
 
-	for captures in file_pattern.captures_iter(summary_content) {
-		if let (Some(filename), Some(start_str), Some(end_str)) =
-			(captures.get(1), captures.get(2), captures.get(3))
-		{
-			if let (Ok(start_line), Ok(end_line)) = (
-				start_str.as_str().parse::<usize>(),
-				end_str.as_str().parse::<usize>(),
-			) {
-				let filename = filename.as_str().to_string();
+	// First, try to find contexts within code blocks (preferred format)
+	for code_block in code_block_pattern.captures_iter(summary_content) {
+		if let Some(block_content) = code_block.get(1) {
+			// Parse each line in the code block
+			for line in block_content.as_str().lines() {
+				let line = line.trim();
+				if let Some(captures) = file_pattern.captures(line) {
+					if let (Some(filename), Some(start_str), Some(end_str)) =
+						(captures.get(1), captures.get(2), captures.get(3))
+					{
+						if let (Ok(start_line), Ok(end_line)) = (
+							start_str.as_str().parse::<usize>(),
+							end_str.as_str().parse::<usize>(),
+						) {
+							let filename = filename.as_str().trim().to_string();
 
-				// Validate line range
-				if start_line > 0 && end_line >= start_line && end_line <= 10000 {
-					contexts.push((filename, start_line, end_line));
+							// Validate line range and filename
+							if start_line > 0
+								&& end_line >= start_line
+								&& end_line <= 10000 && !filename.is_empty()
+							{
+								contexts.push((filename, start_line, end_line));
+							}
+						}
+					}
 				}
 			}
 		}
 	}
 
+	// If no code blocks found, fall back to looking for patterns in REQUIRED FILE CONTEXTS section
+	if contexts.is_empty() {
+		// Look for the specific section header and parse content after it using simple string operations
+		if let Some(section_start) = summary_content.find("## REQUIRED FILE CONTEXTS") {
+			let content_after_header = &summary_content[section_start..];
+
+			// Find the end of this section (next ## header or end of text)
+			let section_end = content_after_header
+				.find("\n## ")
+				.unwrap_or(content_after_header.len());
+
+			let section_content = &content_after_header[..section_end];
+
+			// More flexible pattern for general text (handles paths with spaces/special chars)
+			for captures in general_file_pattern.captures_iter(section_content) {
+				if let (Some(filename), Some(start_str), Some(end_str)) =
+					(captures.get(1), captures.get(2), captures.get(3))
+				{
+					if let (Ok(start_line), Ok(end_line)) = (
+						start_str.as_str().parse::<usize>(),
+						end_str.as_str().parse::<usize>(),
+					) {
+						let filename = filename.as_str().trim().to_string();
+
+						// Validate line range and filename
+						if start_line > 0
+							&& end_line >= start_line
+							&& end_line <= 10000 && !filename.is_empty()
+						{
+							contexts.push((filename, start_line, end_line));
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Final fallback: look anywhere in the content (most permissive)
+	if contexts.is_empty() {
+		for captures in fallback_pattern.captures_iter(summary_content) {
+			if let (Some(filename), Some(start_str), Some(end_str)) =
+				(captures.get(1), captures.get(2), captures.get(3))
+			{
+				if let (Ok(start_line), Ok(end_line)) = (
+					start_str.as_str().parse::<usize>(),
+					end_str.as_str().parse::<usize>(),
+				) {
+					let filename = filename.as_str().to_string();
+
+					// Validate line range
+					if start_line > 0 && end_line >= start_line && end_line <= 10000 {
+						contexts.push((filename, start_line, end_line));
+					}
+				}
+			}
+		}
+	}
+
+	// Remove duplicates while preserving order
+	let mut unique_contexts = Vec::new();
+	for context in contexts {
+		if !unique_contexts.contains(&context) {
+			unique_contexts.push(context);
+		}
+	}
+
 	// Limit to maximum 10 file contexts for performance
-	contexts.truncate(10);
-	contexts
+	unique_contexts.truncate(10);
+	unique_contexts
 }
 
 /// Read file content for specified line ranges with 1-indexed line numbers
@@ -350,4 +566,107 @@ fn generate_file_context_content(file_contexts: &[(String, usize, usize)]) -> St
 	}
 
 	context_content
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_parse_file_contexts_code_block() {
+		let summary = r#"
+## REQUIRED FILE CONTEXTS
+List ALL files needed as context to continue work. Use EXACT format:
+```
+src/main.rs:1:50
+src/lib.rs:100:150
+config/settings.toml:10:20
+```
+		"#;
+
+		let contexts = parse_file_contexts(summary);
+		assert_eq!(contexts.len(), 3);
+		assert_eq!(contexts[0], ("src/main.rs".to_string(), 1, 50));
+		assert_eq!(contexts[1], ("src/lib.rs".to_string(), 100, 150));
+		assert_eq!(contexts[2], ("config/settings.toml".to_string(), 10, 20));
+	}
+
+	#[test]
+	fn test_parse_file_contexts_section() {
+		let summary = r#"
+## REQUIRED FILE CONTEXTS
+The following files need context:
+- src/session/mod.rs:200:300
+- tests/integration.rs:1:100
+
+## NEXT STEPS
+Continue with implementation...
+		"#;
+
+		let contexts = parse_file_contexts(summary);
+		assert_eq!(contexts.len(), 2);
+		assert_eq!(contexts[0], ("src/session/mod.rs".to_string(), 200, 300));
+		assert_eq!(contexts[1], ("tests/integration.rs".to_string(), 1, 100));
+	}
+
+	#[test]
+	fn test_parse_file_contexts_fallback() {
+		let summary = r#"
+We need to look at src/core.rs:50:100 and also check lib/utils.rs:1:25 for the implementation.
+		"#;
+
+		let contexts = parse_file_contexts(summary);
+		assert_eq!(contexts.len(), 2);
+		assert_eq!(contexts[0], ("src/core.rs".to_string(), 50, 100));
+		assert_eq!(contexts[1], ("lib/utils.rs".to_string(), 1, 25));
+	}
+
+	#[test]
+	fn test_parse_file_contexts_mandatory_format() {
+		let summary = r#"
+## REQUIRED FILE CONTEXTS
+CRITICAL: List ALL files needed as context using EXACT format below.
+
+**MANDATORY FORMAT - Use code block with exact pattern:**
+```
+src/session/chat/session_continuation.rs:100:200
+src/config/mod.rs:50:100
+tests/integration_test.rs:1:50
+```
+
+**PARSING REQUIREMENTS:**
+- Each line must be exactly: filepath:number:number
+		"#;
+
+		let contexts = parse_file_contexts(summary);
+		assert_eq!(contexts.len(), 3);
+		assert_eq!(
+			contexts[0],
+			(
+				"src/session/chat/session_continuation.rs".to_string(),
+				100,
+				200
+			)
+		);
+		assert_eq!(contexts[1], ("src/config/mod.rs".to_string(), 50, 100));
+		assert_eq!(
+			contexts[2],
+			("tests/integration_test.rs".to_string(), 1, 50)
+		);
+	}
+
+	#[test]
+	fn test_parse_file_contexts_invalid_ranges() {
+		let summary = r#"
+```
+src/main.rs:0:50
+src/lib.rs:100:50
+src/test.rs:1:20000
+```
+		"#;
+
+		let contexts = parse_file_contexts(summary);
+		// Should filter out invalid ranges (start=0, end<start, end>10000)
+		assert_eq!(contexts.len(), 0);
+	}
 }
