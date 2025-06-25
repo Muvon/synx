@@ -313,7 +313,7 @@ pub async fn execute_shell_command(
 	};
 
 	// Race between command completion and cancellation
-	let output = tokio::select! {
+	tokio::select! {
 			result = child.wait_with_output() => {
 				match result.map_err(|e| anyhow!("Command execution failed: {}", e)) {
 					Ok(output) => {
@@ -341,29 +341,30 @@ Error: {}",
 						let status_code = output.status.code().unwrap_or(-1);
 						let success = output.status.success();
 
-						json!({
-							"success": success,
-							"output": truncated_output,
-							"code": status_code,
-							"parameters": {
-								"command": command
-							},
-							"message": if success {
-							format!("Command executed successfully with exit code {}", status_code)
+						// MCP Protocol Compliance: Use error() for failed commands, success() for successful ones
+						if success {
+							// Command succeeded - use success format
+							Ok(McpToolResult::success(
+								"shell".to_string(),
+								call.tool_id.clone(),
+					  truncated_output
+							))
 						} else {
-							format!("Command failed with exit code {}", status_code)
+							// Command failed - use error format per MCP protocol
+							Ok(McpToolResult::error(
+								"shell".to_string(),
+								call.tool_id.clone(),
+								format!("Command failed with exit code {}\nCommand: {}\n\nOutput:\n{}", status_code, command, truncated_output)
+							))
 						}
-					})
 				}
-				Err(e) => json!({
-					"success": false,
-					"output": format!("Failed to execute command: {}", e),
-					"code": -1,
-					"parameters": {
-						"command": command
-					},
-					"message": format!("Failed to execute command: {}", e)
-				}),
+				Err(e) => {
+					Ok(McpToolResult::error(
+						"shell".to_string(),
+						call.tool_id.clone(),
+				  format!("Error: {}", e)
+					))
+				}
 			}
 		}
 		cancelled = cancellation_future => {
@@ -391,33 +392,19 @@ Error: {}",
 					}
 				}
 
-				json!({
-					"success": false,
-					"output": "Command execution cancelled by user (Ctrl+C)",
-					"code": -1,
-					"parameters": {
-						"command": command
-					},
-					"message": "Command execution cancelled by user"
-				})
-			} else {
-				// This shouldn't happen, but handle it gracefully
-				json!({
-					"success": false,
-					"output": "Unexpected cancellation state",
-					"code": -1,
-					"parameters": {
-						"command": command
-					},
-					"message": "Unexpected cancellation state"
-				})
-			}
+			Ok(McpToolResult::error(
+				"shell".to_string(),
+				call.tool_id.clone(),
+				format!("Command execution cancelled by user (Ctrl+C)\nCommand: {}", command)
+			))
+		} else {
+			// This shouldn't happen, but handle it gracefully
+			Ok(McpToolResult::error(
+				"shell".to_string(),
+				call.tool_id.clone(),
+				format!("Unexpected cancellation state\nCommand: {}", command)
+			))
 		}
-	};
-
-	Ok(McpToolResult {
-		tool_name: "shell".to_string(),
-		tool_id: call.tool_id.clone(),
-		result: output,
-	})
+		}
+	}
 }
