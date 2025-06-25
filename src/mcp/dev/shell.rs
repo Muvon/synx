@@ -122,6 +122,11 @@ Parameters:
 - `background`: Run command in background and return PID instead of waiting for completion (default: false)
 - `max_tokens`: Maximum tokens allowed in output before truncation (default: 2000)
 
+**Working Directory:**
+All commands execute from the current working directory.
+NO `cd` command is required when you working with current project files.
+REMEMBER that each command you run has NO knowledge of previous runs, other context, or variables that were set BEFORE in another command.
+
 **Output Truncation:**
 To prevent huge outputs from consuming excessive tokens, output is automatically truncated
 if it exceeds max_tokens. Avoid commands that produce large outputs (like `cat large_file`
@@ -131,6 +136,7 @@ or `find /` without filters). When large output is needed, increase max_tokens p
 When `background` is true, the command runs in the background and returns immediately with the process PID.
 Background processes continue running until explicitly killed or the main application exits.
 Use the returned PID with `kill <pid>` command to terminate background processes.
+NO need to append `&` to your command when using `background: true` - this is handled automatically.
 
 **Important**: Each shell command runs in its own process. Things like directory changes or
 sourcing files do not persist between tool calls. So you may need to repeat them each time by
@@ -152,12 +158,12 @@ Examples:
 			"properties": {
 				"command": {
 					"type": "string",
-					"description": "The shell command to execute"
+					"description": "The shell command to execute (runs from current working directory)"
 				},
 				"background": {
 					"type": "boolean",
 					"default": false,
-					"description": "Run command in background and return PID instead of waiting for completion"
+					"description": "Run command in background and return PID instead of waiting for completion (no need to append '&')"
 				},
 				"max_tokens": {
 					"type": "integer",
