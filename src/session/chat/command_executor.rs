@@ -69,8 +69,19 @@ pub async fn execute_command_layer(
 		);
 	}
 
-	// Create a generic layer with the command configuration
-	let command_layer = GenericLayer::new(command_config.clone());
+	// Create a generic layer with processed system prompt
+	let mut processed_config = command_config.clone();
+	// Process system prompt placeholders before creating layer
+	if let Some(ref system_prompt) = processed_config.system_prompt {
+		let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+		let processed = crate::session::helper_functions::process_placeholders_async(
+			system_prompt,
+			&current_dir,
+		)
+		.await;
+		processed_config.processed_system_prompt = Some(processed);
+	}
+	let command_layer = GenericLayer::new(processed_config);
 
 	// Prepare the input according to the command's input_mode
 	// CRITICAL FIX: Always use prepare_input to respect the input_mode setting

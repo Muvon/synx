@@ -33,7 +33,7 @@ pub use crate::providers::{
 	AiProvider, ProviderExchange, ProviderFactory, ProviderResponse, TokenUsage,
 };
 pub use cache::{CacheManager, CacheStatistics};
-pub use helper_functions::{process_placeholders, summarize_context};
+pub use helper_functions::summarize_context;
 pub use layers::{process_with_layers, InputMode, Layer, LayerConfig, LayerMcpConfig, LayerResult};
 pub use model_utils::model_supports_caching;
 pub use project_context::ProjectContext;

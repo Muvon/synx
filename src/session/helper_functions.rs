@@ -24,97 +24,6 @@ use tokio::process::Command;
 // System prompts are now fully controlled by configuration files
 // All hardcoded prompts have been moved to the config template
 
-// Function to process placeholders in a system prompt (synchronous version for backward compatibility)
-pub fn process_placeholders(prompt: &str, project_dir: &Path) -> String {
-	let mut processed_prompt = prompt.to_string();
-
-	// Check which placeholders are actually in the prompt to avoid unnecessary work
-	let needs_cwd = prompt.contains("%{CWD}");
-	let needs_context = prompt.contains("%{CONTEXT}");
-	let needs_git_status = prompt.contains("%{GIT_STATUS}");
-	let needs_git_tree = prompt.contains("%{GIT_TREE}");
-	let needs_readme = prompt.contains("%{README}");
-
-	// Early return if no supported placeholders are found (async placeholders are not supported in sync version)
-	if !needs_cwd && !needs_context && !needs_git_status && !needs_git_tree && !needs_readme {
-		return processed_prompt;
-	}
-
-	// Create a map of placeholder values (without async system info for backward compatibility)
-	let mut placeholders = HashMap::new();
-
-	// Collect project context only if needed
-	let project_context = if needs_context || needs_git_status || needs_git_tree || needs_readme {
-		Some(ProjectContext::collect(project_dir))
-	} else {
-		None
-	};
-
-	// Add CWD if needed
-	if needs_cwd {
-		placeholders.insert("%{CWD}", project_dir.to_string_lossy().to_string());
-	}
-
-	// Add project context placeholders only if needed
-	if let Some(ref context) = project_context {
-		if needs_context {
-			let context_info = context.format_for_prompt();
-			let context_section = if !context_info.is_empty() {
-				format!(
-					"\n\n==== PROJECT CONTEXT ====\n\n{}\n\n==== END PROJECT CONTEXT ====\n",
-					context_info
-				)
-			} else {
-				String::new()
-			};
-			placeholders.insert("%{CONTEXT}", context_section);
-		}
-
-		if needs_git_status {
-			let git_status = if let Some(ref git_status) = context.git_status {
-				format!(
-					"\n\n==== GIT STATUS ====\n\n{}\n\n==== END GIT STATUS ====\n",
-					git_status
-				)
-			} else {
-				String::new()
-			};
-			placeholders.insert("%{GIT_STATUS}", git_status);
-		}
-
-		if needs_git_tree {
-			let git_tree = if let Some(ref file_tree) = context.file_tree {
-				format!(
-					"\n\n==== FILE TREE ====\n\n{}\n\n==== END FILE TREE ====\n",
-					file_tree
-				)
-			} else {
-				String::new()
-			};
-			placeholders.insert("%{GIT_TREE}", git_tree);
-		}
-
-		if needs_readme {
-			let readme = if let Some(ref readme) = context.readme_content {
-				format!(
-					"\n\n==== README ====\n\n{}\n\n==== END README ====\n",
-					readme
-				)
-			} else {
-				String::new()
-			};
-			placeholders.insert("%{README}", readme);
-		}
-	}
-
-	// Replace all placeholders
-	for (placeholder, value) in placeholders.iter() {
-		processed_prompt = processed_prompt.replace(placeholder, value);
-	}
-
-	processed_prompt
-}
-
 // Function to get summarized context for layers using the Summary InputMode
 pub fn summarize_context(session: &Session, input: &str) -> String {
 	// This is a placeholder. In practice, you'd want to analyze the session history
@@ -625,4 +534,18 @@ pub async fn get_all_placeholders(project_dir: &Path) -> HashMap<String, String>
 	);
 
 	placeholders
+}
+
+/// Process system prompt placeholders for layer configurations
+/// This ensures consistent placeholder processing across all layer types
+pub async fn process_layer_system_prompt(
+	layer_config: &mut crate::session::layers::LayerConfig,
+	project_dir: &std::path::Path,
+) {
+	if let Some(ref system_prompt) = layer_config.system_prompt {
+		if layer_config.processed_system_prompt.is_none() {
+			let processed = process_placeholders_async(system_prompt, project_dir).await;
+			layer_config.processed_system_prompt = Some(processed);
+		}
+	}
 }

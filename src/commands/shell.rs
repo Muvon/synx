@@ -136,8 +136,14 @@ pub async fn execute(args: &ShellArgs, config: &Config) -> Result<()> {
 	let mut clean_config = config.clone();
 	clean_config.mcp.servers.clear();
 
-	// Create specialized system prompt for shell commands
-	let system_prompt = create_shell_system_prompt();
+	// Create specialized system prompt for shell commands with placeholder processing
+	let base_system_prompt = create_shell_system_prompt();
+	let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+	let system_prompt = crate::session::helper_functions::process_placeholders_async(
+		&base_system_prompt,
+		&current_dir,
+	)
+	.await;
 
 	// Create user prompt that asks for structured response
 	let user_prompt = format!(

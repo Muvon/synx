@@ -81,10 +81,12 @@ impl LayeredOrchestrator {
 
 		// Create layers from enabled layer configs
 		for mut layer_config in enabled_layers {
-			// Process and cache the system prompt for this layer
-			layer_config
-				.process_and_cache_system_prompt(project_dir)
-				.await;
+			// Process and cache the system prompt for this layer using centralized method
+			crate::session::helper_functions::process_layer_system_prompt(
+				&mut layer_config,
+				project_dir,
+			)
+			.await;
 			layers.push(Box::new(GenericLayer::new(layer_config)));
 		}
 

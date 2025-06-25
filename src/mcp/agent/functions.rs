@@ -181,7 +181,18 @@ async fn process_layer_as_agent(
 	let mut agent_layer_config = layer_config.clone();
 	agent_layer_config.name = format!("agent_{}", layer_config.name);
 
-	// Create GenericLayer from modified config (reuse existing pattern)
+	// Process placeholders in agent system prompt before creating layer
+	if let Some(ref system_prompt) = agent_layer_config.system_prompt {
+		let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+		let processed_prompt = crate::session::helper_functions::process_placeholders_async(
+			system_prompt,
+			&current_dir,
+		)
+		.await;
+		agent_layer_config.processed_system_prompt = Some(processed_prompt);
+	}
+
+	// Create GenericLayer from processed config
 	let layer = GenericLayer::new(agent_layer_config);
 
 	// Process task through layer with full MCP tools support
@@ -265,6 +276,12 @@ async fn execute_call_llm(
 		.and_then(|v| v.as_u64())
 		.unwrap_or(4096) as u32;
 
+	// Process placeholders in the provided system prompt
+	let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+	let processed_system_prompt =
+		crate::session::helper_functions::process_placeholders_async(system_prompt, &current_dir)
+			.await;
+
 	// Create temporary LayerConfig with runtime parameters
 	let layer_config = crate::session::layers::LayerConfig {
 		name: "call_llm".to_string(),
@@ -280,7 +297,7 @@ async fn execute_call_llm(
 			allowed_tools: vec![],
 		},
 		parameters: std::collections::HashMap::new(), // No custom parameters
-		processed_system_prompt: None,                // Will be processed during execution
+		processed_system_prompt: Some(processed_system_prompt), // ✅ PROCESSED
 	};
 
 	// Process task through the layer using existing logic

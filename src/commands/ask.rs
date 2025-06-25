@@ -285,8 +285,14 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 		.clone()
 		.unwrap_or_else(|| config.get_effective_model());
 
-	// Simple system prompt for ask command - no mode complexity needed
-	let system_prompt = "You are a helpful assistant.".to_string();
+	// Simple system prompt for ask command with placeholder processing
+	let base_system_prompt = "You are a helpful assistant.\n\n%{SYSTEM}";
+	let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+	let system_prompt = crate::session::helper_functions::process_placeholders_async(
+		base_system_prompt,
+		&current_dir,
+	)
+	.await;
 
 	// Create a clean config with no MCP servers for ask command
 	// This ensures no tools are sent to the API
