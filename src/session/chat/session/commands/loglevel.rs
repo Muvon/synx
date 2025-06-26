@@ -58,6 +58,9 @@ pub fn handle_loglevel(config: &mut Config, params: &[&str]) -> Result<bool> {
 	// Update ONLY the runtime config, do NOT save to disk
 	config.log_level = new_level.clone();
 
+	// Propagate the change to thread-local storage so logging macros use the new level
+	crate::config::set_thread_config(config);
+
 	// Show the new state
 	match new_level {
 		LogLevel::None => {
