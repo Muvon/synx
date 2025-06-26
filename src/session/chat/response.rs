@@ -19,12 +19,12 @@ pub mod tool_result_processor;
 
 use super::{CostTracker, MessageHandler, ToolProcessor};
 use crate::config::Config;
+use crate::log_debug;
 use crate::session::chat::assistant_output::print_assistant_response;
 use crate::session::chat::formatting::remove_function_calls;
 use crate::session::chat::session::ChatSession;
 use crate::session::chat::session_continuation;
 use crate::session::ProviderExchange;
-use crate::{log_debug, log_info};
 use anyhow::Result;
 use colored::Colorize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -286,7 +286,7 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 		has_tool_calls,
 	)? {
 		// This was a continuation response - session has been reset with continuation message
-		// Now immediately process the continuation message through API (fully invisible to user)
+		// Process the continuation message immediately to make it invisible to user
 		return process_continuation_message_immediately(params).await;
 	}
 
@@ -457,41 +457,50 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 }
 
 /// Process continuation message immediately after session reset
-/// This keeps the continuation completely invisible to the user
+/// This makes the continuation completely invisible to the user
 async fn process_continuation_message_immediately(
 	params: ResponseProcessingParams<'_>,
 ) -> Result<()> {
 	use crate::session::ChatCompletionWithValidationParams;
-	use colored::*;
+	use crate::{log_debug, log_info};
 
-	log_info!("Auto-continuing with preserved context...");
+	log_info!("Processing continuation message automatically...");
 
-	// Get the continuation message (last message in session after reset)
+	// Get the last message which should be our continuation message
+	let continuation_message = params
+		.chat_session
+		.session
+		.messages
+		.last()
+		.ok_or_else(|| anyhow::anyhow!("No continuation message found"))?;
+
+	if continuation_message.role != "user" {
+		return Err(anyhow::anyhow!(
+			"Expected user continuation message, found: {}",
+			continuation_message.role
+		));
+	}
+
+	// Clone messages to avoid borrowing conflicts
 	let messages = params.chat_session.session.messages.clone();
-	let model = params.chat_session.model.clone();
-	let temperature = params.chat_session.temperature;
-	let max_retries = params.chat_session.max_retries;
 
-	// Create validation params for continuation API call
-	let validation_params = ChatCompletionWithValidationParams::new(
+	// Prepare API call parameters for continuation using the proper structure
+	let chat_params = ChatCompletionWithValidationParams::new(
 		&messages,
-		&model,
-		temperature,
-		params.chat_session.max_tokens,
+		&params.config.model,
+		0.7, // Default temperature
+		params.config.max_tokens,
 		params.config,
 	)
-	.with_max_retries(max_retries)
-	.with_chat_session(params.chat_session)
+	.with_max_retries(3)
 	.with_cancellation_token(params.operation_cancelled.clone());
 
-	// Make API call with continuation message (invisible to user)
-	let api_result = crate::session::chat_completion_with_validation(validation_params).await;
-
-	match api_result {
+	// Make API call with continuation message
+	match crate::session::chat_completion_with_validation(chat_params).await {
 		Ok(response) => {
-			log_info!("Continuation response received - resuming work...");
+			log_debug!("Continuation API call successful");
 
-			// Process the continuation response normally with full tool support
+			// Process the continuation response recursively using Box::pin to avoid stack overflow
 			let continuation_params = ResponseProcessingParams::new(
 				response.content,
 				response.exchange,
@@ -500,15 +509,16 @@ async fn process_continuation_message_immediately(
 				params.chat_session,
 				params.config,
 				params.role,
-				params.operation_cancelled,
+				params.operation_cancelled.clone(),
 			);
 
-			// Use boxed future to avoid recursion issue
+			// Use Box::pin to avoid recursion compilation issues
 			Box::pin(process_response(continuation_params)).await
 		}
 		Err(e) => {
-			println!("{}: {}", "Error in continuation API call".bright_red(), e);
-			println!("{}", "Returning to normal session flow...".yellow());
+			// If continuation fails, log the error but don't crash the session
+			log_info!("Continuation API call failed: {}", e);
+			log_info!("Falling back to normal session flow");
 			Ok(())
 		}
 	}

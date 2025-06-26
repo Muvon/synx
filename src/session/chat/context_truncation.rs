@@ -59,7 +59,7 @@ pub async fn check_and_truncate_context(
 }
 
 /// Calculate effective threshold with adaptive bonus for recent continuations
-fn calculate_effective_threshold(chat_session: &ChatSession, config: &Config) -> usize {
+pub fn calculate_effective_threshold(chat_session: &ChatSession, config: &Config) -> usize {
 	let base_threshold = config.max_session_tokens_threshold;
 
 	// Check if we have a recent continuation by detecting our exact prompts

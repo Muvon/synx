@@ -151,11 +151,19 @@ impl<'a> ContinuationParams<'a> {
 	}
 }
 
-/// Check if we should trigger session continuation
+/// Check if we should trigger session continuation using adaptive threshold
 pub fn should_trigger_continuation(params: &ContinuationParams) -> bool {
-	params.config.max_session_tokens_threshold > 0
-		&& params.current_tokens >= params.config.max_session_tokens_threshold
-		&& !params.chat_session.continuation_pending
+	if params.config.max_session_tokens_threshold == 0 || params.chat_session.continuation_pending {
+		return false;
+	}
+
+	// Use existing adaptive threshold logic from context_truncation
+	let effective_threshold =
+		crate::session::chat::context_truncation::calculate_effective_threshold(
+			params.chat_session,
+			params.config,
+		);
+	params.current_tokens >= effective_threshold
 }
 
 /// Check if we're currently in continuation process
@@ -166,12 +174,8 @@ pub fn is_continuation_in_progress(chat_session: &ChatSession) -> bool {
 /// Inject summary request into current session
 /// This can happen during ANY processing step, not just user input
 pub fn inject_summary_request(params: &mut ContinuationParams) -> Result<()> {
-	use colored::*;
-
-	println!(
-		"\n{}",
-		"🔄 Token limit reached during processing - requesting work summary...".bright_blue()
-	);
+	// Log token limit reached (less visible to user)
+	log_info!("Token limit reached during processing - requesting work summary...");
 
 	// Add summary request as user message
 	let summary_message = crate::session::Message {
@@ -213,13 +217,8 @@ pub fn process_continuation_response(
 		return Ok(false);
 	}
 
-	use colored::*;
-
-	println!(
-		"\n{}",
-		"✅ Work summary received - resetting session for continuation...".bright_green()
-	);
-
+	// Log continuation processing (less visible to user)
+	log_info!("Work summary received - resetting session for continuation...");
 	// Find system message to preserve
 	let system_message = chat_session
 		.session
