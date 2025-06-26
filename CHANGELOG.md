@@ -1,5 +1,91 @@
 # Changelog
 
+## [0.6.0] - 2025-06-26
+
+### 📋 Release Summary
+
+This release introduces enhanced session management with smarter context handling and adaptive truncation, improved configuration options including .env key loading, and expanded command capabilities such as line extraction and direct LLM calls (3a99f58, 2fe2d18, 5411078, dc991f2). User experience is improved with clearer cost displays, progress indicators, and robust retry mechanisms (8c52805, fa543c88, f49aef6). Several bug fixes enhance stability, error reporting, and compatibility across sessions, shell commands, and file handling (9ae1a83, af84d01, cf3b0c0).
+
+
+### ✨ New Features & Enhancements
+
+- **config**: add support for loading keys from .env file `3a99f585`
+- **session**: add invisible auto continuation after session reset `2fe2d18d`
+- **mcp/fs**: add extract_lines command for line extraction `54110780`
+- **session**: add current context tokens to /context output `dc991f26`
+- **session**: add adaptive threshold for context truncation `8d2b3414`
+- **session**: add smart truncation with internal summarization on to... `8c62e178`
+- **session**: add structured summary and file context parsing for co... `c3c593d5`
+- **session**: add smart truncation with internal summarization on to... `7d20c893`
+- **config**: replace auto-truncation with max session tokens threshold `2a458790`
+- **anthropic**: add max-retries rate limiter and enhance retry logging `8c52805e`
+- **cli**: add --max-retries flag to session and run commands `a3f2c2e3`
+- **ast_grep**: limit glob expansion and improve path handling `9be4366c`
+- **ast-grep**: improve output truncation with grouped lines and reus... `e268affa`
+- **mcp-shell**: add max_tokens parameter to limit output size `7966360f`
+- **chat**: improve cost rendering with intermediate breakdowns and s... `1aef0141`
+- **session**: replace custom spinner with indicatif progress bar `f49aef62`
+- **chat**: improve cost display with concise static line `fa543c88`
+- **mcp**: add call_llm function for direct LLM invocation `4a227a1b`
+- **ast_grep**: add glob pattern support for file paths `2c84d591`
+
+### 🔧 Improvements & Optimizations
+
+- **fs**: extract shared file content formatting logic `6e600ef6`
+- **mcp**: unify view_file_spec output format for consistency `9788ad3e`
+- **session**: unify argument parsing for run commands `c392f325`
+- **mcp**: extract MCP initialization into reusable function `acc88534`
+- **providers**: unify chat_completion params into struct for cla... `51e882cd`
+- **session**: simplify context truncation using summarize method `e3b241cc`
+- **fs**: enhance list_files truncation message with stats `b1f6f2ca`
+
+### 🐛 Bug Fixes & Stability
+
+- **session**: correct continuation message processing logic `9ae1a83b`
+- **session**: propagate loglevel change to runtime logging macros `3e0cade7`
+- **mcp-shell**: follow MCP protocol for shell command responses `af84d019`
+- **system-prompts**: ensure all system prompts process templated vari... `90d2d3f0`
+- **session**: enforce spending threshold on /run commands `1b797e2f`
+- **mcp**: unify response formatting for internal and remote calls `8a830cf3`
+- **providers**: log 429 response headers for debug tracing `9656245c`
+- **session**: improve spinner color consistency in loading animation `295360fd`
+- **agent**: return MCP-compliant errors for invalid inputs and failures `cf3b0c0a`
+- **mcp**: return structured errors for invalid ast-grep patterns `ea32caef`
+- **session**: preserve tool message order during context truncation `3b46ebaa`
+- **session**: lower auto-cache threshold log to debug level `1bcbfea8`
+- **commands**: allow optional max_tokens with default fallback `fd238606`
+- **session**: preserve and log last assistant summary message after t... `08c3df70`
+- **batch_edit**: accept operations as JSON string fallback `463ea146`
+- **test**: handle Windows paths in ripgrep output parsing for tests `36f66450`
+
+### 📚 Documentation & Examples
+
+- **shell**: clarify shell command execution and background usage `8cd6f499`
+- **session**: improve session continuation prompt clarity and detail `74c628dc`
+- **session**: add detailed docs for smart session continuation system `488d4533`
+- **fs**: clarify new_str uses raw file content without escaping `46b5aa69`
+- **fs**: clarify new_str to avoid escaping and double escaping `e5cc8cb9`
+- **fs**: clarify usage guidelines for text editor functions `a281fc64`
+
+### 🔄 Other Changes
+
+- **mcp**: fix shell command tests for MCP response protocol `7a95fd9e`
+- **release**: add GitHub Action job to publish crate to crates.io `434487ce`
+- **fs**: fix truncation count assertions in fs_tests.rs `13c5b732`
+- **fs**: fix file listing test to handle Windows paths `92153860`
+- **fs**: fix content search tests for Windows paths" `3d74eccb`
+- **fs**: fix content search tests for Windows paths `7a3e8394`
+
+### 📊 Release Summary
+
+**Total commits**: 54 across 5 categories
+
+✨ **19** new features - *Enhanced functionality*
+🔧 **7** improvements - *Better performance & code quality*
+🐛 **16** bug fixes - *Improved stability*
+📚 **6** documentation updates - *Better developer experience*
+🔄 **6** other changes - *Maintenance & tooling*
+
 ## [0.5.0] - 2025-06-22
 
 ### 📋 Release Summary
