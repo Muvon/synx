@@ -18,7 +18,7 @@
 mod tests {
 	use crate::mcp::dev::ast_grep::execute_ast_grep_command;
 	use crate::mcp::dev::shell::execute_shell_command;
-	use crate::mcp::McpToolCall;
+	use crate::mcp::{extract_mcp_content, McpToolCall};
 	use serde_json::json;
 	use std::sync::{atomic::AtomicBool, Arc};
 	use tokio;
@@ -67,8 +67,14 @@ mod tests {
 		assert_eq!(result.tool_name, "shell");
 
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["success"], true);
-		assert!(output["output"].as_str().unwrap().contains("Hello, World!"));
+		// Check MCP-compliant success format
+		assert_eq!(output["isError"], false);
+
+		// Extract content using MCP protocol
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("Hello, World!"));
+
+		// These fields don't exist in foreground MCP format
 		assert!(!output.contains_key("background"));
 		assert!(!output.contains_key("pid"));
 	}
@@ -82,8 +88,12 @@ mod tests {
 		let result = result.unwrap();
 
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["success"], false);
-		assert!(output["code"].as_i64().unwrap() != 0);
+		// Check MCP-compliant error format
+		assert_eq!(output["isError"], true);
+
+		// Extract content using MCP protocol - error messages include command and exit code info
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("Command failed with exit code"));
 	}
 
 	#[tokio::test]
@@ -151,8 +161,12 @@ mod tests {
 
 		let result = result.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["success"], false);
-		assert!(output["message"].as_str().unwrap().contains("cancelled"));
+		// Check MCP-compliant error format for cancellation
+		assert_eq!(output["isError"], true);
+
+		// Extract content using MCP protocol
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("cancelled"));
 	}
 
 	#[tokio::test]
@@ -165,9 +179,15 @@ mod tests {
 		let result = result.unwrap();
 
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["success"], true);
-		assert!(!output.contains_key("background") || output["background"] == false);
-		assert!(output["output"].as_str().unwrap().contains("test"));
+		// Check MCP-compliant success format
+		assert_eq!(output["isError"], false);
+
+		// These fields don't exist in foreground MCP format
+		assert!(!output.contains_key("background"));
+
+		// Extract content using MCP protocol
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("test"));
 	}
 
 	#[tokio::test]
@@ -278,11 +298,12 @@ function testFunction() {
 		let result = result.unwrap();
 
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["success"], true);
+		// Check MCP-compliant success format
+		assert_eq!(output["isError"], false);
 
-		// Verify the command parameter is preserved in the result
-		let params = output["parameters"].as_object().unwrap();
-		assert_eq!(params["command"], "echo 'history test'");
+		// Extract content using MCP protocol
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("history test"));
 	}
 
 	#[tokio::test]
