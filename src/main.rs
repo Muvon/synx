@@ -60,6 +60,12 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+	// Load .env file from current directory (if exists)
+	// This will override existing environment variables with .env values
+	if dotenvy::from_filename(".env").is_ok() {
+		octomind::log_debug!("Loaded .env file from current directory");
+	}
+
 	let args = CliArgs::parse();
 
 	// Load configuration

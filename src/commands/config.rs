@@ -709,12 +709,18 @@ fn show_configuration(config: &Config) -> Result<(), anyhow::Error> {
 /// Show the status of an API key with environment variable fallback
 fn show_env_api_key_status(provider: &str, env_var: &str) {
 	if std::env::var(env_var).is_ok() {
+		// Check if .env file exists to show source
+		let env_source = if std::path::Path::new(".env").exists() {
+			"environment/.env"
+		} else {
+			"environment"
+		};
+		println!("{:<15} ✅ Set via {} variable", provider, env_source);
+	} else {
 		println!(
-			"{:<15} ✅ Set via {} environment variable",
+			"{:<15} ❌ Not set (export {}=your-key or add to .env)",
 			provider, env_var
 		);
-	} else {
-		println!("{:<15} ❌ Not set (export {}=your-key)", provider, env_var);
 	}
 }
 
