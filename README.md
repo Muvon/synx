@@ -21,7 +21,7 @@ Octomind is an AI-powered development assistant that helps you understand, analy
 
 ```bash
 # Install Octomind
-curl -fsSL https://raw.githubusercontent.com/muvon/octomind/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
 
 # Set your AI provider API key
 export OPENROUTER_API_KEY="your_key"
@@ -75,7 +75,7 @@ Instead of complex command-line tools, simply talk to Octomind:
 
 ```bash
 # One-line install (recommended)
-curl -fsSL https://raw.githubusercontent.com/muvon/octomind/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
 
 # Build from source
 cargo install --git https://github.com/muvon/octomind.git

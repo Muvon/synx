@@ -10,10 +10,10 @@ Use our installation script to automatically download the appropriate binary for
 
 ```bash
 # Install latest version
-curl -fsSL https://raw.githubusercontent.com/muvon/octomind/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
 
 # Or download and inspect first
-curl -fsSL https://raw.githubusercontent.com/muvon/octomind/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh -o install.sh
 chmod +x install.sh
 ./install.sh
 ```

@@ -1,15 +1,16 @@
-#!/bin/bash
-# Octomind Installation Script
-# Copyright 2025 Muvon Un Limited
-# Licensed under the Apache License, Version 2.0
-# This script downloads and installs the appropriate binary for your platform
+#!/bin/sh
+
+# Octocode Installation Script
+# Universal installation script that works on Unix, Linux, macOS, and Windows
+# Works with: bash, zsh, sh, Git Bash, WSL, MSYS2
+# Requires: curl (for downloading releases)
 
 set -e
 
 # Configuration
-REPO="muvon/octomind"
+REPO="Muvon/octomind"
 BINARY_NAME="octomind"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${OCTOMIND_INSTALL_DIR:-$HOME/.local/bin}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -18,215 +19,361 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Helper functions
+# Logging functions
 log_info() {
-		echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 log_success() {
-		echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
 log_warning() {
-		echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
 log_error() {
-		echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Detect platform
+# Check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Detect platform and architecture
 detect_platform() {
-		local os arch
+    local os arch
 
-		# Detect OS
-		case "$(uname -s)" in
-				Linux*)     os="linux" ;;
-				Darwin*)    os="darwin" ;;
-				CYGWIN*|MINGW*|MSYS*) os="windows" ;;
-				*)          log_error "Unsupported operating system: $(uname -s)"; exit 1 ;;
-		esac
+    # Detect OS
+    case "$(uname -s)" in
+        Linux*)     os="unknown-linux" ;;
+        Darwin*)    os="apple-darwin" ;;
+        CYGWIN*|MINGW*|MSYS*)    os="pc-windows" ;;
+        *)          log_error "Unsupported operating system: $(uname -s)"; exit 1 ;;
+    esac
 
-		# Detect architecture
-		case "$(uname -m)" in
-				x86_64|amd64)   arch="x86_64" ;;
-				aarch64|arm64)  arch="aarch64" ;;
-				*)              log_error "Unsupported architecture: $(uname -m)"; exit 1 ;;
-		esac
+    # Detect architecture
+    case "$(uname -m)" in
+        x86_64|amd64)   arch="x86_64" ;;
+        arm64|aarch64)  arch="aarch64" ;;
+        *)              log_error "Unsupported architecture: $(uname -m)"; exit 1 ;;
+    esac
 
-		# Determine target triple
-		if [ "$os" = "linux" ]; then
-				if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -q musl; then
-						echo "${arch}-unknown-linux-musl"
-				else
-						echo "${arch}-unknown-linux-gnu"
-				fi
-		elif [ "$os" = "darwin" ]; then
-				echo "${arch}-apple-darwin"
-		elif [ "$os" = "windows" ]; then
-				echo "${arch}-pc-windows-gnu"
-		fi
+    # Determine target triple and preferred variant
+    case "$os-$arch" in
+        unknown-linux-x86_64)    echo "x86_64-unknown-linux-musl" ;;   # Static musl binary
+        unknown-linux-aarch64)   echo "aarch64-unknown-linux-musl" ;;  # ARM64 Linux support
+        apple-darwin-x86_64)     echo "x86_64-apple-darwin" ;;
+        apple-darwin-aarch64)    echo "aarch64-apple-darwin" ;;
+        pc-windows-x86_64)       echo "x86_64-pc-windows-msvc" ;;       # MSVC for better compatibility
+        pc-windows-aarch64)      echo "aarch64-pc-windows-msvc" ;;      # ARM64 Windows support
+        *)                       log_error "Unsupported platform: $os-$arch"; exit 1 ;;
+    esac
 }
 
-# Get latest release version from GitHub
+# Get the latest release version (including prereleases)
 get_latest_version() {
-		local version
-		version=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
-		if [ -z "$version" ]; then
-				log_error "Failed to get latest version from GitHub API"
-				exit 1
-		fi
-		echo "$version"
+    if command_exists curl; then
+        curl -s "https://api.github.com/repos/$REPO/releases" | \
+            grep '"tag_name":' | \
+            head -1 | \
+            sed -E 's/.*"([^"]+)".*/\1/'
+    else
+        log_error "curl is required but not found. Please install curl."
+        log_info "On Ubuntu/Debian: sudo apt-get install curl"
+        log_info "On CentOS/RHEL: sudo yum install curl"
+        log_info "On macOS: curl is pre-installed"
+        log_info "On Windows: curl is available in Windows 10+ or install via chocolatey"
+        exit 1
+    fi
 }
 
-# Download and install binary
-install_binary() {
-		local target="$1"
-		local version="$2"
-		local archive_name filename download_url
+# Download and extract binary
+download_and_install() {
+    local version="$1"
+    local target="$2"
+    local tmp_dir
 
-		# Determine archive format and filename
-		if [[ "$target" == *"windows"* ]]; then
-				archive_name="${BINARY_NAME}-${version}-${target}.zip"
-				filename="${BINARY_NAME}.exe"
-		else
-				archive_name="${BINARY_NAME}-${version}-${target}.tar.gz"
-				filename="${BINARY_NAME}"
-		fi
+    # Create temporary directory (compatible with all systems)
+    if command -v mktemp >/dev/null 2>&1; then
+        tmp_dir=$(mktemp -d)
+    else
+        # Fallback for systems without mktemp
+        tmp_dir="/tmp/octomind-install-$$"
+        mkdir -p "$tmp_dir"
+    fi
 
-		download_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
+    # Ensure cleanup on exit
+    trap "rm -rf '$tmp_dir'" EXIT INT TERM
 
-		log_info "Downloading ${archive_name}..."
+    log_info "Downloading $BINARY_NAME $version for $target..."
 
-		# Create temporary directory
-		local temp_dir
-		temp_dir=$(mktemp -d)
-		cd "$temp_dir"
+    # Determine file extension and extract command
+    local ext="tar.gz"
+    local extract_cmd="tar xzf"
+    local binary_name="$BINARY_NAME"
 
-		# Download archive
-		if command -v curl >/dev/null 2>&1; then
-				curl -L -o "$archive_name" "$download_url"
-		elif command -v wget >/dev/null 2>&1; then
-				wget -O "$archive_name" "$download_url"
-		else
-				log_error "Neither curl nor wget is available"
-				exit 1
-		fi
+    if [ "$target" != "${target#*windows}" ]; then
+        ext="zip"
+        binary_name="${BINARY_NAME}.exe"
+        # Check for unzip command
+        if command -v unzip >/dev/null 2>&1; then
+            extract_cmd="unzip -q"
+        else
+            log_error "unzip command not found. Please install unzip to extract Windows binaries."
+            exit 1
+        fi
+    fi
 
-		# Extract archive
-		log_info "Extracting archive..."
-		if [[ "$archive_name" == *.zip ]]; then
-				if command -v unzip >/dev/null 2>&1; then
-						unzip -q "$archive_name"
-				else
-						log_error "unzip is not available"
-						exit 1
-				fi
-		else
-				tar -xzf "$archive_name"
-		fi
+    local filename="${BINARY_NAME}-${version}-${target}.${ext}"
+    local url="https://github.com/$REPO/releases/download/$version/$filename"
 
-		# Install binary
-		log_info "Installing binary to ${INSTALL_DIR}..."
+    log_info "Downloading from: $url"
 
-		if [ -w "$INSTALL_DIR" ]; then
-				cp "$filename" "${INSTALL_DIR}/${BINARY_NAME}"
-				chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
-		else
-				sudo cp "$filename" "${INSTALL_DIR}/${BINARY_NAME}"
-				sudo chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
-		fi
+    # Download using curl (required)
+    if command_exists curl; then
+        if ! curl -fsSL "$url" -o "$tmp_dir/$filename"; then
+            log_error "Download failed. Please check:"
+            log_error "1. Internet connection"
+            log_error "2. Release exists: $url"
+            log_error "3. GitHub is accessible"
+            exit 1
+        fi
+    else
+        log_error "curl is required but not found. Please install curl."
+        log_info "On Ubuntu/Debian: sudo apt-get install curl"
+        log_info "On CentOS/RHEL: sudo yum install curl"
+        log_info "On macOS: curl is pre-installed"
+        log_info "On Windows: curl is available in Windows 10+ or install via chocolatey"
+        exit 1
+    fi
 
-		# Cleanup
-		cd - >/dev/null
-		rm -rf "$temp_dir"
+    # Extract
+    log_info "Extracting binary..."
+    cd "$tmp_dir" || exit 1
 
-		log_success "Installation complete!"
+    if ! $extract_cmd "$filename"; then
+        log_error "Failed to extract archive"
+        exit 1
+    fi
+
+    # Find the binary
+    local binary_path="$tmp_dir/$binary_name"
+
+    if [ ! -f "$binary_path" ]; then
+        log_error "Binary '$binary_name' not found in archive"
+        log_error "Archive contents:"
+        ls -la "$tmp_dir/"
+        exit 1
+    fi
+
+    # Create install directory
+    if [ ! -d "$INSTALL_DIR" ]; then
+        if ! mkdir -p "$INSTALL_DIR"; then
+            log_error "Failed to create install directory: $INSTALL_DIR"
+            exit 1
+        fi
+    fi
+
+    # Install binary
+    log_info "Installing to $INSTALL_DIR..."
+    local target_path="$INSTALL_DIR/$binary_name"
+
+    if ! cp "$binary_path" "$target_path"; then
+        log_error "Failed to copy binary to $target_path"
+        exit 1
+    fi
+
+    if ! chmod +x "$target_path"; then
+        log_error "Failed to make binary executable"
+        exit 1
+    fi
+
+    log_success "$BINARY_NAME installed successfully!"
+}
+
+# Check if install directory is in PATH
+check_path() {
+    case ":$PATH:" in
+        *":$INSTALL_DIR:"*)
+            return 0
+            ;;
+        *)
+            log_warning "$INSTALL_DIR is not in your PATH"
+            log_info "Add the following line to your shell profile (.bashrc, .zshrc, .profile, etc.):"
+            printf "export PATH=\"%s:\$PATH\"\n" "$INSTALL_DIR"
+            echo ""
+            log_info "Or run the following command to add it to your current session:"
+            printf "export PATH=\"%s:\$PATH\"\n" "$INSTALL_DIR"
+            echo ""
+            ;;
+    esac
 }
 
 # Verify installation
 verify_installation() {
-		if command -v "$BINARY_NAME" >/dev/null 2>&1; then
-				local installed_version
-				installed_version=$("$BINARY_NAME" --version 2>/dev/null | head -n1 || echo "unknown")
-				log_success "Octomind is installed: $installed_version"
-				log_info "Run 'octomind --help' to get started"
-				return 0
-		else
-				log_error "Installation failed - binary not found in PATH"
-				return 1
-		fi
+    local binary_name="$BINARY_NAME"
+
+    # Add .exe extension for Windows
+    case "$(uname -s)" in
+        CYGWIN*|MINGW*|MSYS*) binary_name="${BINARY_NAME}.exe" ;;
+    esac
+
+    local binary_path="$INSTALL_DIR/$binary_name"
+
+    if [ -x "$binary_path" ]; then
+        log_success "Installation verified!"
+        log_info "Run '$BINARY_NAME --version' to check the installed version"
+
+        # Try to run the binary if it's in PATH
+        if command -v "$BINARY_NAME" >/dev/null 2>&1; then
+            local version_output
+            if version_output=$("$BINARY_NAME" --version 2>/dev/null); then
+                log_info "Installed version: $version_output"
+            fi
+        fi
+    else
+        log_error "Installation verification failed: $binary_path not found or not executable"
+        exit 1
+    fi
 }
 
-# Main installation flow
+# Check prerequisites
+check_prerequisites() {
+    if ! command_exists curl; then
+        log_error "curl is required but not found."
+        echo ""
+        log_info "Please install curl first:"
+        log_info "• Ubuntu/Debian: sudo apt-get install curl"
+        log_info "• CentOS/RHEL: sudo yum install curl"
+        log_info "• Fedora: sudo dnf install curl"
+        log_info "• Alpine: apk add curl"
+        log_info "• macOS: curl is pre-installed"
+        log_info "• Windows: curl is available in Windows 10+ or install via chocolatey"
+        echo ""
+        log_info "After installing curl, run this script again."
+        exit 1
+    fi
+
+    # Test curl functionality
+    if ! curl --version >/dev/null 2>&1; then
+        log_error "curl is installed but not working properly."
+        log_info "Please check your curl installation."
+        exit 1
+    fi
+}
+
+# Main installation function
 main() {
-		echo "🐙 Octomind Installation Script"
-		echo "=============================="
+    local version target
 
-		# Check if already installed
-		if command -v "$BINARY_NAME" >/dev/null 2>&1; then
-				local current_version
-				current_version=$("$BINARY_NAME" --version 2>/dev/null | head -n1 || echo "unknown")
-				log_warning "Octomind is already installed: $current_version"
-				read -p "Do you want to update it? (y/N): " -r
-				if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-						log_info "Installation cancelled"
-						exit 0
-				fi
-		fi
+    log_info "Installing $BINARY_NAME..."
 
-		# Detect platform
-		local target
-		target=$(detect_platform)
-		log_info "Detected platform: $target"
+    # Check prerequisites first
+    check_prerequisites
 
-		# Get latest version
-		local version
-		version=$(get_latest_version)
-		log_info "Latest version: $version"
+    # Parse command line arguments
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --version)
+                version="$2"
+                shift 2
+                ;;
+            --target)
+                target="$2"
+                shift 2
+                ;;
+            --install-dir)
+                INSTALL_DIR="$2"
+                shift 2
+                ;;
+            --help|-h)
+                cat << 'EOF'
+Octocode Installation Script
 
-		# Install binary
-		install_binary "$target" "$version"
+USAGE:
+    install.sh [OPTIONS]
 
-		# Verify installation
-		verify_installation
+REQUIREMENTS:
+    curl                    Required for downloading releases
 
-		echo ""
-		log_success "🎉 Octomind has been successfully installed!"
-		echo ""
-		echo "Next steps:"
-		echo "  1. Configure Octomind: octomind config"
-		echo "  2. Start an AI session: octomind session"
-		echo "  3. Ask questions about your code naturally in the session"
-		echo ""
-		echo "For more information, visit: https://octomind.muvon.io"
-		echo "Documentation: https://github.com/${REPO}"
+OPTIONS:
+    --version <VERSION>     Install specific version (default: latest)
+    --target <TARGET>       Install for specific target platform
+    --install-dir <DIR>     Installation directory (default: $HOME/.local/bin)
+    --help, -h              Show this help message
+
+EXAMPLES:
+    ./install.sh                                          # Install latest version
+    ./install.sh --version 0.1.0                         # Install specific version
+    ./install.sh --install-dir /usr/local/bin             # Install to custom directory
+    ./install.sh --target x86_64-unknown-linux-musl      # Install for specific target
+
+SUPPORTED TARGETS:
+    x86_64-unknown-linux-musl    Linux x86_64 (static, recommended)
+    aarch64-unknown-linux-musl   Linux ARM64 (static)
+    x86_64-apple-darwin          macOS x86_64
+    aarch64-apple-darwin         macOS ARM64
+    x86_64-pc-windows-msvc       Windows x86_64
+    aarch64-pc-windows-msvc      Windows ARM64
+
+ENVIRONMENT VARIABLES:
+    OCTOMIND_INSTALL_DIR         Override default installation directory
+    OCTOMIND_VERSION            Override version to install
+
+EXAMPLES WITH ENVIRONMENT VARIABLES:
+    export OCTOMIND_INSTALL_DIR=/opt/bin
+    ./install.sh
+
+    curl -fsSL https://raw.githubusercontent.com/Muvon/octomind/master/install.sh | sh
+    curl -fsSL https://raw.githubusercontent.com/Muvon/octomind/master/install.sh | sh -s -- --version 0.1.0
+
+EOF
+                exit 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                log_info "Use --help for usage information"
+                exit 1
+                ;;
+        esac
+    done
+
+    # Override with environment variables if set
+    version="${version:-$OCTOMIND_VERSION}"
+    INSTALL_DIR="${INSTALL_DIR:-$OCTOMIND_INSTALL_DIR}"
+
+    # Detect platform if not specified
+    if [ -z "$target" ]; then
+        target=$(detect_platform)
+        log_info "Detected platform: $target"
+    fi
+
+    # Get latest version if not specified
+    if [ -z "$version" ]; then
+        log_info "Fetching latest release information..."
+        version=$(get_latest_version)
+        if [ -z "$version" ]; then
+            log_error "Failed to get latest version"
+            exit 1
+        fi
+        log_info "Latest version: $version"
+    fi
+
+    # Download and install
+    download_and_install "$version" "$target"
+
+    # Check PATH
+    check_path
+
+    # Verify installation
+    verify_installation
+
+    log_success "Installation complete!"
+    echo ""
+    log_info "To get started, run: $BINARY_NAME --help"
 }
-
-# Parse command line arguments
-case "${1:-}" in
-		--help|-h)
-				echo "Octomind Installation Script"
-				echo ""
-				echo "Usage: $0 [options]"
-				echo ""
-				echo "Options:"
-				echo "  --help, -h     Show this help message"
-				echo "  --version, -v  Install specific version"
-				echo ""
-				echo "Environment variables:"
-				echo "  INSTALL_DIR    Installation directory (default: /usr/local/bin)"
-				echo ""
-				exit 0
-				;;
-		--version|-v)
-				if [ -z "${2:-}" ]; then
-						log_error "Version not specified"
-						exit 1
-				fi
-				VERSION="$2"
-				;;
-esac
 
 # Run main function
 main "$@"

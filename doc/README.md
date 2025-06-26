@@ -91,7 +91,7 @@ allowed_tools = []
 ### Installation
 ```bash
 # Quick install with script
-curl -fsSL https://raw.githubusercontent.com/muvon/octomind/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
 ```
 See [Installation Guide](./01-installation.md) for detailed methods including cross-compilation and shell completions.
 
