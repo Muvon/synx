@@ -109,7 +109,11 @@ pub async fn undo_edit(call: &McpToolCall, path: &Path) -> Result<McpToolResult>
 			}),
 		))
 	} else {
-		Err(anyhow!("No edit history available for this file"))
+		Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			"No edit history available for this file".to_string(),
+		))
 	}
 }
 
@@ -190,7 +194,11 @@ pub async fn execute_text_editor(
 			// Extract path parameter for view command
 			let path = match call.parameters.get("path") {
 				Some(Value::String(p)) => p.clone(),
-				_ => return Err(anyhow!("Missing or invalid 'path' parameter for view command")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'path' parameter for view command".to_string(),
+				)),
 			};
 
 			// Check if view_range is specified
@@ -227,14 +235,22 @@ pub async fn execute_text_editor(
 					match path_strings {
 						Ok(paths) => {
 							if paths.len() > 50 {
-								return Err(anyhow!("Too many files requested. Maximum 50 files per request."));
+								return Ok(McpToolResult::error(
+									call.tool_name.clone(),
+									call.tool_id.clone(),
+									"Too many files requested. Maximum 50 files per request.".to_string(),
+								));
 							}
 							paths
 						},
 						Err(e) => return Err(e),
 					}
 				},
-				_ => return Err(anyhow!("Missing or invalid 'paths' parameter for view_many command - must be an array of strings")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'paths' parameter for view_many command - must be an array of strings".to_string(),
+				)),
 			};
 
 			file_ops::view_many_files_spec(call, &paths).await
@@ -249,11 +265,19 @@ pub async fn execute_text_editor(
 
 			let path = match call.parameters.get("path") {
 				Some(Value::String(p)) => p.clone(),
-				_ => return Err(anyhow!("Missing or invalid 'path' parameter for create command")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'path' parameter for create command".to_string(),
+				)),
 			};
 			let file_text = match call.parameters.get("file_text") {
 				Some(Value::String(txt)) => txt.clone(),
-				_ => return Err(anyhow!("Missing or invalid 'file_text' parameter for create command")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'file_text' parameter for create command".to_string(),
+				)),
 			};
 			file_ops::create_file_spec(call, Path::new(&path), &file_text).await
 		},
@@ -267,15 +291,27 @@ pub async fn execute_text_editor(
 
 			let path = match call.parameters.get("path") {
 				Some(Value::String(p)) => p.clone(),
-				_ => return Err(anyhow!("Missing or invalid 'path' parameter for str_replace command")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'path' parameter for str_replace command".to_string(),
+				)),
 			};
 			let old_str = match call.parameters.get("old_str") {
 				Some(Value::String(s)) => s.clone(),
-				_ => return Err(anyhow!("Missing or invalid 'old_str' parameter")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'old_str' parameter".to_string(),
+				)),
 			};
 			let new_str = match call.parameters.get("new_str") {
 				Some(Value::String(s)) => s.clone(),
-				_ => return Err(anyhow!("Missing or invalid 'new_str' parameter")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'new_str' parameter".to_string(),
+				)),
 			};
 			text_editing::str_replace_spec(call, Path::new(&path), &old_str, &new_str).await
 		},
@@ -289,15 +325,36 @@ pub async fn execute_text_editor(
 
 			let path = match call.parameters.get("path") {
 				Some(Value::String(p)) => p.clone(),
-				_ => return Err(anyhow!("Missing or invalid 'path' parameter for insert command")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'path' parameter for insert command".to_string(),
+				)),
 			};
 			let insert_line = match call.parameters.get("insert_line") {
-				Some(Value::Number(n)) => n.as_u64().ok_or_else(|| anyhow!("Invalid 'insert_line' parameter"))? as usize,
-				_ => return Err(anyhow!("Missing or invalid 'insert_line' parameter")),
+				Some(Value::Number(n)) => {
+					match n.as_u64() {
+						Some(num) => num as usize,
+						None => return Ok(McpToolResult::error(
+							call.tool_name.clone(),
+							call.tool_id.clone(),
+							"Invalid 'insert_line' parameter - must be a valid number".to_string(),
+						)),
+					}
+				},
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'insert_line' parameter".to_string(),
+				)),
 			};
 			let new_str = match call.parameters.get("new_str") {
 				Some(Value::String(s)) => s.clone(),
-				_ => return Err(anyhow!("Missing or invalid 'new_str' parameter for insert command")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'new_str' parameter for insert command".to_string(),
+				)),
 			};
 			text_editing::insert_text_spec(call, Path::new(&path), insert_line, &new_str).await
 		},
@@ -311,22 +368,52 @@ pub async fn execute_text_editor(
 
 			let path = match call.parameters.get("path") {
 				Some(Value::String(p)) => p.clone(),
-				_ => return Err(anyhow!("Missing or invalid 'path' parameter for line_replace command")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'path' parameter for line_replace command".to_string(),
+				)),
 			};
 			let view_range = match call.parameters.get("view_range") {
 				Some(Value::Array(arr)) => {
 					if arr.len() != 2 {
-						return Err(anyhow!("'view_range' must be an array of exactly 2 integers for line_replace command"));
+						return Ok(McpToolResult::error(
+							call.tool_name.clone(),
+							call.tool_id.clone(),
+							"'view_range' must be an array of exactly 2 integers for line_replace command".to_string(),
+						));
 					}
-					let start = arr[0].as_u64().ok_or_else(|| anyhow!("Invalid start_line in view_range"))? as usize;
-					let end = arr[1].as_u64().ok_or_else(|| anyhow!("Invalid end_line in view_range"))? as usize;
+					let start = match arr[0].as_u64() {
+						Some(num) => num as usize,
+						None => return Ok(McpToolResult::error(
+							call.tool_name.clone(),
+							call.tool_id.clone(),
+							"Invalid start_line in view_range".to_string(),
+						)),
+					};
+					let end = match arr[1].as_u64() {
+						Some(num) => num as usize,
+						None => return Ok(McpToolResult::error(
+							call.tool_name.clone(),
+							call.tool_id.clone(),
+							"Invalid end_line in view_range".to_string(),
+						)),
+					};
 					(start, end)
 				},
-				_ => return Err(anyhow!("Missing or invalid 'view_range' parameter for line_replace command")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'view_range' parameter for line_replace command".to_string(),
+				)),
 			};
 			let new_str = match call.parameters.get("new_str") {
 				Some(Value::String(s)) => s.clone(),
-				_ => return Err(anyhow!("Missing or invalid 'new_str' parameter for line_replace command")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'new_str' parameter for line_replace command".to_string(),
+				)),
 			};
 			text_editing::line_replace_spec(call, Path::new(&path), view_range, &new_str).await
 		},
@@ -340,7 +427,11 @@ pub async fn execute_text_editor(
 
 			let path = match call.parameters.get("path") {
 				Some(Value::String(p)) => p.clone(),
-				_ => return Err(anyhow!("Missing or invalid 'path' parameter for undo_edit command")),
+				_ => return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Missing or invalid 'path' parameter for undo_edit command".to_string(),
+				)),
 			};
 			undo_edit(call, Path::new(&path)).await
 		},
@@ -356,7 +447,11 @@ pub async fn execute_text_editor(
 				Some(Value::Array(ops)) => {
 					// Correct format - AI passed array directly
 					if ops.len() > 50 {
-						return Err(anyhow!("Too many operations in batch. Maximum 50 operations allowed."));
+						return Ok(McpToolResult::error(
+							call.tool_name.clone(),
+							call.tool_id.clone(),
+							"Too many operations in batch. Maximum 50 operations allowed.".to_string(),
+						));
 					}
 					(ops.clone(), false)
 				},
@@ -365,17 +460,29 @@ pub async fn execute_text_editor(
 					match serde_json::from_str::<Vec<Value>>(ops_str) {
 						Ok(parsed_ops) => {
 							if parsed_ops.len() > 50 {
-								return Err(anyhow!("Too many operations in batch. Maximum 50 operations allowed."));
+								return Ok(McpToolResult::error(
+									call.tool_name.clone(),
+									call.tool_id.clone(),
+									"Too many operations in batch. Maximum 50 operations allowed.".to_string(),
+								));
 							}
 							crate::log_debug!("AI passed operations as JSON string instead of array - parsing defensively");
 							(parsed_ops, true)
 						},
 						Err(_) => {
-							return Err(anyhow!("Invalid 'operations' parameter for batch_edit command - must be an array or valid JSON array string"));
+							return Ok(McpToolResult::error(
+								call.tool_name.clone(),
+								call.tool_id.clone(),
+								"Invalid 'operations' parameter for batch_edit command - must be an array or valid JSON array string".to_string(),
+							));
 						}
 					}
 				},
-				_ => return Err(anyhow!("Missing or invalid 'operations' parameter for batch_edit command - must be an array")),
+				_ => return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				"Missing or invalid 'operations' parameter for batch_edit command - must be an array".to_string(),
+			)),
 			};
 
 			// Create a modified call with the AI format warning flag
@@ -386,7 +493,11 @@ pub async fn execute_text_editor(
 
 			text_editing::batch_edit_spec(&modified_call, &operations_vec).await
 		},
-		_ => Err(anyhow!("Invalid command: {}. Allowed commands are: view, view_many, create, str_replace, insert, line_replace, undo_edit, batch_edit", command)),
+		_ => Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!("Invalid command: {}. Allowed commands are: view, view_many, create, str_replace, insert, line_replace, undo_edit, batch_edit", command),
+		)),
 	}
 }
 
@@ -400,7 +511,11 @@ pub async fn execute_list_files(
 	// Check for cancellation before starting
 	if let Some(ref token) = cancellation_token {
 		if token.load(Ordering::SeqCst) {
-			return Err(anyhow!("List files operation cancelled"));
+			return Ok(McpToolResult::error(
+				"list_files".to_string(),
+				"unknown".to_string(),
+				"List files operation cancelled".to_string(),
+			));
 		}
 	}
 
