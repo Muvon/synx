@@ -17,10 +17,6 @@
 use super::super::{McpFunction, McpToolCall, McpToolResult};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::path::Path;
-
-// Maximum number of files allowed after glob expansion to prevent command line overflow
-const MAX_EXPANDED_FILES: usize = 1000;
 
 // Group ast-grep output by file for token efficiency while preserving line numbers
 fn group_ast_grep_output(output: &str) -> String {
@@ -67,81 +63,6 @@ fn group_ast_grep_output(output: &str) -> String {
 	} else {
 		result.join("\n\n")
 	}
-}
-// Expand glob patterns to actual file paths
-fn expand_glob_patterns(paths: &[String]) -> Result<Vec<String>> {
-	let mut expanded_paths = Vec::new();
-
-	crate::log_debug!("Expanding {} glob patterns: {:?}", paths.len(), paths);
-
-	for path in paths {
-		// Check if this looks like a glob pattern
-		if path.contains('*') || path.contains('?') || path.contains('[') {
-			// Use glob to expand the pattern
-			match glob::glob(path) {
-				Ok(entries) => {
-					let mut found_files = false;
-					let mut pattern_file_count = 0;
-					for entry in entries {
-						match entry {
-							Ok(path_buf) => {
-								if path_buf.is_file() {
-									expanded_paths.push(path_buf.to_string_lossy().to_string());
-									found_files = true;
-									pattern_file_count += 1;
-								}
-							}
-							Err(e) => {
-								crate::log_debug!("Glob pattern '{}' entry error: {}", path, e);
-							}
-						}
-					}
-					// Log results for this pattern
-					if found_files {
-						crate::log_debug!(
-							"Glob pattern '{}' matched {} files",
-							path,
-							pattern_file_count
-						);
-					} else {
-						crate::log_debug!("Glob pattern '{}' matched no files", path);
-					}
-				}
-				Err(e) => {
-					return Err(anyhow!("Invalid glob pattern '{}': {}", path, e));
-				}
-			}
-		} else {
-			// Not a glob pattern, add as-is if it exists or is a directory
-			let path_obj = Path::new(path);
-			if path_obj.exists() {
-				expanded_paths.push(path.clone());
-				crate::log_debug!("Added explicit path: {}", path);
-			} else {
-				crate::log_debug!("Path '{}' does not exist, skipping", path);
-			}
-		}
-	}
-
-	// Deduplicate files in case multiple patterns match the same file
-	expanded_paths.sort();
-	expanded_paths.dedup();
-
-	crate::log_debug!(
-		"Total expanded files after deduplication: {}",
-		expanded_paths.len()
-	);
-
-	// Check if we have too many files
-	if expanded_paths.len() > MAX_EXPANDED_FILES {
-		return Err(anyhow!(
-			"Too many files expanded from glob patterns: {} files (max allowed: {}). Consider using more specific patterns to reduce the file count.",
-			expanded_paths.len(),
-			MAX_EXPANDED_FILES
-		));
-	}
-
-	Ok(expanded_paths)
 }
 
 // Define the ast_grep function for the MCP protocol with enhanced description
@@ -394,7 +315,7 @@ pub async fn execute_ast_grep_command(
 
 	// Expand glob patterns to actual file paths first
 	let expanded_paths_result = if let Some(file_paths) = &paths {
-		expand_glob_patterns(file_paths)
+		crate::utils::glob::expand_glob_patterns_filtered(file_paths, None)
 	} else {
 		Ok(vec![])
 	};

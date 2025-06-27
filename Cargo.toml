@@ -11,7 +11,7 @@ documentation = "https://octomind.muvon.io"
 keywords = ["ai", "development", "assistant", "productivity", "conversational"]
 categories = ["development-tools", "command-line-utilities"]
 readme = "README.md"
-rust-version = "1.70"
+rust-version = "1.82"
 exclude = [
     "tests/fixtures/*",
     "examples/*",
@@ -57,6 +57,7 @@ markup5ever_rcdom = "0.3.0"
 url = "2.5.4"
 dirs = "6.0.0"
 glob = "0.3.2"
+ignore = "0.4.23"
 futures = "0.3.31"
 dotenvy = "0.15.7"
 arboard = "3.4.1"
