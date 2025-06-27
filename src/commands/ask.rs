@@ -20,10 +20,16 @@ use octomind::config::Config;
 use octomind::session::chat::markdown::{is_markdown_content, MarkdownRenderer};
 use octomind::session::{chat_completion_with_provider, Message, ProviderResponse};
 use rustyline::error::ReadlineError;
-use rustyline::{CompletionType, Config as RustylineConfig, EditMode, Editor};
-use std::fs;
+use rustyline::{
+	Cmd, CompletionType, ConditionalEventHandler, Config as RustylineConfig, EditMode, Editor,
+	Event, EventHandler, KeyEvent, Modifiers, RepeatCount,
+};
+use std::fs::{self, OpenOptions};
 use std::io::IsTerminal;
-use std::io::{self, Read};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[derive(Args, Debug)]
 pub struct AskArgs {
@@ -199,15 +205,126 @@ fn read_files_as_context(file_patterns: &[String]) -> Result<String> {
 	Ok(context)
 }
 
-// Helper function to get multi-line input interactively using rustyline
+// Global mutex for ask history file operations to prevent race conditions
+lazy_static::lazy_static! {
+	static ref ASK_HISTORY_MUTEX: Mutex<()> = Mutex::new(());
+}
+
+// Custom event handler for smart Ctrl+E behavior in ask mode
+struct AskSmartCtrlEHandler;
+
+impl ConditionalEventHandler for AskSmartCtrlEHandler {
+	fn handle(
+		&self,
+		_evt: &Event,
+		_n: RepeatCount,
+		_positive: bool,
+		ctx: &rustyline::EventContext,
+	) -> Option<Cmd> {
+		if ctx.has_hint() {
+			Some(Cmd::CompleteHint)
+		} else {
+			None
+		}
+	}
+}
+
+// Get the ask-specific history file path (separate from session history)
+fn get_ask_history_file_path() -> Result<PathBuf> {
+	let data_dir = octomind::directories::get_octomind_data_dir()?;
+	Ok(data_dir.join("ask_history"))
+}
+
+// Encode/decode functions for ask history (same as session but separate)
+fn encode_ask_history_line(line: &str) -> String {
+	line.chars()
+		.map(|c| match c {
+			'\\' => "\\\\".to_string(),
+			'\n' => "\\n".to_string(),
+			c => c.to_string(),
+		})
+		.collect()
+}
+
+fn decode_ask_history_line(encoded: &str) -> String {
+	let mut result = String::new();
+	let mut chars = encoded.chars().peekable();
+
+	while let Some(c) = chars.next() {
+		if c == '\\' {
+			match chars.peek() {
+				Some('\\') => {
+					chars.next();
+					result.push('\\');
+				}
+				Some('n') => {
+					chars.next();
+					result.push('\n');
+				}
+				_ => result.push(c),
+			}
+		} else {
+			result.push(c);
+		}
+	}
+	result
+}
+
+// Thread-safe ask history file operations
+fn append_to_ask_history_file(line: &str) -> Result<()> {
+	let _lock = ASK_HISTORY_MUTEX.lock().unwrap();
+	let history_path = get_ask_history_file_path()?;
+
+	if !history_path.exists() {
+		let mut file = OpenOptions::new()
+			.create(true)
+			.truncate(true)
+			.write(true)
+			.open(&history_path)?;
+		file.flush()?;
+	}
+
+	let mut file = OpenOptions::new()
+		.create(true)
+		.append(true)
+		.open(&history_path)?;
+
+	let encoded_line = encode_ask_history_line(line);
+	writeln!(file, "{}", encoded_line)?;
+	file.flush()?;
+	Ok(())
+}
+
+fn load_ask_history_from_file() -> Result<Vec<String>> {
+	let _lock = ASK_HISTORY_MUTEX.lock().unwrap();
+	let history_path = get_ask_history_file_path()?;
+
+	if !history_path.exists() {
+		return Ok(Vec::new());
+	}
+
+	let file = std::fs::File::open(&history_path)?;
+	let reader = BufReader::new(file);
+
+	let mut history = Vec::new();
+	for line in reader.lines() {
+		let line = line?;
+		if line.trim().is_empty() || line.starts_with("#") {
+			continue;
+		}
+		let decoded_line = decode_ask_history_line(&line);
+		history.push(decoded_line);
+	}
+	Ok(history)
+}
+
+// Helper function to get single-line input interactively using rustyline with ask-specific features
+// Matches session behavior exactly but with separate history
 fn get_interactive_input() -> Result<String> {
+	println!("{}", "Enter your question:".bright_blue());
 	println!(
 		"{}",
-		"Enter your question (multi-line input supported):".bright_blue()
-	);
-	println!(
-		"{}",
-		"- Press Enter on empty line to finish and send".dimmed()
+		"- Use Ctrl+J for multiline input, Enter to send".dimmed()
 	);
 	println!(
 		"{}",
@@ -215,61 +332,90 @@ fn get_interactive_input() -> Result<String> {
 	);
 	println!();
 
+	// Configure rustyline with proper completion behavior for ask mode
 	let config = RustylineConfig::builder()
-		.completion_type(CompletionType::List)
+		.completion_type(CompletionType::Circular)
 		.edit_mode(EditMode::Emacs)
-		.auto_add_history(false) // Don't save to history for this
+		.auto_add_history(true)
+		.bell_style(rustyline::config::BellStyle::None)
+		.max_history_size(500)?
 		.build();
 
 	let mut editor: Editor<(), rustyline::history::FileHistory> = Editor::with_config(config)?;
-	let mut lines = Vec::new();
-	let mut line_num = 1;
 
-	loop {
-		let prompt = if line_num == 1 {
-			"❯ ".to_string()
-		} else {
-			format!("{} ", "┆".dimmed())
-		};
+	// Note: CommandHelper is not publicly exported, so we use () for no helper
+	// This still provides basic Rustyline functionality without command completion
 
-		match editor.readline(&prompt) {
-			Ok(line) => {
-				// Check for exit commands
-				let trimmed = line.trim();
-				if trimmed == "/exit" || trimmed == "/quit" {
-					return Err(anyhow::anyhow!("User cancelled input"));
-				}
+	// Set up key bindings
+	// Ctrl+E for smart hint completion
+	editor.bind_sequence(
+		Event::KeySeq(vec![KeyEvent::new('e', Modifiers::CTRL)]),
+		EventHandler::Conditional(Box::new(AskSmartCtrlEHandler)),
+	);
+	// Tab for completion
+	editor.bind_sequence(
+		Event::KeySeq(vec![KeyEvent::new('\t', Modifiers::empty())]),
+		EventHandler::Simple(Cmd::Complete),
+	);
+	// Right arrow to accept hint
+	editor.bind_sequence(
+		Event::KeySeq(vec![
+			KeyEvent::new('\x1b', Modifiers::empty()),
+			KeyEvent::new('[', Modifiers::empty()),
+			KeyEvent::new('C', Modifiers::empty()),
+		]),
+		EventHandler::Simple(Cmd::CompleteHint),
+	);
+	// Ctrl+J to insert newline (for multiline input)
+	editor.bind_sequence(
+		Event::KeySeq(vec![KeyEvent::new('j', Modifiers::CTRL)]),
+		EventHandler::Simple(Cmd::Newline),
+	);
+	// Enter sends the request (default behavior - no override needed)
 
-				// If line is empty and we have content, finish
-				if trimmed.is_empty() && !lines.is_empty() {
-					break;
-				}
-
-				// If first line is empty, continue waiting
-				if trimmed.is_empty() && lines.is_empty() {
-					continue;
-				}
-
-				lines.push(line);
-				line_num += 1;
+	// Load persistent ask history
+	match load_ask_history_from_file() {
+		Ok(history_lines) => {
+			for line in history_lines {
+				let _ = editor.add_history_entry(line);
 			}
-			Err(ReadlineError::Interrupted) => {
-				return Err(anyhow::anyhow!("User cancelled input"));
-			}
-			Err(ReadlineError::Eof) => {
-				return Err(anyhow::anyhow!("User cancelled input"));
-			}
-			Err(err) => {
-				return Err(anyhow::anyhow!("Error reading input: {}", err));
-			}
+		}
+		Err(e) => {
+			octomind::log_info!("Could not load ask history: {}", e);
 		}
 	}
 
-	if lines.is_empty() {
-		return Err(anyhow::anyhow!("No input provided"));
-	}
+	// Set prompt (no cost display initially, matches session behavior)
+	let prompt = "> ".bright_blue().to_string();
 
-	Ok(lines.join("\n"))
+	match editor.readline(&prompt) {
+		Ok(line) => {
+			let trimmed = line.trim();
+			if trimmed == "/exit" || trimmed == "/quit" {
+				return Err(anyhow::anyhow!("User cancelled input"));
+			}
+
+			if trimmed.is_empty() {
+				return Err(anyhow::anyhow!("No input provided"));
+			}
+
+			// Save to ask-specific history file
+			if let Err(e) = append_to_ask_history_file(&line) {
+				octomind::log_info!("Could not append to ask history file: {}", e);
+			}
+
+			Ok(line)
+		}
+		Err(ReadlineError::Interrupted) => {
+			return Err(anyhow::anyhow!("User cancelled input"));
+		}
+		Err(ReadlineError::Eof) => {
+			return Err(anyhow::anyhow!("User cancelled input"));
+		}
+		Err(err) => {
+			return Err(anyhow::anyhow!("Error reading input: {}", err));
+		}
+	}
 }
 
 pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
@@ -372,13 +518,23 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 
 					// Combine input with file context for this query
 					let full_input = if file_context.is_empty() {
-						input
+						input.clone()
 					} else {
 						format!("{}\n\n{}", file_context, input)
 					};
 
+					// Show animation while processing (no cost display)
+					let cancel_flag = Arc::new(AtomicBool::new(false));
+					let animation_cancel = cancel_flag.clone();
+
+					// Start animation task
+					let animation_task = tokio::spawn(async move {
+						use octomind::session::chat::show_smart_animation;
+						let _ = show_smart_animation(animation_cancel, 0.0).await;
+					});
+
 					// Execute the query
-					match execute_single_query(
+					let query_result = execute_single_query(
 						&full_input,
 						&model,
 						args.temperature,
@@ -387,8 +543,13 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 						&system_prompt,
 						&clean_config,
 					)
-					.await
-					{
+					.await;
+
+					// Cancel animation
+					cancel_flag.store(true, Ordering::SeqCst);
+					let _ = animation_task.await;
+
+					match query_result {
 						Ok(response) => {
 							print_response(&response.content, args.raw, config);
 							println!(); // Add spacing between responses
