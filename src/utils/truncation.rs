@@ -197,15 +197,15 @@ pub fn truncate_content_smart(content: &str, max_tokens: usize) -> String {
 	// Simple truncation - cut at character boundary
 	// Estimate roughly where to cut (tokens are ~4 chars average)
 	let estimated_chars = max_tokens * 3; // Conservative estimate
-	let truncated = if content.len() > estimated_chars {
-		&content[..estimated_chars]
+	let truncated = if content.chars().count() > estimated_chars {
+		content.chars().take(estimated_chars).collect::<String>()
 	} else {
-		content
+		content.to_string()
 	};
 
 	// Find last newline to avoid cutting mid-line
-	let last_newline = truncated.rfind('\n').unwrap_or(truncated.len());
-	let final_truncated = &truncated[..last_newline];
+	let last_newline = truncated.rfind('\n').unwrap_or(truncated.chars().count());
+	let final_truncated: String = truncated.chars().take(last_newline).collect();
 
 	format!(
         "{}\n\n[Content truncated - {} tokens estimated, max {} allowed. Use more specific commands to reduce output size]",
