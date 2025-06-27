@@ -1012,18 +1012,45 @@ pub async fn chat_completion_with_validation(
 			max_input_tokens
 		);
 
-		// If we have a chat session, offer user choices
+		// If we have a chat session, use automatic continuation system
 		if let Some(session) = params.chat_session {
-			return handle_context_limit_exceeded(
+			// Use the unified continuation system for all context limit scenarios
+			if crate::session::chat::session_continuation::check_and_handle_continuation(
 				session,
 				params.config,
-				provider.as_ref(),
-				params.model,
-				params.temperature,
-				params.max_tokens,
-				params.cancellation_token,
-			)
-			.await;
+			)? {
+				// Continuation was triggered - now make API call with updated messages
+				// Clone messages to avoid borrowing conflicts
+				let messages = session.session.messages.clone();
+
+				// Make API call with continuation message using Box::pin for recursion
+				let continuation_params = ChatCompletionWithValidationParams::new(
+					&messages,
+					params.model,
+					params.temperature,
+					params.max_tokens,
+					params.config,
+				)
+				.with_max_retries(params.max_retries)
+				.with_chat_session(session);
+
+				let continuation_params = if let Some(token) = params.cancellation_token {
+					continuation_params.with_cancellation_token(token)
+				} else {
+					continuation_params
+				};
+
+				return Box::pin(chat_completion_with_validation(continuation_params)).await;
+			} else {
+				// No continuation needed but still over limit - return error
+				return Err(anyhow::anyhow!(
+					"Input size ({} tokens) exceeds provider limit ({} tokens) for {} {}",
+					total_input_tokens,
+					max_input_tokens,
+					provider.name(),
+					actual_model
+				));
+			}
 		} else {
 			// No session available, just return error
 			return Err(anyhow::anyhow!(
@@ -1060,125 +1087,6 @@ pub async fn chat_completion_with_validation(
 	};
 
 	provider.chat_completion(chat_params).await
-}
-
-/// Handle context limit exceeded by prompting user for action
-async fn handle_context_limit_exceeded(
-	chat_session: &mut crate::session::chat::session::ChatSession,
-	config: &Config,
-	provider: &dyn AiProvider,
-	model: &str,
-	temperature: f32,
-	max_tokens: u32,
-	cancellation_token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) -> Result<ProviderResponse> {
-	use colored::Colorize;
-	use rustyline::DefaultEditor;
-
-	println!("{}", "Choose action:".bright_cyan());
-	println!(
-		"  {} - Smart truncate (keep recent + summarize removed)",
-		"t".bright_green()
-	);
-	println!(
-		"  {} - Smart summarize (summarize entire conversation)",
-		"s".bright_yellow()
-	);
-	println!("  {} - Cancel operation", "c".bright_red());
-
-	let mut rl = DefaultEditor::new()
-		.map_err(|e| anyhow::anyhow!("Failed to create input reader: {}", e))?;
-
-	loop {
-		// Check for cancellation before prompting user
-		if let Some(ref token) = cancellation_token {
-			if token.load(std::sync::atomic::Ordering::SeqCst) {
-				println!("{}", "Operation cancelled.".bright_yellow());
-				return Err(anyhow::anyhow!("User cancelled due to context size limit"));
-			}
-		}
-
-		match rl.readline("Your choice (t/s/c): ") {
-			Ok(line) => {
-				let choice = line.trim().to_lowercase();
-				match choice.as_str() {
-					"t" | "truncate" => {
-						println!("{}", "Applying simple boundary truncation...".bright_blue());
-
-						// Apply simple boundary truncation for manual truncation
-						crate::session::chat::perform_simple_boundary_truncation(
-							chat_session,
-							config,
-							crate::session::estimate_message_tokens(&chat_session.session.messages),
-						)
-						.await?;
-
-						// Retry the API call with truncated context and cancellation support
-						let chat_params = ChatCompletionParams::new(
-							&chat_session.session.messages,
-							model,
-							temperature,
-							max_tokens,
-							config,
-						)
-						.with_max_retries(0);
-						let mut chat_params = chat_params;
-						if let Some(token) = cancellation_token {
-							chat_params = chat_params.with_cancellation_token(token);
-						}
-						return provider.chat_completion(chat_params).await;
-					}
-					"s" | "summarize" => {
-						println!("{}", "Applying smart summarization...".bright_blue());
-
-						// Apply full context summarization
-						crate::session::chat::perform_smart_full_summarization(
-							chat_session,
-							config,
-						)
-						.await?;
-
-						// Retry the API call with summarized context and cancellation support
-						let chat_params = ChatCompletionParams::new(
-							&chat_session.session.messages,
-							model,
-							temperature,
-							max_tokens,
-							config,
-						)
-						.with_max_retries(0);
-						let mut chat_params = chat_params;
-						if let Some(token) = cancellation_token {
-							chat_params = chat_params.with_cancellation_token(token);
-						}
-						return provider.chat_completion(chat_params).await;
-					}
-					"c" | "cancel" => {
-						println!("{}", "Operation cancelled.".bright_yellow());
-						return Err(anyhow::anyhow!("User cancelled due to context size limit"));
-					}
-					_ => {
-						println!(
-							"{}",
-							"Invalid choice. Please enter 't', 's', or 'c'.".bright_red()
-						);
-						continue;
-					}
-				}
-			}
-			Err(rustyline::error::ReadlineError::Interrupted) => {
-				println!("{}", "Operation cancelled.".bright_yellow());
-				return Err(anyhow::anyhow!("User cancelled due to context size limit"));
-			}
-			Err(rustyline::error::ReadlineError::Eof) => {
-				println!("{}", "Operation cancelled.".bright_yellow());
-				return Err(anyhow::anyhow!("User cancelled due to context size limit"));
-			}
-			Err(err) => {
-				return Err(anyhow::anyhow!("Input error: {}", err));
-			}
-		}
-	}
 }
 
 /// High-level function to send a chat completion using the provider abstraction
