@@ -171,9 +171,7 @@ async fn fetch_html_content(source: &str) -> Result<(String, &'static str)> {
 
 // Convert HTML to Markdown using html5ever parser
 fn html_to_markdown(html: &str) -> Result<String> {
-	let dom = parse_document(RcDom::default(), Default::default())
-		.from_utf8()
-		.read_from(&mut html.as_bytes())?;
+	let dom = parse_document(RcDom::default(), Default::default()).one(html);
 
 	let mut markdown = String::new();
 	walk_node(&dom.document, &mut markdown, 0)?;
