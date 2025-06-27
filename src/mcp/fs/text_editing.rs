@@ -51,7 +51,7 @@ pub async fn str_replace_spec(
 			tool_name: "text_editor".to_string(),
 			tool_id: call.tool_id.clone(),
 			result: json!({
-				"error": "No match found for replacement. Please check your text and try again.",
+				"error": "No match found for replacement. Please check your text and try again. Make sure you are not escaping \\t, \\n or similiar and pass raw content.",
 				"is_error": true
 			}),
 		});
@@ -190,6 +190,18 @@ pub async fn line_replace_spec(
 	}
 
 	let (start_line, end_line) = view_range;
+
+	// Validate new_str for escaped characters
+	if new_str.starts_with("\\t") && new_str.contains("\\n") {
+		return Ok(McpToolResult {
+			tool_name: "text_editor".to_string(),
+			tool_id: call.tool_id.clone(),
+			result: json!({
+				"error": "new_str should CONTAIN RAW content not escaped characters",
+				"is_error": true
+			}),
+		});
+	}
 
 	// Validate line numbers
 	if start_line == 0 || end_line == 0 {
