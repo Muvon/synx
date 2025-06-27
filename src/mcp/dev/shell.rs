@@ -207,7 +207,11 @@ pub async fn execute_shell_command(
 	// Check for cancellation before starting
 	if let Some(ref token) = cancellation_token {
 		if token.load(Ordering::SeqCst) {
-			return Err(anyhow!("Shell command execution cancelled"));
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				"Shell command execution cancelled".to_string(),
+			));
 		}
 	}
 

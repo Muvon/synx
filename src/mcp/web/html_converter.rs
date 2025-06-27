@@ -30,7 +30,13 @@ pub async fn execute_read_html(call: &McpToolCall) -> Result<McpToolResult> {
 	// Extract sources parameter
 	let sources_value = match call.parameters.get("sources") {
 		Some(value) => value,
-		_ => return Err(anyhow!("Missing 'sources' parameter")),
+		_ => {
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				"Missing 'sources' parameter".to_string(),
+			))
+		}
 	};
 
 	// Support either a single source string or an array of sources
@@ -41,19 +47,26 @@ pub async fn execute_read_html(call: &McpToolCall) -> Result<McpToolResult> {
 		}
 		Value::Array(sources) => {
 			// Multiple sources conversion
-			let source_strings: Result<Vec<String>, _> = sources
-				.iter()
-				.map(|s| s.as_str().ok_or_else(|| anyhow!("Invalid source in array")))
-				.map(|r| r.map(|s| s.to_string()))
-				.collect();
-
-			match source_strings {
-				Ok(source_strs) => convert_multiple_html_to_md(call, &source_strs).await,
-				Err(e) => Err(e),
+			let mut source_strings = Vec::new();
+			for source in sources {
+				match source.as_str() {
+					Some(s) => source_strings.push(s.to_string()),
+					None => {
+						return Ok(McpToolResult::error(
+							call.tool_name.clone(),
+							call.tool_id.clone(),
+							"Invalid source in array - all sources must be strings".to_string(),
+						))
+					}
+				}
 			}
+
+			convert_multiple_html_to_md(call, &source_strings).await
 		}
-		_ => Err(anyhow!(
-			"'sources' parameter must be a string or array of strings"
+		_ => Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			"'sources' parameter must be a string or array of strings".to_string(),
 		)),
 	}
 }

@@ -272,7 +272,11 @@ pub async fn execute_ast_grep_command(
 	// Check for cancellation before starting
 	if let Some(ref token) = cancellation_token {
 		if token.load(Ordering::SeqCst) {
-			return Err(anyhow!("AST-grep command execution cancelled"));
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				"AST-grep command execution cancelled".to_string(),
+			));
 		}
 	}
 
