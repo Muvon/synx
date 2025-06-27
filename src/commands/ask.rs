@@ -406,15 +406,9 @@ fn get_interactive_input() -> Result<String> {
 
 			Ok(line)
 		}
-		Err(ReadlineError::Interrupted) => {
-			return Err(anyhow::anyhow!("User cancelled input"));
-		}
-		Err(ReadlineError::Eof) => {
-			return Err(anyhow::anyhow!("User cancelled input"));
-		}
-		Err(err) => {
-			return Err(anyhow::anyhow!("Error reading input: {}", err));
-		}
+		Err(ReadlineError::Interrupted) => Err(anyhow::anyhow!("User cancelled input")),
+		Err(ReadlineError::Eof) => Err(anyhow::anyhow!("User cancelled input")),
+		Err(err) => Err(anyhow::anyhow!("Error reading input: {}", err)),
 	}
 }
 
