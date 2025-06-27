@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.7.0] - 2025-06-27
+
+### 📋 Release Summary
+
+This release introduces a new static website for the Octomind project and enhances user experience with improved session continuity and thread-safe history management (d964df21, 7039b455, b06e67b3). Several bug fixes address error handling, input validation, and stability across core features, while dependency updates and documentation improvements further refine overall usability (13e984c4, 52144d2a, 86e45d84, 445db4ca, 049062bd).
+
+
+### ✨ New Features & Enhancements
+
+- **docs**: add /run command and update continuation architecture docs `e0ff1873`
+- **ask**: add separate thread-safe history file for ask mode `b06e67b3`
+- **ast_grep**: replace glob crate with ignore for glob expansion `b55fd02f`
+- **website**: add complete static site for Octomind project `d964df21`
+
+### 🔧 Improvements & Optimizations
+
+- **fs**: unify error response creation with McpToolResult::error `3dcaf6ed`
+- **fs**: make ripgrep line parsing UTF-8 safe `29a74f07`
+- **session**: replace manual context limit prompt with auto cont... `564c3423`
+- **session**: improve extract_lines output and truncate logic `f2d8c17c`
+- **continuation**: extract session summary prompt constants and ... `5abed7d8`
+
+### 🐛 Bug Fixes & Stability
+
+- **text_editing**: add validation and clarify escaped chars error mes... `13e984c4`
+- **session**: ensure continuation processes after tool calls complete `7039b455`
+- **truncation**: prevent crash by handling char boundaries safely `ab158d51`
+- **mcp**: return structured errors for invalid params and cancellations `52144d2a`
+- **fs**: return structured errors for invalid parameters and missing ... `86e45d84`
+- **commands**: simplify error handling in interactive input `445db4ca`
+- **ci**: correct preview URL and remove Lighthouse job `ecda5e8b`
+- **install**: correct install script and update master branch path `049062bd`
+
+### 📚 Documentation & Examples
+
+- **fs**: clarify raw content uses actual whitespace, not escapes `3c96628f`
+- **session**: update docs to reflect modular continuation refactor `8e53f517`
+- **ast_grep**: expand pattern syntax with anonymous wildcard and exa... `8e2d6125`
+
+### 🔄 Other Changes
+
+- **deps**: upgrade html5ever and related crates to latest versions `2ea24fbd`
+- **deps**: upgrade multiple dependencies to latest versions `b0be0953`
+
+### 📊 Release Summary
+
+**Total commits**: 22 across 5 categories
+
+✨ **4** new features - *Enhanced functionality*
+🔧 **5** improvements - *Better performance & code quality*
+🐛 **8** bug fixes - *Improved stability*
+📚 **3** documentation updates - *Better developer experience*
+🔄 **2** other changes - *Maintenance & tooling*
+
 ## [0.6.0] - 2025-06-26
 
 ### 📋 Release Summary
