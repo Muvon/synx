@@ -34,7 +34,7 @@ use colored::Colorize;
 pub fn process_continuation_response(
 	chat_session: &mut ChatSession,
 	response_content: &str,
-	has_tool_calls: bool,
+	_has_tool_calls: bool, // Prefixed with underscore to indicate intentional non-use
 	config: &Config,
 	role: &str,
 ) -> Result<bool> {
@@ -43,10 +43,9 @@ pub fn process_continuation_response(
 		return Ok(false);
 	}
 
-	// If the response has tool calls, let them execute first
-	if has_tool_calls {
-		return Ok(false);
-	}
+	// CRITICAL FIX: Process continuation regardless of tool calls
+	// Tool calls will be handled in the normal flow, but we need to process continuation
+	// when the AI provides a summary response, even if it includes tool calls
 
 	// CRITICAL FIX: Display the assistant summary to the user BEFORE processing
 	println!(

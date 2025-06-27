@@ -451,11 +451,48 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 	handle_final_response(
 		&params.content,
 		&current_content,
-		current_exchange,
+		current_exchange.clone(), // Clone to avoid move
 		params.chat_session,
 		params.config,
 		params.role,
-	)
+	)?;
+
+	// CRITICAL FIX: Check for continuation after tool processing completes
+	// This handles cases where AI responded to summary request with tool calls
+	// After tool calls execute, we need to process the continuation
+	if params.chat_session.continuation_pending {
+		// This is a continuation response that included tool calls
+		// Now that tool calls are complete, process the continuation
+		let has_tool_calls = params
+			.tool_calls
+			.as_ref()
+			.is_some_and(|calls| !calls.is_empty());
+
+		if session_continuation::process_continuation_response(
+			params.chat_session,
+			&current_content, // Use the final processed content
+			has_tool_calls,
+			params.config,
+			params.role,
+		)? {
+			// Continuation was processed - create new params for continuation message processing
+			let continuation_params = ResponseProcessingParams::new(
+				current_content,
+				current_exchange,
+				params.tool_calls.clone(),
+				params.finish_reason.clone(),
+				params.chat_session,
+				params.config,
+				params.role,
+				params.operation_cancelled.clone(),
+			);
+
+			// Execute the continuation message
+			return process_continuation_message_immediately(continuation_params).await;
+		}
+	}
+
+	Ok(())
 }
 
 /// Process continuation message immediately after session reset
