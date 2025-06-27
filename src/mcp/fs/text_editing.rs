@@ -29,14 +29,11 @@ pub async fn str_replace_spec(
 	new_str: &str,
 ) -> Result<McpToolResult> {
 	if !path.exists() {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": "File not found",
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			"File not found".to_string(),
+		));
 	}
 
 	// Read the file content
@@ -47,24 +44,18 @@ pub async fn str_replace_spec(
 	// Check if old_str appears in the file
 	let occurrences = content.matches(old_str).count();
 	if occurrences == 0 {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": "No match found for replacement. Please check your text and try again. Make sure you are not escaping \\t, \\n or similiar and pass raw content.",
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+		call.tool_name.clone(),
+		call.tool_id.clone(),
+		"No match found for replacement. Please check your text and try again. Make sure you are not escaping \\t, \\n or similiar and pass raw content.".to_string(),
+	));
 	}
 	if occurrences > 1 {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": format!("Found {} matches for replacement text. Please provide more context to make a unique match.", occurrences),
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+		call.tool_name.clone(),
+		call.tool_id.clone(),
+		format!("Found {} matches for replacement text. Please provide more context to make a unique match.", occurrences),
+	));
 	}
 
 	// Save the current content for undo
@@ -96,14 +87,11 @@ pub async fn insert_text_spec(
 	new_str: &str,
 ) -> Result<McpToolResult> {
 	if !path.exists() {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": "File not found",
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			"File not found".to_string(),
+		));
 	}
 
 	// Read the file content
@@ -114,14 +102,15 @@ pub async fn insert_text_spec(
 
 	// Validate insert_line
 	if insert_line > lines.len() {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": format!("Insert line {} exceeds file length ({} lines)", insert_line, lines.len()),
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!(
+				"Insert line {} exceeds file length ({} lines)",
+				insert_line,
+				lines.len()
+			),
+		));
 	}
 
 	// Save the current content for undo
@@ -168,62 +157,50 @@ pub async fn line_replace_spec(
 	new_str: &str,
 ) -> Result<McpToolResult> {
 	if !path.exists() {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": "File not found",
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			"File not found".to_string(),
+		));
 	}
 
 	if !path.is_file() {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": "Path is not a file",
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			"Path is not a file".to_string(),
+		));
 	}
 
 	let (start_line, end_line) = view_range;
 
 	// Validate new_str for escaped characters
 	if new_str.starts_with("\\t") && new_str.contains("\\n") {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": "new_str should CONTAIN RAW content not escaped characters",
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			"new_str should CONTAIN RAW content not escaped characters".to_string(),
+		));
 	}
 
 	// Validate line numbers
 	if start_line == 0 || end_line == 0 {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": "Line numbers must be 1-indexed (start from 1)",
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			"Line numbers must be 1-indexed (start from 1)".to_string(),
+		));
 	}
 
 	if start_line > end_line {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": format!("start_line ({}) must be less than or equal to end_line ({})", start_line, end_line),
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!(
+				"start_line ({}) must be less than or equal to end_line ({})",
+				start_line, end_line
+			),
+		));
 	}
 
 	// Read the file content
@@ -234,25 +211,27 @@ pub async fn line_replace_spec(
 
 	// Validate line ranges exist in file BEFORE accessing the array
 	if start_line > lines.len() {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": format!("start_line ({}) exceeds file length ({} lines)", start_line, lines.len()),
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!(
+				"start_line ({}) exceeds file length ({} lines)",
+				start_line,
+				lines.len()
+			),
+		));
 	}
 
 	if end_line > lines.len() {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": format!("end_line ({}) exceeds file length ({} lines)", end_line, lines.len()),
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!(
+				"end_line ({}) exceeds file length ({} lines)",
+				end_line,
+				lines.len()
+			),
+		));
 	}
 
 	// Capture the original lines that will be replaced for the snippet

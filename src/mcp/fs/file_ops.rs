@@ -165,14 +165,11 @@ pub async fn create_file_spec(
 ) -> Result<McpToolResult> {
 	// Check if file already exists
 	if path.exists() {
-		return Ok(McpToolResult {
-			tool_name: "text_editor".to_string(),
-			tool_id: call.tool_id.clone(),
-			result: json!({
-				"error": "File already exists",
-				"is_error": true
-			}),
-		});
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			"File already exists".to_string(),
+		));
 	}
 
 	// Create parent directories if they don't exist
