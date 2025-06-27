@@ -687,9 +687,16 @@ Octomind features an advanced session continuation system that automatically pre
 
 #### Architecture
 
-The continuation system is built around these core components:
+The continuation system uses a **modular architecture** with focused components:
 
-- **`src/session/chat/session_continuation.rs`**: Core continuation logic with file context parsing
+- **`src/session/chat/continuation/`**: **NEW MODULAR STRUCTURE**
+  - `mod.rs`: Main module coordinator with public API re-exports
+  - `detection.rs`: Continuation trigger logic and state checks
+  - `injection.rs`: Summary request injection when limits reached
+  - `processing.rs`: Response processing with **DISPLAY FIXES** for user visibility
+  - `file_context.rs`: File parsing, context generation, and tests
+  - `constants.rs`: All prompts and message templates
+- **`src/session/chat/session_continuation.rs`**: **LEGACY COMPATIBILITY** - re-exports new API
 - **`src/session/chat/response.rs`**: Integration point for continuation checks
 - **`src/session/chat/context_truncation.rs`**: Continuation-aware context management
 - **`src/session/chat/session/core.rs`**: Session state management with continuation tracking

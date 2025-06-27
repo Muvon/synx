@@ -156,7 +156,7 @@ No separate indexing or search commands needed.
 ## Next Steps
 
 - [Installation Guide](./01-installation.md) - Detailed installation methods and setup
-- [Configuration Guide](./02-configuration.md) - Set up providers and roles
-- [Provider Setup](./03-providers.md) - Configure AI models
+- [Configuration Guide](./03-configuration.md) - Set up providers and roles
+- [Provider Setup](./04-providers.md) - Configure AI models
 - [Session Guide](./05-sessions.md) - Master interactive sessions
 - [Advanced Features](./06-advanced.md) - Layered architecture and MCP tools

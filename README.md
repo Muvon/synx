@@ -124,6 +124,7 @@ Within any session, use these commands:
 - `/context [filter]` - Display session context with optional filtering (all, assistant, user, tool, large)
 - `/cache` - Mark cache checkpoint for cost savings
 - `/layers` - Toggle layered processing on/off
+- `/run <command>` - Execute configured custom commands
 - `/done` - Finalize task with memorization, comprehensive summarization, and auto-commit
 - `/loglevel [debug|info|none]` - Set log level
 - `/exit` - Exit current session

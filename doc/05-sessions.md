@@ -453,6 +453,7 @@ The `/context` command displays the current session context that would be sent t
 
 #### Architecture Commands
 - `/layers` - Toggle layered processing
+- `/run <command>` - Execute configured custom commands
 
 ## Multimodal Vision Support
 

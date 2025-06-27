@@ -34,6 +34,14 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 - **Performance Optimized**: Maximum 10 file contexts, reasonable line limits
 - **Backward Compatible**: All existing imports continue to work via re-exports
 
+### Agent System Integration
+- **Specialized AI Agents**: Configure custom agents using the same layer structure as commands
+- **MCP Tool Integration**: Each agent becomes a separate MCP tool (e.g., `agent_context_gatherer`)
+- **Task Delegation**: Route complex tasks to specialized AI agents with specific tool access
+- **Unified Configuration**: Agents use the same `LayerConfig` structure for consistency
+- **Output Control**: `output_mode` setting controls what agent tools return
+- **Required Descriptions**: Agent descriptions become MCP function descriptions for tool discovery
+
 ### Session Context Display & Filtering
 - **`/context` Command**: Display session context with advanced filtering capabilities
 - **Multiple Filter Options**: `all`, `assistant`, `user`, `tool`, `large` filters for targeted context analysis
