@@ -4,13 +4,23 @@ version = "0.6.0"
 edition = "2021"
 authors = ["Muvon Un Limited <contact@muvon.io>"]
 license = "Apache-2.0"
-description = "AI-Powered Development Assistant - Session-based AI development assistant with built-in tools"
+description = "Session-based AI development assistant with conversational codebase interaction, multimodal vision support, built-in MCP tools, and multi-provider AI integration"
 homepage = "https://octomind.muvon.io"
 repository = "https://github.com/muvon/octomind"
 documentation = "https://octomind.muvon.io"
-keywords = ["ai", "development", "assistant", "automation", "productivity"]
+keywords = ["ai", "development", "assistant", "productivity", "conversational"]
 categories = ["development-tools", "command-line-utilities"]
 readme = "README.md"
+rust-version = "1.70"
+exclude = [
+    "tests/fixtures/*",
+    "examples/*",
+    ".github/*",
+    "docs/*",
+    "scripts/*",
+    "*.md",
+    "install.sh"
+]
 
 # Enable static linking
 [profile.release]
