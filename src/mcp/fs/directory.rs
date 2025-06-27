@@ -20,7 +20,8 @@ use serde_json::{json, Value};
 use std::process::Command;
 
 // Parse a ripgrep output line to extract filename and rest, handling Windows paths correctly
-fn parse_ripgrep_line(line: &str) -> Option<(&str, &str)> {
+// UTF-8 safe version that uses character boundaries instead of byte indices
+fn parse_ripgrep_line(line: &str) -> Option<(String, String)> {
 	// Find all colon positions
 	let colon_positions: Vec<usize> = line.match_indices(':').map(|(i, _)| i).collect();
 
@@ -36,13 +37,20 @@ fn parse_ripgrep_line(line: &str) -> Option<(&str, &str)> {
 		let next_colon_pos = colon_positions[i + 1];
 
 		// Check if the part between these colons is a line number (digits)
-		let potential_line_num = &line[colon_pos + 1..next_colon_pos];
-		if potential_line_num.chars().all(|c| c.is_ascii_digit()) && !potential_line_num.is_empty()
-		{
-			// Found the filename:line_number:content pattern
-			let filename = &line[..colon_pos];
-			let rest = &line[colon_pos + 1..];
-			return Some((filename, rest));
+		// UTF-8 safe: get substring between character positions
+		let chars: Vec<char> = line.chars().collect();
+		if colon_pos + 1 < chars.len() && next_colon_pos <= chars.len() {
+			let potential_line_num: String =
+				chars[(colon_pos + 1)..next_colon_pos].iter().collect();
+			if potential_line_num.chars().all(|c| c.is_ascii_digit())
+				&& !potential_line_num.is_empty()
+			{
+				// Found the filename:line_number:content pattern
+				// UTF-8 safe: split at character boundaries
+				let filename = line.chars().take(colon_pos).collect::<String>();
+				let rest = line.chars().skip(colon_pos + 1).collect::<String>();
+				return Some((filename, rest));
+			}
 		}
 	}
 
@@ -50,8 +58,9 @@ fn parse_ripgrep_line(line: &str) -> Option<(&str, &str)> {
 	// This handles edge cases where line numbers might have non-digit characters
 	if colon_positions.len() >= 2 {
 		let colon_pos = colon_positions[colon_positions.len() - 2];
-		let filename = &line[..colon_pos];
-		let rest = &line[colon_pos + 1..];
+		// UTF-8 safe: split at character boundaries
+		let filename = line.chars().take(colon_pos).collect::<String>();
+		let rest = line.chars().skip(colon_pos + 1).collect::<String>();
 		return Some((filename, rest));
 	}
 
@@ -59,7 +68,8 @@ fn parse_ripgrep_line(line: &str) -> Option<(&str, &str)> {
 }
 
 // Parse a ripgrep context line (with dashes) to extract filename and rest, handling Windows paths
-fn parse_ripgrep_dash_line(line: &str) -> Option<(&str, &str)> {
+// UTF-8 safe version that uses character boundaries instead of byte indices
+fn parse_ripgrep_dash_line(line: &str) -> Option<(String, String)> {
 	// Find all dash positions
 	let dash_positions: Vec<usize> = line.match_indices('-').map(|(i, _)| i).collect();
 
@@ -74,21 +84,28 @@ fn parse_ripgrep_dash_line(line: &str) -> Option<(&str, &str)> {
 		let next_dash_pos = dash_positions[i + 1];
 
 		// Check if the part between these dashes is a line number (digits)
-		let potential_line_num = &line[dash_pos + 1..next_dash_pos];
-		if potential_line_num.chars().all(|c| c.is_ascii_digit()) && !potential_line_num.is_empty()
-		{
-			// Found the filename-line_number-content pattern
-			let filename = &line[..dash_pos];
-			let rest = &line[dash_pos + 1..];
-			return Some((filename, rest));
+		// UTF-8 safe: get substring between character positions
+		let chars: Vec<char> = line.chars().collect();
+		if dash_pos + 1 < chars.len() && next_dash_pos <= chars.len() {
+			let potential_line_num: String = chars[(dash_pos + 1)..next_dash_pos].iter().collect();
+			if potential_line_num.chars().all(|c| c.is_ascii_digit())
+				&& !potential_line_num.is_empty()
+			{
+				// Found the filename-line_number-content pattern
+				// UTF-8 safe: split at character boundaries
+				let filename = line.chars().take(dash_pos).collect::<String>();
+				let rest = line.chars().skip(dash_pos + 1).collect::<String>();
+				return Some((filename, rest));
+			}
 		}
 	}
 
 	// Fallback: use the last dash before content
 	if dash_positions.len() >= 2 {
 		let dash_pos = dash_positions[dash_positions.len() - 2];
-		let filename = &line[..dash_pos];
-		let rest = &line[dash_pos + 1..];
+		// UTF-8 safe: split at character boundaries
+		let filename = line.chars().take(dash_pos).collect::<String>();
+		let rest = line.chars().skip(dash_pos + 1).collect::<String>();
 		return Some((filename, rest));
 	}
 
@@ -468,7 +485,10 @@ mod tests {
 		let result = parse_ripgrep_line(line);
 		assert_eq!(
 			result,
-			Some(("/home/user/file.rs", "123:println!(\"test\");"))
+			Some((
+				"/home/user/file.rs".to_string(),
+				"123:println!(\"test\");".to_string()
+			))
 		);
 	}
 
@@ -478,7 +498,10 @@ mod tests {
 		let result = parse_ripgrep_line(line);
 		assert_eq!(
 			result,
-			Some(("C:\\Users\\Test\\file.rs", "123:println!(\"test\");"))
+			Some((
+				"C:\\Users\\Test\\file.rs".to_string(),
+				"123:println!(\"test\");".to_string()
+			))
 		);
 	}
 
@@ -488,7 +511,10 @@ mod tests {
 		let result = parse_ripgrep_line(line);
 		assert_eq!(
 			result,
-			Some(("C:\\Users\\Test User\\My File.rs", "456:let x = 42;"))
+			Some((
+				"C:\\Users\\Test User\\My File.rs".to_string(),
+				"456:let x = 42;".to_string()
+			))
 		);
 	}
 
@@ -498,7 +524,10 @@ mod tests {
 		let result = parse_ripgrep_dash_line(line);
 		assert_eq!(
 			result,
-			Some(("/home/user/file.rs", "123-some context line"))
+			Some((
+				"/home/user/file.rs".to_string(),
+				"123-some context line".to_string()
+			))
 		);
 	}
 
@@ -508,7 +537,10 @@ mod tests {
 		let result = parse_ripgrep_dash_line(line);
 		assert_eq!(
 			result,
-			Some(("C:\\Users\\Test\\file.rs", "123-some context line"))
+			Some((
+				"C:\\Users\\Test\\file.rs".to_string(),
+				"123-some context line".to_string()
+			))
 		);
 	}
 

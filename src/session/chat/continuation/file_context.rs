@@ -120,19 +120,27 @@ pub fn parse_file_contexts(summary_content: &str) -> Vec<(String, usize, usize)>
 
 	// If no code blocks found, fall back to looking for patterns in REQUIRED FILE CONTEXTS section
 	if contexts.is_empty() {
-		// Look for the specific section header and parse content after it using simple string operations
+		// Look for the specific section header and parse content after it using UTF-8 safe operations
 		if let Some(section_start) = summary_content.find("## REQUIRED FILE CONTEXTS") {
-			let content_after_header = &summary_content[section_start..];
+			// UTF-8 safe: get substring from section start to end
+			let content_after_header = summary_content
+				.chars()
+				.skip(section_start)
+				.collect::<String>();
 
 			// Find the end of this section (next ## header or end of text)
 			let section_end = content_after_header
 				.find("\n## ")
-				.unwrap_or(content_after_header.len());
+				.unwrap_or(content_after_header.chars().count());
 
-			let section_content = &content_after_header[..section_end];
+			// UTF-8 safe: get substring from start to section end
+			let section_content = content_after_header
+				.chars()
+				.take(section_end)
+				.collect::<String>();
 
 			// More flexible pattern for general text (handles paths with spaces/special chars)
-			for captures in general_file_pattern.captures_iter(section_content) {
+			for captures in general_file_pattern.captures_iter(&section_content) {
 				if let (Some(filename), Some(start_str), Some(end_str)) =
 					(captures.get(1), captures.get(2), captures.get(3))
 				{
