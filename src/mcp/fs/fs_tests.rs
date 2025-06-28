@@ -499,8 +499,17 @@ mod tests {
 		.unwrap();
 
 		// Should return error for no match
-		assert!(result.result.get("error").is_some());
-		assert!(result.result.get("is_error").unwrap().as_bool().unwrap());
+		assert!(
+			result.result.get("isError").unwrap().as_bool().unwrap(),
+			"Should have isError: true"
+		);
+		let content = result.result["content"].as_array().unwrap()[0]["text"]
+			.as_str()
+			.unwrap();
+		assert!(
+			content.contains("No match found"),
+			"Should contain no match error message"
+		);
 	}
 
 	#[tokio::test]
@@ -522,8 +531,17 @@ mod tests {
 		.unwrap();
 
 		// Should return error for multiple matches
-		assert!(result.result.get("error").is_some());
-		assert!(result.result.get("is_error").unwrap().as_bool().unwrap());
+		assert!(
+			result.result.get("isError").unwrap().as_bool().unwrap(),
+			"Should have isError: true"
+		);
+		let content = result.result["content"].as_array().unwrap()[0]["text"]
+			.as_str()
+			.unwrap();
+		assert!(
+			content.contains("Found 3 matches"),
+			"Should contain multiple matches error message"
+		);
 	}
 
 	#[tokio::test]
@@ -1274,5 +1292,331 @@ mod tests {
 			.as_str()
 			.unwrap()
 			.contains("cannot be empty"));
+	}
+
+	// ===============================
+	// BATCH_EDIT TESTS - NEW REVOLUTIONARY ARCHITECTURE
+	// ===============================
+
+	async fn create_batch_edit_call(path: &str, operations: serde_json::Value) -> McpToolCall {
+		McpToolCall {
+			tool_id: "test_batch_edit".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({
+				"command": "batch_edit",
+				"path": path,
+				"operations": operations
+			}),
+		}
+	}
+
+	#[tokio::test]
+	async fn test_batch_edit_single_insert() {
+		let temp_file = create_test_file("line 1\nline 2\nline 3\n").await;
+		let path = temp_file.path().to_string_lossy().to_string();
+
+		let operations = json!([
+			{
+				"operation": "insert",
+				"line_range": 2,
+				"content": "inserted line"
+			}
+		]);
+
+		let call = create_batch_edit_call(&path, operations).await;
+		let result = crate::mcp::fs::text_editing::batch_edit_spec(
+			&call,
+			call.parameters["operations"].as_array().unwrap(),
+		)
+		.await
+		.unwrap();
+
+		// Check success
+		assert!(
+			result.result.get("error").is_none(),
+			"Operation should succeed"
+		);
+
+		// Verify file content
+		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
+		let expected = "line 1\nline 2\ninserted line\nline 3\n";
+		assert_eq!(
+			actual, expected,
+			"Content should match expected after insert"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_batch_edit_multiple_operations_original_line_numbers() {
+		// Test the CORE FEATURE: all operations use ORIGINAL line numbers
+		let temp_file = create_test_file("line 1\nline 2\nline 3\nline 4\nline 5\n").await;
+		let path = temp_file.path().to_string_lossy().to_string();
+
+		let operations = json!([
+			{
+				"operation": "insert",
+				"line_range": 1,
+				"content": "inserted after line 1"
+			},
+			{
+				"operation": "replace",
+				"line_range": [3, 3],
+				"content": "replaced original line 3"
+			},
+			{
+				"operation": "insert",
+				"line_range": 5,
+				"content": "inserted after original line 5"
+			}
+		]);
+
+		let call = create_batch_edit_call(&path, operations).await;
+		let result = crate::mcp::fs::text_editing::batch_edit_spec(
+			&call,
+			call.parameters["operations"].as_array().unwrap(),
+		)
+		.await
+		.unwrap();
+
+		// Check success
+		assert!(
+			result.result.get("error").is_none(),
+			"Operation should succeed"
+		);
+
+		// Verify file content - operations applied in reverse order to maintain line stability
+		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
+		let expected = "line 1\ninserted after line 1\nline 2\nreplaced original line 3\nline 4\nline 5\ninserted after original line 5\n";
+		assert_eq!(
+			actual, expected,
+			"Content should reflect all operations using original line numbers"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_batch_edit_conflict_detection() {
+		let temp_file = create_test_file("line 1\nline 2\nline 3\n").await;
+		let path = temp_file.path().to_string_lossy().to_string();
+
+		// Conflicting operations: insert after line 2 AND replace line 2
+		let operations = json!([
+			{
+				"operation": "insert",
+				"line_range": 2,
+				"content": "inserted after line 2"
+			},
+			{
+				"operation": "replace",
+				"line_range": [2, 2],
+				"content": "replaced line 2"
+			}
+		]);
+
+		let call = create_batch_edit_call(&path, operations).await;
+		let result = crate::mcp::fs::text_editing::batch_edit_spec(
+			&call,
+			call.parameters["operations"].as_array().unwrap(),
+		)
+		.await
+		.unwrap();
+
+		// Check that it failed due to conflict
+		assert!(
+			result.result.get("content").is_some(),
+			"Should have error content"
+		);
+		let content = result.result["content"].as_array().unwrap()[0]["text"]
+			.as_str()
+			.unwrap();
+		assert!(
+			content.contains("Conflicting operations"),
+			"Should detect conflict"
+		);
+		assert!(
+			content.contains("both affect line 2"),
+			"Should specify conflicting line"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_batch_edit_overlapping_replace_ranges() {
+		let temp_file = create_test_file("line 1\nline 2\nline 3\nline 4\nline 5\n").await;
+		let path = temp_file.path().to_string_lossy().to_string();
+
+		// Overlapping replace ranges: [2,3] and [3,4]
+		let operations = json!([
+			{
+				"operation": "replace",
+				"line_range": [2, 3],
+				"content": "replaced 2-3"
+			},
+			{
+				"operation": "replace",
+				"line_range": [3, 4],
+				"content": "replaced 3-4"
+			}
+		]);
+
+		let call = create_batch_edit_call(&path, operations).await;
+		let result = crate::mcp::fs::text_editing::batch_edit_spec(
+			&call,
+			call.parameters["operations"].as_array().unwrap(),
+		)
+		.await
+		.unwrap();
+
+		// Check that it failed due to overlap
+		assert!(
+			result.result.get("content").is_some(),
+			"Should have error content"
+		);
+		let content = result.result["content"].as_array().unwrap()[0]["text"]
+			.as_str()
+			.unwrap();
+		assert!(
+			content.contains("Conflicting operations"),
+			"Should detect overlap"
+		);
+		assert!(
+			content.contains("both affect line 3"),
+			"Should specify overlapping line"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_batch_edit_missing_path() {
+		let operations = json!([
+			{
+				"operation": "insert",
+				"line_range": 1,
+				"content": "test"
+			}
+		]);
+
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({
+				"command": "batch_edit",
+				"operations": operations
+				// Missing "path"
+			}),
+		};
+
+		let result = crate::mcp::fs::text_editing::batch_edit_spec(
+			&call,
+			call.parameters["operations"].as_array().unwrap(),
+		)
+		.await
+		.unwrap();
+
+		// Check that it failed due to missing path
+		assert!(
+			result.result.get("content").is_some(),
+			"Should have error content"
+		);
+		let content = result.result["content"].as_array().unwrap()[0]["text"]
+			.as_str()
+			.unwrap();
+		assert!(
+			content.contains("Missing required 'path' parameter"),
+			"Should indicate missing path"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_batch_edit_invalid_operation_type() {
+		let temp_file = create_test_file("line 1\nline 2\n").await;
+		let path = temp_file.path().to_string_lossy().to_string();
+
+		let operations = json!([
+			{
+				"operation": "invalid_op",
+				"line_range": 1,
+				"content": "test"
+			}
+		]);
+
+		let call = create_batch_edit_call(&path, operations).await;
+		let result = crate::mcp::fs::text_editing::batch_edit_spec(
+			&call,
+			call.parameters["operations"].as_array().unwrap(),
+		)
+		.await
+		.unwrap();
+
+		// Check that it failed due to invalid operation
+		assert!(
+			result.result.get("content").is_some(),
+			"Should have error content"
+		);
+		let content = result.result["content"].as_array().unwrap()[0]["text"]
+			.as_str()
+			.unwrap();
+		assert!(
+			content.contains("No valid operations found"),
+			"Should indicate no valid operations"
+		);
+		assert!(
+			content.contains("operations failed during parsing"),
+			"Should indicate parsing failure"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_batch_edit_comprehensive_scenario() {
+		// Test a comprehensive scenario with multiple operation types
+		let temp_file = create_test_file(
+			"# Header\nfunction main() {\n    console.log('hello');\n    return 0;\n}\n// Footer\n",
+		)
+		.await;
+		let path = temp_file.path().to_string_lossy().to_string();
+
+		let operations = json!([
+			{
+				"operation": "insert",
+				"line_range": 1,
+				"content": "// Added by batch_edit"
+			},
+			{
+				"operation": "replace",
+				"line_range": [3, 3],
+				"content": "    console.log('Hello, World!');\n    console.log('Batch edit works!');"
+			},
+			{
+				"operation": "insert",
+				"line_range": 6,
+				"content": "// End of file"
+			}
+		]);
+
+		let call = create_batch_edit_call(&path, operations).await;
+		let result = crate::mcp::fs::text_editing::batch_edit_spec(
+			&call,
+			call.parameters["operations"].as_array().unwrap(),
+		)
+		.await
+		.unwrap();
+
+		// Check success
+		assert!(
+			result.result.get("error").is_none(),
+			"Comprehensive operation should succeed"
+		);
+
+		// Verify file content
+		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
+		let expected = "# Header\n// Added by batch_edit\nfunction main() {\n    console.log('Hello, World!');\n    console.log('Batch edit works!');\n    return 0;\n}\n// Footer\n// End of file\n";
+		assert_eq!(
+			actual, expected,
+			"Should handle comprehensive batch edit scenario"
+		);
+
+		// Check result details
+		let batch_summary = &result.result["batch_summary"];
+		assert_eq!(batch_summary["total_operations"], 3);
+		assert_eq!(batch_summary["successful_operations"], 3);
+		assert_eq!(batch_summary["failed_operations"], 0);
+		assert_eq!(batch_summary["overall_success"], true);
 	}
 }

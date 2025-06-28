@@ -183,7 +183,7 @@ Discovery Phase
 
 Implementation Phase
 - view: Verify files before modification with line ranges when know where to read
-- batch_edit: MANDATORY for 2+ files or 3+ changes or parallel tool execution when possible
+- batch_edit: Single file, multiple line operations using ORIGINAL line numbers (insert/replace only)
 - targeted edits: Single changes with immediate verification, can run in parallel to make faster
 
 EFFICIENCY RULES
@@ -240,7 +240,7 @@ Never
 - Execute discovery tools sequentially when parallel execution possible
 - Use single-term queries when multi-term queries available
 - Edit without viewing current contents
-- Use individual edits when batch_edit more efficient
+- Use individual edits when batch_edit more efficient for single-file multi-line operations
 - Implement beyond exact requirements
 - Memorize before user confirms task completion
 - Duplicate code instead of reusing existing utilities

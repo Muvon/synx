@@ -163,15 +163,15 @@ pub fn get_text_editor_function() -> McpFunction {
 			- `{\"command\": \"undo_edit\", \"path\": \"src/main.rs\"}`
 			- Available for str_replace, insert, and line_replace operations
 
-			`batch_edit`: Perform multiple text editing operations in single call
-			- `{\"command\": \"batch_edit\", \"operations\": [{\"operation\": \"str_replace\", \"path\": \"src/main.rs\", \"old_str\": \"old\", \"new_str\": \"new\"}, {\"operation\": \"insert\", \"path\": \"src/lib.rs\", \"insert_line\": 5, \"new_str\": \"// New comment\"}]}`
-			- ALWAYS USE when making 2+ changes across multiple files
-			- ALWAYS USE when making 3+ changes in same file
-			- 10x more efficient than individual operations
-			- Saves tokens - one tool call instead of many
-			- Perfect for: refactoring, consistent changes, multi-file updates
-			- Supported operations: str_replace, insert, line_replace
-			- MANDATORY for planned multi-file changes
+			`batch_edit`: Perform multiple line-based operations on a SINGLE file
+			- `{\"command\": \"batch_edit\", \"path\": \"src/main.rs\", \"operations\": [{\"operation\": \"insert\", \"line_range\": 5, \"content\": \"new line\"}, {\"operation\": \"replace\", \"line_range\": [10, 12], \"content\": \"replacement\"}]}`
+			- REVOLUTIONARY: Single file, multiple operations, ALL using ORIGINAL line numbers
+			- Operations: 'insert' (after line) and 'replace' (line range)
+			- line_range: Single number [5] or range [10, 12] (1-indexed)
+			- content: Raw text content (no escaping needed)
+			- Conflict detection: Prevents overlapping operations
+			- Atomic operation: All changes applied in single write
+			- CRITICAL: All line numbers reference ORIGINAL file content before ANY modifications
 
 			Error Handling:
 			- File not found: Returns descriptive error message
@@ -271,41 +271,28 @@ pub fn get_text_editor_function() -> McpFunction {
 					"type": "array",
 					"items": {
 						"type": "object",
-						"required": ["operation", "path"],
+						"required": ["operation", "line_range", "content"],
 						"properties": {
 							"operation": {
 								"type": "string",
-								"enum": ["str_replace", "insert", "line_replace"],
-								"description": "Type of operation to perform"
+								"enum": ["insert", "replace"],
+								"description": "Type of operation: 'insert' (after line) or 'replace' (line range)"
 							},
-							"path": {
+							"line_range": {
+								"oneOf": [
+									{"type": "integer", "minimum": 0, "description": "Single line number for insert (0=beginning, N=after line N)"},
+									{"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 2, "description": "Line range [start] or [start, end] (1-indexed, inclusive)"}
+								],
+								"description": "CRITICAL: Line numbers from ORIGINAL file content (before any modifications). Insert: single number (after which line). Replace: [start, end] range (inclusive, 1-indexed)"
+							},
+							"content": {
 								"type": "string",
-								"description": "Path to the file to modify"
-							},
-							"old_str": {
-								"type": "string",
-								"description": "Text to replace (required for str_replace)"
-							},
-							"new_str": {
-								"type": "string",
-								"description": "New text content (required for all operations)"
-							},
-							"insert_line": {
-								"type": "integer",
-								"minimum": 0,
-								"description": "Line number after which to insert (required for insert)"
-							},
-							"view_range": {
-								"type": "array",
-								"items": {"type": "integer"},
-								"minItems": 2,
-								"maxItems": 2,
-								"description": "Line range [start, end] for line_replace (required for line_replace)"
+								"description": "Raw content to insert or replace with (no escaping needed - use actual tabs/spaces)"
 							}
 						}
 					},
 					"maxItems": 50,
-					"description": "Array of operations for batch_edit command (maximum 50 operations)"
+					"description": "Array of operations for batch_edit on SINGLE file. All line_range values reference ORIGINAL file content."
 				}
 			}
 		}),

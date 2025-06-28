@@ -21,6 +21,27 @@ use serde_json::{json, Value};
 use std::path::Path;
 use tokio::fs as tokio_fs;
 
+// Batch operation structures for the new single-file, multi-operation approach
+#[derive(Debug, Clone)]
+struct BatchOperation {
+	operation_type: OperationType,
+	line_range: LineRange,
+	content: String,
+	operation_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum OperationType {
+	Insert,
+	Replace,
+}
+
+#[derive(Debug, Clone)]
+enum LineRange {
+	Single(usize),       // Insert after this line (0 = beginning of file)
+	Range(usize, usize), // Replace this range (inclusive, 1-indexed)
+}
+
 // Replace a string in a file following Anthropic specification
 pub async fn str_replace_spec(
 	call: &McpToolCall,
@@ -346,11 +367,232 @@ pub async fn line_replace_spec(
 	})
 }
 
-// Batch edit operations - perform multiple text editing operations in a single call
-// This is recommended for making changes across multiple files or multiple non-interconnected modifications
+// Check for conflicting operations on the same lines
+fn detect_conflicts(operations: &[BatchOperation]) -> Result<(), String> {
+	for i in 0..operations.len() {
+		for j in (i + 1)..operations.len() {
+			let op1 = &operations[i];
+			let op2 = &operations[j];
+
+			// Get affected lines for each operation
+			let lines1 = get_affected_lines(&op1.line_range);
+			let lines2 = get_affected_lines(&op2.line_range);
+
+			// Check for overlap
+			for line1 in &lines1 {
+				for line2 in &lines2 {
+					if line1 == line2 {
+						return Err(format!(
+							"Conflicting operations: operation {} and {} both affect line {}",
+							op1.operation_index, op2.operation_index, line1
+						));
+					}
+				}
+			}
+		}
+	}
+	Ok(())
+}
+
+// Get all lines affected by an operation
+fn get_affected_lines(line_range: &LineRange) -> Vec<usize> {
+	match line_range {
+		LineRange::Single(line) => {
+			// Insert affects the line it inserts after (for conflict detection)
+			vec![*line]
+		}
+		LineRange::Range(start, end) => {
+			// Replace affects all lines in the range
+			(*start..=*end).collect()
+		}
+	}
+}
+
+// Apply all operations to the original file content
+async fn apply_batch_operations(
+	original_content: &str,
+	operations: &[BatchOperation],
+) -> Result<String> {
+	let mut lines: Vec<String> = original_content.lines().map(|s| s.to_string()).collect();
+
+	// Sort operations by line position in reverse order to maintain line number stability
+	let mut sorted_ops = operations.to_vec();
+	sorted_ops.sort_by(|a, b| {
+		let pos_a = match &a.line_range {
+			LineRange::Single(line) => *line,
+			LineRange::Range(start, _) => *start,
+		};
+		let pos_b = match &b.line_range {
+			LineRange::Single(line) => *line,
+			LineRange::Range(start, _) => *start,
+		};
+		pos_b.cmp(&pos_a) // Reverse order
+	});
+
+	// Apply operations from highest line number to lowest
+	for operation in sorted_ops {
+		match operation.operation_type {
+			OperationType::Insert => {
+				let insert_after = match operation.line_range {
+					LineRange::Single(line) => line,
+					_ => return Err(anyhow!("Insert operation must use single line number")),
+				};
+
+				// Validate line number
+				if insert_after > lines.len() {
+					return Err(anyhow!(
+						"Insert position {} is beyond file length {}",
+						insert_after,
+						lines.len()
+					));
+				}
+
+				// Split content by lines and insert
+				let content_lines: Vec<String> =
+					operation.content.lines().map(|s| s.to_string()).collect();
+
+				if insert_after == 0 {
+					// Insert at beginning
+					for (i, line) in content_lines.into_iter().enumerate() {
+						lines.insert(i, line);
+					}
+				} else {
+					// Insert after specified line
+					for (i, line) in content_lines.into_iter().enumerate() {
+						lines.insert(insert_after + i, line);
+					}
+				}
+			}
+			OperationType::Replace => {
+				let (start, end) = match operation.line_range {
+					LineRange::Range(start, end) => (start, end),
+					LineRange::Single(line) => (line, line), // Single line replacement
+				};
+
+				// Validate line range (1-indexed)
+				if start == 0 || end == 0 {
+					return Err(anyhow!("Line numbers must be 1-indexed (start from 1)"));
+				}
+				if start > lines.len() || end > lines.len() {
+					return Err(anyhow!(
+						"Line range [{}, {}] is beyond file length {}",
+						start,
+						end,
+						lines.len()
+					));
+				}
+				if start > end {
+					return Err(anyhow!("Invalid line range: start {} > end {}", start, end));
+				}
+
+				// Remove the lines to be replaced (convert to 0-indexed)
+				let start_idx = start - 1;
+				let end_idx = end - 1;
+
+				// Remove lines in reverse order
+				for _ in start_idx..=end_idx {
+					lines.remove(start_idx);
+				}
+
+				// Insert new content
+				let content_lines: Vec<String> =
+					operation.content.lines().map(|s| s.to_string()).collect();
+				for (i, line) in content_lines.into_iter().enumerate() {
+					lines.insert(start_idx + i, line);
+				}
+			}
+		}
+	}
+
+	// Preserve original file ending format
+	let result = lines.join("\n");
+	if original_content.ends_with('\n') && !result.ends_with('\n') {
+		Ok(format!("{}\n", result))
+	} else {
+		Ok(result)
+	}
+}
+
+// Parse line_range from JSON value (supports both single number and array)
+fn parse_line_range(value: &Value, operation_type: &OperationType) -> Result<LineRange, String> {
+	match value {
+		Value::Number(n) => {
+			let line = n.as_u64().ok_or("Line number must be a positive integer")? as usize;
+			match operation_type {
+				OperationType::Insert => Ok(LineRange::Single(line)),
+				OperationType::Replace => Ok(LineRange::Range(line, line)), // Single line replace
+			}
+		}
+		Value::Array(arr) => {
+			if arr.len() == 1 {
+				let line = arr[0]
+					.as_u64()
+					.ok_or("Line number must be a positive integer")? as usize;
+				match operation_type {
+					OperationType::Insert => Ok(LineRange::Single(line)),
+					OperationType::Replace => Ok(LineRange::Range(line, line)),
+				}
+			} else if arr.len() == 2 {
+				let start = arr[0]
+					.as_u64()
+					.ok_or("Start line must be a positive integer")? as usize;
+				let end = arr[1]
+					.as_u64()
+					.ok_or("End line must be a positive integer")? as usize;
+				match operation_type {
+					OperationType::Insert => Err(
+						"Insert operation cannot use line range - use single line number"
+							.to_string(),
+					),
+					OperationType::Replace => Ok(LineRange::Range(start, end)),
+				}
+			} else {
+				Err("Line range array must have 1 or 2 elements".to_string())
+			}
+		}
+		_ => Err("Line range must be a number or array".to_string()),
+	}
+}
+
+// NEW REVOLUTIONARY BATCH_EDIT: Single file, multiple operations, original line numbers
 pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result<McpToolResult> {
-	let mut results = Vec::new();
-	let mut successful_operations = 0;
+	// Extract path from the call parameters - NEW: single file only
+	let path_str = match call.parameters.get("path").and_then(|v| v.as_str()) {
+		Some(p) => p,
+		None => {
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				"Missing required 'path' parameter for batch_edit".to_string(),
+			));
+		}
+	};
+
+	let path = Path::new(path_str);
+
+	// Check if file exists
+	if !path.exists() {
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!("File not found: {}", path_str),
+		));
+	}
+
+	// Read original file content
+	let original_content = match tokio_fs::read_to_string(path).await {
+		Ok(content) => content,
+		Err(e) => {
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				format!("Failed to read file '{}': {}", path_str, e),
+			));
+		}
+	};
+
+	// Parse and validate all operations
+	let mut batch_operations = Vec::new();
 	let mut failed_operations = 0;
 	let mut operation_details = Vec::new();
 
@@ -369,7 +611,7 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 		};
 
 		// Extract operation type
-		let op_type = match operation_obj.get("operation").and_then(|v| v.as_str()) {
+		let op_type_str = match operation_obj.get("operation").and_then(|v| v.as_str()) {
 			Some(op) => op,
 			None => {
 				failed_operations += 1;
@@ -382,220 +624,152 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 			}
 		};
 
-		// Extract path
-		let path_str = match operation_obj.get("path").and_then(|v| v.as_str()) {
-			Some(p) => p,
-			None => {
-				failed_operations += 1;
-				operation_details.push(json!({
-					"operation_index": index,
-					"status": "failed",
-					"error": "Missing 'path' field"
-				}));
-				continue;
-			}
-		};
-
-		let path = Path::new(path_str);
-
-		// Create a temporary McpToolCall for individual operations
-		let temp_call = McpToolCall {
-			tool_id: format!("{}_batch_{}", call.tool_id, index),
-			tool_name: call.tool_name.clone(),
-			parameters: (*operation).clone(),
-		};
-
-		// Execute the operation based on type
-		let operation_result = match op_type {
-			"str_replace" => {
-				let old_str = match operation_obj.get("old_str").and_then(|v| v.as_str()) {
-					Some(s) => s,
-					None => {
-						failed_operations += 1;
-						operation_details.push(json!({
-							"operation_index": index,
-							"operation": op_type,
-							"path": path_str,
-							"status": "failed",
-							"error": "Missing 'old_str' field for str_replace operation"
-						}));
-						continue;
-					}
-				};
-
-				let new_str = match operation_obj.get("new_str").and_then(|v| v.as_str()) {
-					Some(s) => s,
-					None => {
-						failed_operations += 1;
-						operation_details.push(json!({
-							"operation_index": index,
-							"operation": op_type,
-							"path": path_str,
-							"status": "failed",
-							"error": "Missing 'new_str' field for str_replace operation"
-						}));
-						continue;
-					}
-				};
-
-				str_replace_spec(&temp_call, path, old_str, new_str).await
-			}
-			"insert" => {
-				let insert_line = match operation_obj.get("insert_line").and_then(|v| v.as_u64()) {
-					Some(n) => n as usize,
-					None => {
-						failed_operations += 1;
-						operation_details.push(json!({
-							"operation_index": index,
-							"operation": op_type,
-							"path": path_str,
-							"status": "failed",
-							"error": "Missing or invalid 'insert_line' field for insert operation"
-						}));
-						continue;
-					}
-				};
-
-				let new_str = match operation_obj.get("new_str").and_then(|v| v.as_str()) {
-					Some(s) => s,
-					None => {
-						failed_operations += 1;
-						operation_details.push(json!({
-							"operation_index": index,
-							"operation": op_type,
-							"path": path_str,
-							"status": "failed",
-							"error": "Missing 'new_str' field for insert operation"
-						}));
-						continue;
-					}
-				};
-
-				insert_text_spec(&temp_call, path, insert_line, new_str).await
-			}
-			"line_replace" => {
-				let view_range = match operation_obj.get("view_range").and_then(|v| v.as_array()) {
-					Some(arr) if arr.len() == 2 => {
-						let start = arr[0].as_u64().unwrap_or(0) as usize;
-						let end = arr[1].as_u64().unwrap_or(0) as usize;
-						if start == 0 || end == 0 {
-							failed_operations += 1;
-							operation_details.push(json!({
-								"operation_index": index,
-								"operation": op_type,
-								"path": path_str,
-								"status": "failed",
-								"error": "Invalid 'view_range' - line numbers must be 1-indexed"
-							}));
-							continue;
-						}
-						(start, end)
-					}
-					_ => {
-						failed_operations += 1;
-						operation_details.push(json!({
-							"operation_index": index,
-							"operation": op_type,
-							"path": path_str,
-							"status": "failed",
-							"error": "Missing or invalid 'view_range' field for line_replace operation"
-						}));
-						continue;
-					}
-				};
-
-				let new_str = match operation_obj.get("new_str").and_then(|v| v.as_str()) {
-					Some(s) => s,
-					None => {
-						failed_operations += 1;
-						operation_details.push(json!({
-							"operation_index": index,
-							"operation": op_type,
-							"path": path_str,
-							"status": "failed",
-							"error": "Missing 'new_str' field for line_replace operation"
-						}));
-						continue;
-					}
-				};
-
-				line_replace_spec(&temp_call, path, view_range, new_str).await
-			}
+		// Parse operation type
+		let operation_type = match op_type_str {
+			"insert" => OperationType::Insert,
+			"replace" => OperationType::Replace,
 			_ => {
 				failed_operations += 1;
 				operation_details.push(json!({
 					"operation_index": index,
-					"operation": op_type,
-					"path": path_str,
+					"operation": op_type_str,
 					"status": "failed",
-					"error": format!("Unsupported operation type: '{}'. Supported operations: str_replace, insert, line_replace", op_type)
+					"error": format!("Unsupported operation type: '{}'. Supported operations: insert, replace", op_type_str)
 				}));
 				continue;
 			}
 		};
 
-		// Process the result
-		match operation_result {
-			Ok(result) => {
-				successful_operations += 1;
-				operation_details.push(json!({
-					"operation_index": index,
-					"operation": op_type,
-					"path": path_str,
-					"status": "success",
-					"result": result.result
-				}));
-				results.push(result);
-			}
-			Err(e) => {
+		// Extract line_range
+		let line_range = match operation_obj.get("line_range") {
+			Some(range_value) => match parse_line_range(range_value, &operation_type) {
+				Ok(range) => range,
+				Err(e) => {
+					failed_operations += 1;
+					operation_details.push(json!({
+						"operation_index": index,
+						"operation": op_type_str,
+						"status": "failed",
+						"error": format!("Invalid 'line_range': {}", e)
+					}));
+					continue;
+				}
+			},
+			None => {
 				failed_operations += 1;
 				operation_details.push(json!({
 					"operation_index": index,
-					"operation": op_type,
-					"path": path_str,
+					"operation": op_type_str,
 					"status": "failed",
-					"error": e.to_string()
+					"error": "Missing 'line_range' field"
 				}));
+				continue;
 			}
+		};
+
+		// Extract content
+		let content = match operation_obj.get("content").and_then(|v| v.as_str()) {
+			Some(c) => c.to_string(),
+			None => {
+				failed_operations += 1;
+				operation_details.push(json!({
+					"operation_index": index,
+					"operation": op_type_str,
+					"status": "failed",
+					"error": "Missing 'content' field"
+				}));
+				continue;
+			}
+		};
+
+		// Create batch operation
+		batch_operations.push(BatchOperation {
+			operation_type,
+			line_range,
+			content,
+			operation_index: index,
+		});
+
+		operation_details.push(json!({
+			"operation_index": index,
+			"operation": op_type_str,
+			"status": "parsed",
+			"line_range": match &batch_operations.last().unwrap().line_range {
+				LineRange::Single(line) => json!(line),
+				LineRange::Range(start, end) => json!([start, end]),
+			}
+		}));
+	}
+
+	// If all operations failed during parsing, return error
+	if batch_operations.is_empty() {
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!(
+				"No valid operations found. {} operations failed during parsing.",
+				failed_operations
+			),
+		));
+	}
+
+	// Check for conflicts between operations
+	if let Err(conflict_error) = detect_conflicts(&batch_operations) {
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			conflict_error,
+		));
+	}
+
+	// Apply all operations to the original content
+	let final_content = match apply_batch_operations(&original_content, &batch_operations).await {
+		Ok(content) => content,
+		Err(e) => {
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				format!("Failed to apply operations: {}", e),
+			));
+		}
+	};
+
+	// Save file history for undo functionality
+	save_file_history(path).await?;
+
+	// Write the final content to file
+	if let Err(e) = tokio_fs::write(path, &final_content).await {
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!("Failed to write file '{}': {}", path_str, e),
+		));
+	}
+
+	// Update operation details with success status
+	for detail in &mut operation_details {
+		if detail["status"] == "parsed" {
+			detail["status"] = json!("success");
 		}
 	}
 
-	// Check if this is a corrected AI format issue
-	let ai_format_warning = call
-		.parameters
-		.get("_ai_format_warning")
-		.and_then(|v| v.as_bool())
-		.unwrap_or(false);
-
-	// Determine overall success
-	let overall_success = failed_operations == 0;
-	let mut summary_message = if overall_success {
-		format!(
-			"Successfully completed all {} batch operations",
-			successful_operations
-		)
-	} else {
-		format!(
-			"Completed {} operations successfully, {} failed",
-			successful_operations, failed_operations
-		)
-	};
-
-	// Add warning if AI used incorrect parameter format
-	if ai_format_warning {
-		summary_message.push_str("\n\nNOTE: Operations completed successfully, but next time please pass 'operations' as an array directly instead of a JSON string for better performance.");
-	}
+	let successful_operations = batch_operations.len();
+	let total_operations = operations.len();
 
 	Ok(McpToolResult {
 		tool_name: "text_editor".to_string(),
 		tool_id: call.tool_id.clone(),
 		result: json!({
-			"content": summary_message,
+			"content": format!(
+				"Successfully applied {} operations to '{}'. All operations used ORIGINAL line numbers from the file content before any modifications.",
+				successful_operations, path_str
+			),
+			"path": path_str,
 			"batch_summary": {
-				"total_operations": operations.len(),
+				"total_operations": total_operations,
 				"successful_operations": successful_operations,
 				"failed_operations": failed_operations,
-				"overall_success": overall_success
+				"overall_success": failed_operations == 0
 			},
 			"operation_details": operation_details
 		}),
