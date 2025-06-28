@@ -28,10 +28,10 @@
 - **User handles**: All complex validation with checking if it works or not
 
 ### **DEVELOPMENT BUILD EFFICIENCY**
-- **ALWAYS use `cargo check`** for syntax/compilation verification - fastest option
+- **ALWAYS use `cargo check --message-format=short`** for syntax/compilation verification - fastest option
 - **NEVER use `cargo build --release`** - extremely slow, wastes development time
 - **Use `cargo build` (debug)** only when you need to run the actual binary
-- **Focus on `cargo check`** for iterative development and validation
+- **Focus on `cargo check --message-format=short`** for iterative development and validation
 - **Run `cargo clippy --all-features --all-targets -- -D warnings`** to fix ALL code quality issues (treat warnings as errors)
 
 ### **NEVER HIDE ERRORS WITH FALLBACKS**
@@ -312,7 +312,7 @@ match tool::execute_command(call, token).await {
 - **Cache**: `/cache` to manually mark cache points, `/info` to see costs/tokens
 
 ### Development Workflow
-- **Build Check**: `cargo check` - fastest compilation verification (PREFERRED)
+- **Build Check**: `cargo check --message-format=short` - fastest compilation verification (PREFERRED)
 - **Code Quality**: `cargo clippy --all-features --all-targets -- -D warnings` - fix ALL code quality issues (treat warnings as errors)
 - **Debug Build**: `cargo build` - only when you need to run the actual binary
 - **NEVER**: `cargo build --release` - extremely slow, avoid during development
