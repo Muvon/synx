@@ -41,7 +41,7 @@ type SessionParams = (
 
 // Helper function to extract session parameters from Debug format
 // This allows both SessionArgs and RunArgs (after conversion) to work
-fn extract_session_params<T: std::fmt::Debug>(args: &T) -> SessionParams {
+fn extract_session_params<T: std::fmt::Debug>(args: &T, config: &Config) -> SessionParams {
 	let args_str = format!("{:?}", args);
 
 	// Get model
@@ -80,7 +80,8 @@ fn extract_session_params<T: std::fmt::Debug>(args: &T) -> SessionParams {
 		"developer".to_string() // Default role
 	};
 
-	// Get temperature
+	// Get temperature - this should come from role config in proper implementation
+	// The current parsing is a hack - temperature should be passed properly
 	let temperature = if args_str.contains("temperature: ") {
 		let start = args_str.find("temperature: ").unwrap() + 13;
 		let end = args_str[start..].find(',').unwrap_or(
@@ -88,9 +89,14 @@ fn extract_session_params<T: std::fmt::Debug>(args: &T) -> SessionParams {
 				.find('}')
 				.unwrap_or(args_str.len() - start),
 		) + start;
-		args_str[start..end].trim().parse::<f32>().unwrap_or(0.7)
+		args_str[start..end]
+			.trim()
+			.parse::<f32>()
+			.expect("Invalid temperature format in session arguments")
 	} else {
-		0.7 // Default temperature
+		// Get temperature from role config instead of hardcoding
+		let (role_config, _, _, _, _) = config.get_role_config(&role);
+		role_config.temperature
 	};
 
 	// Get max_tokens
@@ -134,7 +140,7 @@ fn extract_session_params<T: std::fmt::Debug>(args: &T) -> SessionParams {
 pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Config) -> Result<()> {
 	// Extract session parameters
 	let (name, resume, model, max_tokens, temperature, role, max_retries) =
-		extract_session_params(args);
+		extract_session_params(args, config);
 	// For developer role, show MCP server status
 	let current_dir = std::env::current_dir()?;
 
@@ -986,7 +992,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 ) -> Result<()> {
 	// Extract session parameters
 	let (name, resume, model, max_tokens, temperature, role, max_retries) =
-		extract_session_params(args);
+		extract_session_params(args, config);
 
 	// Suppress MCP server status messages for non-interactive mode
 	let current_dir = std::env::current_dir()?;

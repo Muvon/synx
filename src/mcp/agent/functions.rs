@@ -263,12 +263,17 @@ async fn execute_call_llm(
 		.and_then(|v| v.as_str())
 		.ok_or_else(|| anyhow::anyhow!("call_llm requires 'system' parameter"))?;
 
-	// Extract optional parameters with defaults
+	// Extract optional parameters - temperature must come from role config, not hardcoded
+	// For agent calls, we need to get the default role's temperature
+	let role_config_result = config.get_role_config("developer");
+	let (default_role_config, _, _, _, _) = role_config_result;
+
 	let temperature = call
 		.parameters
 		.get("temperature")
 		.and_then(|v| v.as_f64())
-		.unwrap_or(0.7) as f32;
+		.map(|t| t as f32)
+		.unwrap_or(default_role_config.temperature);
 
 	let max_tokens = call
 		.parameters
