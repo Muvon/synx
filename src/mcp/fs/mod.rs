@@ -25,5 +25,7 @@ pub mod text_editing;
 mod fs_tests;
 
 // Re-export main functionality
-pub use core::{execute_extract_lines, execute_list_files, execute_text_editor};
+pub use core::{
+	execute_batch_edit, execute_extract_lines, execute_list_files, execute_text_editor,
+};
 pub use functions::get_all_functions;

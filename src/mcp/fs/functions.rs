@@ -163,16 +163,6 @@ pub fn get_text_editor_function() -> McpFunction {
 			- `{\"command\": \"undo_edit\", \"path\": \"src/main.rs\"}`
 			- Available for str_replace, insert, and line_replace operations
 
-			`batch_edit`: Perform multiple line-based operations on a SINGLE file
-			- `{\"command\": \"batch_edit\", \"path\": \"src/main.rs\", \"operations\": [{\"operation\": \"insert\", \"line_range\": 5, \"content\": \"new line\"}, {\"operation\": \"replace\", \"line_range\": [10, 12], \"content\": \"replacement\"}]}`
-			- REVOLUTIONARY: Single file, multiple operations, ALL using ORIGINAL line numbers
-			- Operations: 'insert' (after line) and 'replace' (line range)
-			- line_range: Single number [5] or range [10, 12] (1-indexed)
-			- content: Raw text content (no escaping needed)
-			- Conflict detection: Prevents overlapping operations
-			- Atomic operation: All changes applied in single write
-			- CRITICAL: All line numbers reference ORIGINAL file content before ANY modifications
-
 			Error Handling:
 			- File not found: Returns descriptive error message
 			- Multiple matches: Returns error asking for more specific context
@@ -185,17 +175,9 @@ pub fn get_text_editor_function() -> McpFunction {
 			- Never assume line numbers from previous operations - they change after every edit
 
 			OPTIMAL WORKFLOW:
-			- PLAN FIRST: If 2+ files or 3+ edits → USE batch_edit
 			- Use `view` to see file structure and get line numbers
-			- For multiple changes: use `batch_edit` (10x more efficient)
 			- For single changes: use `line_replace` ONCE per file
 			- If more edits needed: `view` again to get fresh line numbers, then `line_replace` again
-
-			CHOOSE batch_edit when:
-			- Making 2+ changes across different files
-			- Making 3+ changes in same file (any combination of operations)
-			- Applying same change pattern across multiple files
-			- Want maximum efficiency (10x faster than individual calls)
 
 			CHOOSE line_replace when:
 			- You know exact line numbers and need to change one or more lines with new
@@ -230,8 +212,8 @@ pub fn get_text_editor_function() -> McpFunction {
 			"properties": {
 				"command": {
 					"type": "string",
-					"enum": ["view", "view_many", "create", "str_replace", "insert", "line_replace", "undo_edit", "batch_edit"],
-					"description": "The operation to perform: view, view_many, create, str_replace, insert, line_replace, undo_edit, or batch_edit"
+					"enum": ["view", "view_many", "create", "str_replace", "insert", "line_replace", "undo_edit"],
+					"description": "The operation to perform: view, view_many, create, str_replace, insert, line_replace, undo_edit"
 				},
 				"path": {
 					"type": "string",
@@ -267,33 +249,6 @@ pub fn get_text_editor_function() -> McpFunction {
 					"minimum": 0,
 					"description": "Line number after which to insert text (0 for beginning of file, 1-indexed)"
 				},
-				"operations": {
-					"type": "array",
-					"items": {
-						"type": "object",
-						"required": ["operation", "line_range", "content"],
-						"properties": {
-							"operation": {
-								"type": "string",
-								"enum": ["insert", "replace"],
-								"description": "Type of operation: 'insert' (after line) or 'replace' (line range)"
-							},
-							"line_range": {
-								"oneOf": [
-									{"type": "integer", "minimum": 0, "description": "Single line number for insert (0=beginning, N=after line N)"},
-									{"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 2, "description": "Line range [start] or [start, end] (1-indexed, inclusive)"}
-								],
-								"description": "CRITICAL: Line numbers from ORIGINAL file content (before any modifications). Insert: single number (after which line). Replace: [start, end] range (inclusive, 1-indexed)"
-							},
-							"content": {
-								"type": "string",
-								"description": "Raw content to insert or replace with (no escaping needed - use actual tabs/spaces)"
-							}
-						}
-					},
-					"maxItems": 50,
-					"description": "Array of operations for batch_edit on SINGLE file. All line_range values reference ORIGINAL file content."
-				}
 			}
 		}),
 	}
@@ -364,10 +319,105 @@ pub fn get_extract_lines_function() -> McpFunction {
 	}
 }
 
+// Define the batch_edit function - extracted from text_editor for simplicity
+pub fn get_batch_edit_function() -> McpFunction {
+	McpFunction {
+		name: "batch_edit".to_string(),
+		description: "Perform multiple line-based operations on a SINGLE file using original line numbers.
+
+			This tool performs multiple insert and replace operations on a single file in one atomic operation.
+			All operations use the ORIGINAL file line numbers before any modifications, ensuring line stability.
+
+			**REVOLUTIONARY FEATURES:**
+			- Single file, multiple operations in one call
+			- ALL line numbers reference ORIGINAL file content (before ANY modifications)
+			- Conflict detection prevents overlapping operations
+			- Atomic operation - all changes applied in single write
+			- Operations: 'insert' (after line) and 'replace' (line range)
+
+			**Parameters:**
+			- `path` (string, required): Path to the file to edit
+			- `operations` (array, required): Array of operations to perform
+
+			**Operation Structure:**
+			- `operation` (string): 'insert' or 'replace'
+			- `line_range`: Single number for insert (after which line), [start, end] array for replace (1-indexed, inclusive)
+			- `content` (string): Raw text content (no escaping needed)
+
+			**Examples:**
+			- Single insert: `{\"path\": \"src/main.rs\", \"operations\": [{\"operation\": \"insert\", \"line_range\": 5, \"content\": \"new line\"}]}`
+			- Multiple ops: `{\"path\": \"src/main.rs\", \"operations\": [{\"operation\": \"insert\", \"line_range\": 1, \"content\": \"header\"}, {\"operation\": \"replace\", \"line_range\": [3, 3], \"content\": \"replaced\"}]}`
+
+			**Conflict Detection:**
+			- Prevents overlapping line ranges
+			- Insert after line N conflicts with replace of line N
+			- Clear error messages for conflicting operations
+
+			**Use Cases:**
+			- Multiple edits in single file (3+ changes)
+			- Refactoring with multiple line modifications
+			- Template processing with multiple substitutions
+			- Code generation with multiple insertions
+
+			**CRITICAL:**
+			- All line numbers reference ORIGINAL file content before ANY modifications
+			- Operations applied in reverse order to maintain line stability
+			- Maximum 50 operations per call for performance".to_string(),
+		parameters: json!({
+			"type": "object",
+			"properties": {
+				"path": {
+					"type": "string",
+					"description": "Path to the file to edit"
+				},
+				"operations": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"operation": {
+								"type": "string",
+								"enum": ["insert", "replace"],
+								"description": "Type of operation: 'insert' (after line) or 'replace' (line range)"
+							},
+							"line_range": {
+								"oneOf": [
+									{
+										"type": "integer",
+										"minimum": 0,
+										"description": "Single line number for insert (0=beginning, N=after line N)"
+									},
+									{
+										"type": "array",
+										"items": {"type": "integer", "minimum": 1},
+										"minItems": 1,
+										"maxItems": 2,
+										"description": "Line range [start] or [start, end] (1-indexed, inclusive)"
+									}
+								],
+								"description": "CRITICAL: Line numbers from ORIGINAL file content (before any modifications). Insert: single number (after which line). Replace: [start, end] range (inclusive, 1-indexed)"
+							},
+							"content": {
+								"type": "string",
+								"description": "Raw content to insert or replace with (no escaping needed - use actual tabs/spaces)"
+							}
+						},
+						"required": ["operation", "line_range", "content"]
+					},
+					"maxItems": 50,
+					"description": "Array of operations for batch_edit on SINGLE file. All line_range values reference ORIGINAL file content."
+				}
+			},
+			"required": ["path", "operations"]
+		}),
+	}
+}
+
 // Get all available filesystem functions
 pub fn get_all_functions() -> Vec<McpFunction> {
 	vec![
 		get_text_editor_function(),
+		get_batch_edit_function(),
 		get_list_files_function(),
 		get_extract_lines_function(),
 	]

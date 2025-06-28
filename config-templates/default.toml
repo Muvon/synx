@@ -183,7 +183,7 @@ Discovery Phase
 
 Implementation Phase
 - view: Verify files before modification with line ranges when know where to read
-- batch_edit: Single file, multiple line operations using ORIGINAL line numbers (insert/replace only)
+- batch_edit: SEPARATE TOOL for single file, multiple line operations using ORIGINAL line numbers
 - targeted edits: Single changes with immediate verification, can run in parallel to make faster
 
 EFFICIENCY RULES
@@ -240,7 +240,7 @@ Never
 - Execute discovery tools sequentially when parallel execution possible
 - Use single-term queries when multi-term queries available
 - Edit without viewing current contents
-- Use individual edits when batch_edit more efficient for single-file multi-line operations
+- Use individual edits when batch_edit tool more efficient for single-file multi-line operations
 - Implement beyond exact requirements
 - Memorize before user confirms task completion
 - Duplicate code instead of reusing existing utilities
@@ -571,7 +571,7 @@ allowed_tools = []
 #
 # [layers.mcp]
 # server_refs = ["developer", "filesystem"]
-# allowed_tools = ["text_editor", "list_files"]
+# allowed_tools = ["text_editor", "batch_edit", "list_files"]
 #
 # [[layers]]
 # name = "debugger"
@@ -720,4 +720,4 @@ output_mode = "none"  # Return only the gathered context (cleanest for tool use)
 
 [agents.mcp]
 server_refs = ["filesystem", "octocode"]
-allowed_tools = ["text_editor", "list_files", "semantic_search", "view_signatures"]
+allowed_tools = ["text_editor", "batch_edit", "list_files", "semantic_search", "view_signatures"]

@@ -435,68 +435,10 @@ pub async fn execute_text_editor(
 			};
 			undo_edit(call, Path::new(&path)).await
 		},
-		"batch_edit" => {
-			// Check for cancellation before batch_edit operation
-			if let Some(ref token) = cancellation_token {
-				if token.load(Ordering::SeqCst) {
-					return Ok(McpToolResult::error(call.tool_name.clone(), call.tool_id.clone(), "Text editor operation cancelled".to_string()));
-				}
-			}
-
-			let (operations_vec, ai_format_warning) = match call.parameters.get("operations") {
-				Some(Value::Array(ops)) => {
-					// Correct format - AI passed array directly
-					if ops.len() > 50 {
-						return Ok(McpToolResult::error(
-							call.tool_name.clone(),
-							call.tool_id.clone(),
-							"Too many operations in batch. Maximum 50 operations allowed.".to_string(),
-						));
-					}
-					(ops.clone(), false)
-				},
-				Some(Value::String(ops_str)) => {
-					// AI incorrectly passed operations as JSON string - try to parse it
-					match serde_json::from_str::<Vec<Value>>(ops_str) {
-						Ok(parsed_ops) => {
-							if parsed_ops.len() > 50 {
-								return Ok(McpToolResult::error(
-									call.tool_name.clone(),
-									call.tool_id.clone(),
-									"Too many operations in batch. Maximum 50 operations allowed.".to_string(),
-								));
-							}
-							crate::log_debug!("AI passed operations as JSON string instead of array - parsing defensively");
-							(parsed_ops, true)
-						},
-						Err(_) => {
-							return Ok(McpToolResult::error(
-								call.tool_name.clone(),
-								call.tool_id.clone(),
-								"Invalid 'operations' parameter for batch_edit command - must be an array or valid JSON array string".to_string(),
-							));
-						}
-					}
-				},
-				_ => return Ok(McpToolResult::error(
-				call.tool_name.clone(),
-				call.tool_id.clone(),
-				"Missing or invalid 'operations' parameter for batch_edit command - must be an array".to_string(),
-			)),
-			};
-
-			// Create a modified call with the AI format warning flag
-			let mut modified_call = call.clone();
-			if ai_format_warning {
-				modified_call.parameters.as_object_mut().unwrap().insert("_ai_format_warning".to_string(), Value::Bool(true));
-			}
-
-			text_editing::batch_edit_spec(&modified_call, &operations_vec).await
-		},
 		_ => Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			format!("Invalid command: {}. Allowed commands are: view, view_many, create, str_replace, insert, line_replace, undo_edit, batch_edit", command),
+			format!("Invalid command: {}. Allowed commands are: view, view_many, create, str_replace, insert, line_replace, undo_edit", command),
 		)),
 	}
 }
@@ -922,4 +864,81 @@ pub async fn execute_extract_lines(
 			extracted_content_display
 		),
 	))
+}
+
+// Execute batch_edit operations on a single file
+pub async fn execute_batch_edit(
+	call: &McpToolCall,
+	cancellation_token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<McpToolResult> {
+	use std::sync::atomic::Ordering;
+
+	// Check for cancellation before starting
+	if let Some(ref token) = cancellation_token {
+		if token.load(Ordering::SeqCst) {
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				"Batch edit operation cancelled".to_string(),
+			));
+		}
+	}
+
+	let (operations_vec, ai_format_warning) = match call.parameters.get("operations") {
+		Some(Value::Array(ops)) => {
+			// Correct format - AI passed array directly
+			if ops.len() > 50 {
+				return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					"Too many operations in batch. Maximum 50 operations allowed.".to_string(),
+				));
+			}
+			(ops.clone(), false)
+		}
+		Some(Value::String(ops_str)) => {
+			// AI incorrectly passed operations as JSON string - try to parse it
+			match serde_json::from_str::<Vec<Value>>(ops_str) {
+				Ok(parsed_ops) => {
+					if parsed_ops.len() > 50 {
+						return Ok(McpToolResult::error(
+							call.tool_name.clone(),
+							call.tool_id.clone(),
+							"Too many operations in batch. Maximum 50 operations allowed."
+								.to_string(),
+						));
+					}
+					crate::log_debug!("AI passed operations as JSON string instead of array - parsing defensively");
+					(parsed_ops, true)
+				}
+				Err(_) => {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						"Invalid 'operations' parameter for batch_edit - must be an array or valid JSON array string".to_string(),
+					));
+				}
+			}
+		}
+		_ => {
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				"Missing or invalid 'operations' parameter for batch_edit - must be an array"
+					.to_string(),
+			))
+		}
+	};
+
+	// Create a modified call with the AI format warning flag
+	let mut modified_call = call.clone();
+	if ai_format_warning {
+		modified_call
+			.parameters
+			.as_object_mut()
+			.unwrap()
+			.insert("_ai_format_warning".to_string(), Value::Bool(true));
+	}
+
+	text_editing::batch_edit_spec(&modified_call, &operations_vec).await
 }

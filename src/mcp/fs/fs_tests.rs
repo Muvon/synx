@@ -1301,9 +1301,8 @@ mod tests {
 	async fn create_batch_edit_call(path: &str, operations: serde_json::Value) -> McpToolCall {
 		McpToolCall {
 			tool_id: "test_batch_edit".to_string(),
-			tool_name: "text_editor".to_string(),
+			tool_name: "batch_edit".to_string(),
 			parameters: json!({
-				"command": "batch_edit",
 				"path": path,
 				"operations": operations
 			}),
@@ -1324,12 +1323,9 @@ mod tests {
 		]);
 
 		let call = create_batch_edit_call(&path, operations).await;
-		let result = crate::mcp::fs::text_editing::batch_edit_spec(
-			&call,
-			call.parameters["operations"].as_array().unwrap(),
-		)
-		.await
-		.unwrap();
+		let result = crate::mcp::fs::core::execute_batch_edit(&call, None)
+			.await
+			.unwrap();
 
 		// Check success
 		assert!(
@@ -1371,12 +1367,9 @@ mod tests {
 		]);
 
 		let call = create_batch_edit_call(&path, operations).await;
-		let result = crate::mcp::fs::text_editing::batch_edit_spec(
-			&call,
-			call.parameters["operations"].as_array().unwrap(),
-		)
-		.await
-		.unwrap();
+		let result = crate::mcp::fs::core::execute_batch_edit(&call, None)
+			.await
+			.unwrap();
 
 		// Check success
 		assert!(
@@ -1413,12 +1406,9 @@ mod tests {
 		]);
 
 		let call = create_batch_edit_call(&path, operations).await;
-		let result = crate::mcp::fs::text_editing::batch_edit_spec(
-			&call,
-			call.parameters["operations"].as_array().unwrap(),
-		)
-		.await
-		.unwrap();
+		let result = crate::mcp::fs::core::execute_batch_edit(&call, None)
+			.await
+			.unwrap();
 
 		// Check that it failed due to conflict
 		assert!(
@@ -1458,12 +1448,9 @@ mod tests {
 		]);
 
 		let call = create_batch_edit_call(&path, operations).await;
-		let result = crate::mcp::fs::text_editing::batch_edit_spec(
-			&call,
-			call.parameters["operations"].as_array().unwrap(),
-		)
-		.await
-		.unwrap();
+		let result = crate::mcp::fs::core::execute_batch_edit(&call, None)
+			.await
+			.unwrap();
 
 		// Check that it failed due to overlap
 		assert!(
@@ -1503,12 +1490,9 @@ mod tests {
 			}),
 		};
 
-		let result = crate::mcp::fs::text_editing::batch_edit_spec(
-			&call,
-			call.parameters["operations"].as_array().unwrap(),
-		)
-		.await
-		.unwrap();
+		let result = crate::mcp::fs::core::execute_batch_edit(&call, None)
+			.await
+			.unwrap();
 
 		// Check that it failed due to missing path
 		assert!(
@@ -1538,12 +1522,9 @@ mod tests {
 		]);
 
 		let call = create_batch_edit_call(&path, operations).await;
-		let result = crate::mcp::fs::text_editing::batch_edit_spec(
-			&call,
-			call.parameters["operations"].as_array().unwrap(),
-		)
-		.await
-		.unwrap();
+		let result = crate::mcp::fs::core::execute_batch_edit(&call, None)
+			.await
+			.unwrap();
 
 		// Check that it failed due to invalid operation
 		assert!(
@@ -1591,12 +1572,9 @@ mod tests {
 		]);
 
 		let call = create_batch_edit_call(&path, operations).await;
-		let result = crate::mcp::fs::text_editing::batch_edit_spec(
-			&call,
-			call.parameters["operations"].as_array().unwrap(),
-		)
-		.await
-		.unwrap();
+		let result = crate::mcp::fs::core::execute_batch_edit(&call, None)
+			.await
+			.unwrap();
 
 		// Check success
 		assert!(
@@ -1618,5 +1596,85 @@ mod tests {
 		assert_eq!(batch_summary["successful_operations"], 3);
 		assert_eq!(batch_summary["failed_operations"], 0);
 		assert_eq!(batch_summary["overall_success"], true);
+	}
+
+	#[tokio::test]
+	async fn test_batch_edit_with_undo_functionality() {
+		// Test that batch_edit properly stores history for undo functionality
+		let temp_file =
+			create_test_file("original line 1\noriginal line 2\noriginal line 3\n").await;
+		let path = temp_file.path().to_string_lossy().to_string();
+
+		// Perform batch edit operations
+		let operations = json!([
+			{
+				"operation": "insert",
+				"line_range": 1,
+				"content": "inserted after line 1"
+			},
+			{
+				"operation": "replace",
+				"line_range": [3, 3],
+				"content": "replaced original line 3"
+			}
+		]);
+
+		let batch_call = create_batch_edit_call(&path, operations).await;
+		let batch_result = crate::mcp::fs::core::execute_batch_edit(&batch_call, None)
+			.await
+			.unwrap();
+
+		// Check batch edit succeeded
+		assert!(
+			batch_result.result.get("error").is_none(),
+			"Batch edit should succeed"
+		);
+
+		// Verify file content after batch edit
+		let content_after_batch = fs::read_to_string(temp_file.path()).await.unwrap();
+		let expected_after_batch =
+			"original line 1\ninserted after line 1\noriginal line 2\nreplaced original line 3\n";
+		assert_eq!(
+			content_after_batch, expected_after_batch,
+			"Content should reflect batch edit changes"
+		);
+
+		// Now test undo functionality
+		let undo_call = McpToolCall {
+			tool_id: "test_undo".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({
+				"command": "undo_edit",
+				"path": path
+			}),
+		};
+
+		let undo_result = crate::mcp::fs::core::undo_edit(&undo_call, temp_file.path())
+			.await
+			.unwrap();
+
+		// Check undo succeeded
+		assert!(
+			undo_result.result.get("error").is_none(),
+			"Undo should succeed"
+		);
+
+		// Verify file content is restored to original
+		let content_after_undo = fs::read_to_string(temp_file.path()).await.unwrap();
+		let expected_original = "original line 1\noriginal line 2\noriginal line 3\n";
+		assert_eq!(
+			content_after_undo, expected_original,
+			"Content should be restored to original after undo"
+		);
+
+		// Verify undo result message
+		let content = undo_result.result["content"].as_array().unwrap()[0]["text"]
+			.as_str()
+			.unwrap();
+		assert!(
+			content.contains("Successfully undid the last edit"),
+			"Should contain undo confirmation message, got: {}",
+			content
+		);
 	}
 }
