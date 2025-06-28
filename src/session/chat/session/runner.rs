@@ -230,19 +230,27 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			);
 		}
 
-		// Add assistant welcome message with variable processing
-		let role_config = config.get_role_config_struct(&role);
-		let welcome_message =
-			crate::session::helper_functions::process_placeholders_async_with_role(
-				&role_config.welcome,
-				&current_dir,
-				Some(&role),
-			)
-			.await;
+		// Add initial messages (welcome + instructions) using centralized function
+		let initial_messages =
+			super::utils::get_initial_messages(config, &role, &current_dir).await?;
+		for msg in initial_messages {
+			match msg.role.as_str() {
+				"assistant" => {
+					chat_session.add_assistant_message(
+						&msg.content,
+						None,
+						&config_for_role,
+						&role,
+					)?;
+				}
+				"user" => {
+					chat_session.add_user_message(&msg.content)?;
+				}
+				_ => {} // Should not happen
+			}
+		}
 
-		chat_session.add_assistant_message(&welcome_message, None, &config_for_role, &role)?;
-
-		// Apply cache marker to welcome message as well for consistency
+		// Apply cache markers to initial messages if caching is supported
 		if supports_caching {
 			let cache_manager = crate::session::cache::CacheManager::new();
 			cache_manager.add_automatic_cache_markers(
@@ -250,48 +258,6 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				has_tools,
 				supports_caching,
 			);
-		}
-
-		// Check for custom instructions file in current working directory
-		let instructions_filename = &config.custom_instructions_file_name;
-		if !instructions_filename.is_empty() {
-			let instructions_path = current_dir.join(instructions_filename);
-			if instructions_path.exists() {
-				match std::fs::read_to_string(&instructions_path) {
-					Ok(instructions_content) => {
-						// Process placeholders in instructions content using the same pattern as welcome message
-						let processed_instructions =
-							crate::session::helper_functions::process_placeholders_async_with_role(
-								&instructions_content,
-								&current_dir,
-								Some(&role),
-							)
-							.await;
-
-						// Add as user message after welcome message
-						chat_session.add_user_message(&processed_instructions)?;
-
-						// Apply cache marker to the assistant message (welcome message) if caching is supported
-						// This ensures the assistant message before the instructions is cached
-						if supports_caching {
-							let cache_manager = crate::session::cache::CacheManager::new();
-							cache_manager.add_automatic_cache_markers(
-								&mut chat_session.session.messages,
-								has_tools,
-								supports_caching,
-							);
-						}
-
-						log_info!(
-							"Added {} content as user message with variable processing",
-							instructions_filename
-						);
-					}
-					Err(e) => {
-						log_debug!("Failed to read {}: {}", instructions_filename, e);
-					}
-				}
-			}
 		}
 	} else {
 		// Print the last few messages for context with colors if terminal supports them

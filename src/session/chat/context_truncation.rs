@@ -125,6 +125,7 @@ pub async fn perform_simple_boundary_truncation(
 	chat_session: &mut ChatSession,
 	_config: &Config,
 	current_tokens: usize,
+	role: &str,
 ) -> Result<()> {
 	use colored::Colorize;
 
@@ -186,6 +187,14 @@ pub async fn perform_simple_boundary_truncation(
 	// Add system message first
 	if let Some(sys_msg) = system_message {
 		final_messages.push(sys_msg);
+	}
+
+	// Add initial messages (welcome + instructions) using centralized function
+	let current_dir = std::env::current_dir().unwrap_or_default();
+	if let Ok(initial_messages) =
+		crate::session::chat::session::get_initial_messages(_config, role, &current_dir).await
+	{
+		final_messages.extend(initial_messages);
 	}
 
 	// Add kept messages

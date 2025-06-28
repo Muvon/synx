@@ -67,7 +67,7 @@ pub async fn process_command(
 		CONTEXT_COMMAND => context::handle_context(session, config, params),
 		LAYERS_COMMAND => layers::handle_layers(session, config, role).await,
 		LOGLEVEL_COMMAND => loglevel::handle_loglevel(config, params),
-		TRUNCATE_COMMAND => truncate::handle_truncate(session, config).await,
+		TRUNCATE_COMMAND => truncate::handle_truncate(session, config, role).await,
 		SUMMARIZE_COMMAND => summarize::handle_summarize(session, config).await,
 		CACHE_COMMAND => cache::handle_cache(session, config, params).await,
 		LIST_COMMAND => list::handle_list(session, config, params),

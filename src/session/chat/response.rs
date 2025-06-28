@@ -286,7 +286,9 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 		has_tool_calls,
 		params.config,
 		params.role,
-	)? {
+	)
+	.await?
+	{
 		// This was a continuation response - session has been reset with continuation message
 		// Process the continuation message immediately to make it invisible to user
 		return process_continuation_message_immediately(params).await;
@@ -474,7 +476,9 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 			has_tool_calls,
 			params.config,
 			params.role,
-		)? {
+		)
+		.await?
+		{
 			// Continuation was processed - create new params for continuation message processing
 			let continuation_params = ResponseProcessingParams::new(
 				current_content,

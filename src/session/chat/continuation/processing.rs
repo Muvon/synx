@@ -31,7 +31,7 @@ use colored::Colorize;
 
 /// Process continuation after AI responds with summary
 /// Returns true if continuation was processed, false if this wasn't a continuation response
-pub fn process_continuation_response(
+pub async fn process_continuation_response(
 	chat_session: &mut ChatSession,
 	response_content: &str,
 	_has_tool_calls: bool, // Prefixed with underscore to indicate intentional non-use
@@ -74,6 +74,14 @@ pub fn process_continuation_response(
 	// Rebuild with minimal context
 	if let Some(system_msg) = system_message {
 		chat_session.session.messages.push(system_msg);
+	}
+
+	// Add initial messages (welcome + instructions) using centralized function
+	let current_dir = std::env::current_dir().unwrap_or_default();
+	if let Ok(initial_messages) =
+		crate::session::chat::session::get_initial_messages(config, role, &current_dir).await
+	{
+		chat_session.session.messages.extend(initial_messages);
 	}
 
 	// Add the AI's summary as assistant message

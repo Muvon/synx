@@ -20,7 +20,11 @@ use crate::config::Config;
 use anyhow::Result;
 use colored::Colorize;
 
-pub async fn handle_truncate(session: &mut ChatSession, config: &Config) -> Result<bool> {
+pub async fn handle_truncate(
+	session: &mut ChatSession,
+	config: &Config,
+	role: &str,
+) -> Result<bool> {
 	// Perform smart truncation processing once
 	println!(
 		"{}",
@@ -39,8 +43,13 @@ pub async fn handle_truncate(session: &mut ChatSession, config: &Config) -> Resu
 	);
 
 	// Use the simple boundary truncation logic for manual /truncate command
-	match crate::session::chat::perform_simple_boundary_truncation(session, config, current_tokens)
-		.await
+	match crate::session::chat::perform_simple_boundary_truncation(
+		session,
+		config,
+		current_tokens,
+		role,
+	)
+	.await
 	{
 		Ok(()) => {
 			// Calculate new token count after truncation
