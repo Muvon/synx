@@ -527,15 +527,15 @@ async fn process_continuation_message_immediately(
 	// Clone messages to avoid borrowing conflicts
 	let messages = params.chat_session.session.messages.clone();
 
-	// Prepare API call parameters for continuation using the proper structure
+	// Prepare API call parameters for continuation using the session's current settings
 	let chat_params = ChatCompletionWithValidationParams::new(
 		&messages,
-		&params.config.model,
-		0.7, // Default temperature
-		params.config.max_tokens,
+		&params.chat_session.model,
+		params.chat_session.temperature,
+		params.chat_session.max_tokens,
 		params.config,
 	)
-	.with_max_retries(3)
+	.with_max_retries(params.chat_session.max_retries)
 	.with_cancellation_token(params.operation_cancelled.clone());
 
 	// Make API call with continuation message
