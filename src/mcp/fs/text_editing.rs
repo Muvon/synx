@@ -21,11 +21,68 @@ use serde_json::{json, Value};
 use std::path::Path;
 use tokio::fs as tokio_fs;
 
+// Helper function to resolve line indices, supporting negative indexing
+// Negative indices count from the end: -1 = last line, -2 = second-to-last, etc.
+fn resolve_line_index(index: i64, total_lines: usize) -> Result<usize, String> {
+	if index == 0 {
+		return Err("Line numbers are 1-indexed, use 1 for first line".to_string());
+	}
+
+	if index > 0 {
+		let pos_index = index as usize;
+		if pos_index > total_lines {
+			return Err(format!(
+				"Line {} exceeds file length ({} lines)",
+				index, total_lines
+			));
+		}
+		Ok(pos_index)
+	} else {
+		// Negative indexing: -1 = last line, -2 = second-to-last, etc.
+		let from_end = (-index) as usize;
+		if from_end > total_lines {
+			return Err(format!(
+				"Negative index {} exceeds file length ({} lines)",
+				index, total_lines
+			));
+		}
+		Ok(total_lines - from_end + 1)
+	}
+}
+
+// Helper function to resolve line range with negative indexing support
+fn resolve_line_range_batch(
+	start: i64,
+	end: i64,
+	total_lines: usize,
+) -> Result<(usize, usize), String> {
+	let resolved_start = resolve_line_index(start, total_lines)?;
+	let resolved_end = resolve_line_index(end, total_lines)?;
+
+	if resolved_start > resolved_end {
+		return Err(format!(
+			"Start line ({}) cannot be greater than end line ({})",
+			start, end
+		));
+	}
+
+	Ok((resolved_start, resolved_end))
+}
+
 // Batch operation structures for the new single-file, multi-operation approach
 #[derive(Debug, Clone)]
 struct BatchOperation {
 	operation_type: OperationType,
 	line_range: LineRange,
+	content: String,
+	operation_index: usize,
+}
+
+// Unresolved batch operation with raw line indices (may be negative)
+#[derive(Debug, Clone)]
+struct UnresolvedBatchOperation {
+	operation_type: OperationType,
+	line_range: UnresolvedLineRange,
 	content: String,
 	operation_index: usize,
 }
@@ -40,6 +97,30 @@ enum OperationType {
 enum LineRange {
 	Single(usize),       // Insert after this line (0 = beginning of file)
 	Range(usize, usize), // Replace this range (inclusive, 1-indexed)
+}
+
+#[derive(Debug, Clone)]
+enum UnresolvedLineRange {
+	Single(i64),     // Insert after this line (may be negative)
+	Range(i64, i64), // Replace this range (may be negative)
+}
+
+// Resolve unresolved line range to actual line range using file length
+fn resolve_unresolved_line_range(
+	unresolved: &UnresolvedLineRange,
+	total_lines: usize,
+) -> Result<LineRange, String> {
+	match unresolved {
+		UnresolvedLineRange::Single(line) => {
+			let resolved = resolve_line_index(*line, total_lines)?;
+			Ok(LineRange::Single(resolved))
+		}
+		UnresolvedLineRange::Range(start, end) => {
+			let (resolved_start, resolved_end) =
+				resolve_line_range_batch(*start, *end, total_lines)?;
+			Ok(LineRange::Range(resolved_start, resolved_end))
+		}
+	}
 }
 
 // Replace a string in a file following Anthropic specification
@@ -513,38 +594,44 @@ async fn apply_batch_operations(
 	}
 }
 
-// Parse line_range from JSON value (supports both single number and array)
-fn parse_line_range(value: &Value, operation_type: &OperationType) -> Result<LineRange, String> {
+// Parse line_range from JSON value (supports both single number and array, including negative indices)
+fn parse_line_range(
+	value: &Value,
+	operation_type: &OperationType,
+) -> Result<UnresolvedLineRange, String> {
 	match value {
 		Value::Number(n) => {
-			let line = n.as_u64().ok_or("Line number must be a positive integer")? as usize;
+			let line = n.as_i64().ok_or("Line number must be an integer")?;
+			if line == 0 {
+				return Err("Line numbers are 1-indexed, use 1 for first line".to_string());
+			}
 			match operation_type {
-				OperationType::Insert => Ok(LineRange::Single(line)),
-				OperationType::Replace => Ok(LineRange::Range(line, line)), // Single line replace
+				OperationType::Insert => Ok(UnresolvedLineRange::Single(line)),
+				OperationType::Replace => Ok(UnresolvedLineRange::Range(line, line)), // Single line replace
 			}
 		}
 		Value::Array(arr) => {
 			if arr.len() == 1 {
-				let line = arr[0]
-					.as_u64()
-					.ok_or("Line number must be a positive integer")? as usize;
+				let line = arr[0].as_i64().ok_or("Line number must be an integer")?;
+				if line == 0 {
+					return Err("Line numbers are 1-indexed, use 1 for first line".to_string());
+				}
 				match operation_type {
-					OperationType::Insert => Ok(LineRange::Single(line)),
-					OperationType::Replace => Ok(LineRange::Range(line, line)),
+					OperationType::Insert => Ok(UnresolvedLineRange::Single(line)),
+					OperationType::Replace => Ok(UnresolvedLineRange::Range(line, line)),
 				}
 			} else if arr.len() == 2 {
-				let start = arr[0]
-					.as_u64()
-					.ok_or("Start line must be a positive integer")? as usize;
-				let end = arr[1]
-					.as_u64()
-					.ok_or("End line must be a positive integer")? as usize;
+				let start = arr[0].as_i64().ok_or("Start line must be an integer")?;
+				let end = arr[1].as_i64().ok_or("End line must be an integer")?;
+				if start == 0 || end == 0 {
+					return Err("Line numbers are 1-indexed, use 1 for first line".to_string());
+				}
 				match operation_type {
 					OperationType::Insert => Err(
 						"Insert operation cannot use line range - use single line number"
 							.to_string(),
 					),
-					OperationType::Replace => Ok(LineRange::Range(start, end)),
+					OperationType::Replace => Ok(UnresolvedLineRange::Range(start, end)),
 				}
 			} else {
 				Err("Line range array must have 1 or 2 elements".to_string())
@@ -591,8 +678,8 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 		}
 	};
 
-	// Parse and validate all operations
-	let mut batch_operations = Vec::new();
+	// Parse and validate all operations (with unresolved line ranges)
+	let mut unresolved_operations = Vec::new();
 	let mut failed_operations = 0;
 	let mut operation_details = Vec::new();
 
@@ -682,27 +769,29 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 			}
 		};
 
-		// Create batch operation
-		batch_operations.push(BatchOperation {
+		// Create unresolved batch operation
+		let unresolved_op = UnresolvedBatchOperation {
 			operation_type,
-			line_range,
+			line_range: line_range.clone(),
 			content,
 			operation_index: index,
-		});
+		};
+
+		unresolved_operations.push(unresolved_op);
 
 		operation_details.push(json!({
 			"operation_index": index,
 			"operation": op_type_str,
 			"status": "parsed",
-			"line_range": match &batch_operations.last().unwrap().line_range {
-				LineRange::Single(line) => json!(line),
-				LineRange::Range(start, end) => json!([start, end]),
+			"line_range": match &line_range {
+				UnresolvedLineRange::Single(line) => json!(line),
+				UnresolvedLineRange::Range(start, end) => json!([start, end]),
 			}
 		}));
 	}
 
 	// If all operations failed during parsing, return error
-	if batch_operations.is_empty() {
+	if unresolved_operations.is_empty() {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
@@ -711,6 +800,33 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 				failed_operations
 			),
 		));
+	}
+
+	// Resolve negative line indices now that we have the file content
+	let total_lines = original_content.lines().count();
+	let mut batch_operations = Vec::new();
+
+	for unresolved_op in unresolved_operations {
+		match resolve_unresolved_line_range(&unresolved_op.line_range, total_lines) {
+			Ok(resolved_range) => {
+				batch_operations.push(BatchOperation {
+					operation_type: unresolved_op.operation_type,
+					line_range: resolved_range,
+					content: unresolved_op.content,
+					operation_index: unresolved_op.operation_index,
+				});
+			}
+			Err(err) => {
+				return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					format!(
+						"Invalid line range in operation {}: {}",
+						unresolved_op.operation_index, err
+					),
+				));
+			}
+		}
 	}
 
 	// Check for conflicts between operations

@@ -25,6 +25,50 @@ use std::path::Path;
 use std::sync::Mutex;
 use tokio::fs as tokio_fs;
 
+// Helper function to resolve line indices, supporting negative indexing
+// Negative indices count from the end: -1 = last line, -2 = second-to-last, etc.
+fn resolve_line_index(index: i64, total_lines: usize) -> Result<usize, String> {
+	if index == 0 {
+		return Err("Line numbers are 1-indexed, use 1 for first line".to_string());
+	}
+
+	if index > 0 {
+		let pos_index = index as usize;
+		if pos_index > total_lines {
+			return Err(format!(
+				"Line {} exceeds file length ({} lines)",
+				index, total_lines
+			));
+		}
+		Ok(pos_index)
+	} else {
+		// Negative indexing: -1 = last line, -2 = second-to-last, etc.
+		let from_end = (-index) as usize;
+		if from_end > total_lines {
+			return Err(format!(
+				"Negative index {} exceeds file length ({} lines)",
+				index, total_lines
+			));
+		}
+		Ok(total_lines - from_end + 1)
+	}
+}
+
+// Helper function to resolve line range with negative indexing support
+fn resolve_line_range(start: i64, end: i64, total_lines: usize) -> Result<(usize, usize), String> {
+	let resolved_start = resolve_line_index(start, total_lines)?;
+	let resolved_end = resolve_line_index(end, total_lines)?;
+
+	if resolved_start > resolved_end {
+		return Err(format!(
+			"Start line ({}) cannot be greater than end line ({})",
+			start, end
+		));
+	}
+
+	Ok((resolved_start, resolved_end))
+}
+
 // Thread-safe lazy initialization of file history using lazy_static
 lazy_static! {
 	pub static ref FILE_HISTORY: Mutex<HashMap<String, Vec<String>>> = Mutex::new(HashMap::new());
@@ -201,18 +245,65 @@ pub async fn execute_text_editor(
 				)),
 			};
 
-			// Check if view_range is specified
-			let view_range = call.parameters.get("view_range")
-				.and_then(|v| v.as_array())
-				.and_then(|arr| {
-					if arr.len() == 2 {
-						let start = arr[0].as_i64()?;
-						let end = arr[1].as_i64()?;
-						Some((start as usize, end))
-					} else {
-						None
+			// Check if view_range is specified with negative indexing support
+			let view_range = match call.parameters.get("view_range") {
+				Some(Value::Array(arr)) if arr.len() == 2 => {
+					match (arr[0].as_i64(), arr[1].as_i64()) {
+						(Some(start), Some(end)) => {
+							// We need to read the file first to get total lines for negative indexing
+							let file_path = Path::new(&path);
+							if file_path.exists() && file_path.is_file() {
+								match tokio_fs::read_to_string(file_path).await {
+									Ok(content) => {
+										let total_lines = content.lines().count();
+										match resolve_line_range(start, end, total_lines) {
+											Ok((resolved_start, resolved_end)) => {
+												Some((resolved_start, resolved_end as i64))
+											}
+											Err(err) => {
+												return Ok(McpToolResult::error(
+													call.tool_name.clone(),
+													call.tool_id.clone(),
+													format!("Invalid view_range: {}", err),
+												));
+											}
+										}
+									}
+									Err(_) => {
+										// If we can't read the file, let view_file_spec handle the error
+										Some((start as usize, end))
+									}
+								}
+							} else {
+								// If file doesn't exist, let view_file_spec handle the error
+								Some((start as usize, end))
+							}
+						}
+						_ => {
+							return Ok(McpToolResult::error(
+								call.tool_name.clone(),
+								call.tool_id.clone(),
+								"view_range array elements must be integers".to_string(),
+							));
+						}
 					}
-				});
+				}
+				Some(Value::Array(_)) => {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						"view_range must be an array with exactly 2 elements".to_string(),
+					));
+				}
+				Some(_) => {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						"view_range must be an array".to_string(),
+					));
+				}
+				None => None,
+			};
 
 			file_ops::view_file_spec(call, Path::new(&path), view_range).await
 		},
@@ -512,8 +603,8 @@ pub async fn execute_extract_lines(
 		}
 	};
 
-	// Validate and extract from_range parameter
-	let from_range = match call.parameters.get("from_range") {
+	// Validate and extract from_range parameter (defer negative index resolution until after file read)
+	let (from_range_start_raw, from_range_end_raw) = match call.parameters.get("from_range") {
 		Some(Value::Array(arr)) => {
 			if arr.len() != 2 {
 				return Ok(McpToolResult::error(
@@ -524,14 +615,14 @@ pub async fn execute_extract_lines(
 			}
 
 			let start = match arr[0].as_i64() {
-				Some(n) if n > 0 => n as usize,
-				Some(n) => {
+				Some(0) => {
 					return Ok(McpToolResult::error(
 						call.tool_name.clone(),
 						call.tool_id.clone(),
-						format!("Start line number must be positive, got: {}", n),
+						"Line numbers are 1-indexed, use 1 for first line".to_string(),
 					));
 				}
+				Some(n) => n,
 				None => {
 					return Ok(McpToolResult::error(
 						call.tool_name.clone(),
@@ -542,14 +633,14 @@ pub async fn execute_extract_lines(
 			};
 
 			let end = match arr[1].as_i64() {
-				Some(n) if n > 0 => n as usize,
-				Some(n) => {
+				Some(0) => {
 					return Ok(McpToolResult::error(
 						call.tool_name.clone(),
 						call.tool_id.clone(),
-						format!("End line number must be positive, got: {}", n),
+						"Line numbers are 1-indexed, use 1 for first line".to_string(),
 					));
 				}
+				Some(n) => n,
 				None => {
 					return Ok(McpToolResult::error(
 						call.tool_name.clone(),
@@ -558,17 +649,6 @@ pub async fn execute_extract_lines(
 					));
 				}
 			};
-
-			if start > end {
-				return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					format!(
-						"Start line ({}) cannot be greater than end line ({})",
-						start, end
-					),
-				));
-			}
 
 			(start, end)
 		}
@@ -676,31 +756,22 @@ pub async fn execute_extract_lines(
 		}
 	};
 
-	// Split content into lines and validate range
+	// Split content into lines and resolve negative indices
 	let source_lines: Vec<&str> = source_content.lines().collect();
 	let total_lines = source_lines.len();
 
-	if from_range.0 > total_lines {
-		return Ok(McpToolResult::error(
-			call.tool_name.clone(),
-			call.tool_id.clone(),
-			format!(
-				"Start line {} exceeds file length ({} lines) in '{}'",
-				from_range.0, total_lines, from_path
-			),
-		));
-	}
-
-	if from_range.1 > total_lines {
-		return Ok(McpToolResult::error(
-			call.tool_name.clone(),
-			call.tool_id.clone(),
-			format!(
-				"End line {} exceeds file length ({} lines) in '{}'",
-				from_range.1, total_lines, from_path
-			),
-		));
-	}
+	// Resolve negative indices now that we know the file length
+	let from_range = match resolve_line_range(from_range_start_raw, from_range_end_raw, total_lines)
+	{
+		Ok(range) => range,
+		Err(err) => {
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				format!("Invalid from_range: {}", err),
+			));
+		}
+	};
 
 	// Extract the specified lines (convert to 0-indexed)
 	let extracted_lines: Vec<&str> = source_lines[(from_range.0 - 1)..from_range.1].to_vec();

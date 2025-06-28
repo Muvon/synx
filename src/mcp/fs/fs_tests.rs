@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-	use crate::mcp::fs::core::execute_extract_lines;
+	use crate::mcp::fs::core::{execute_batch_edit, execute_extract_lines, execute_text_editor};
 	use crate::mcp::fs::text_editing::line_replace_spec;
 	use crate::mcp::McpToolCall;
 	use serde_json::json;
@@ -1674,6 +1674,467 @@ mod tests {
 		assert!(
 			content.contains("Successfully undid the last edit"),
 			"Should contain undo confirmation message, got: {}",
+			content
+		);
+	}
+
+	// ===== NEGATIVE LINE INDEXING TESTS =====
+
+	#[tokio::test]
+	async fn test_text_editor_view_negative_indexing() {
+		let temp_dir = tempfile::TempDir::new().unwrap();
+		let file_path = temp_dir.path().join("test.txt");
+
+		// Create a file with 5 lines
+		fs::write(&file_path, "line 1\nline 2\nline 3\nline 4\nline 5\n")
+			.await
+			.unwrap();
+
+		// Test -1 (last line)
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({
+				"command": "view",
+				"path": file_path.to_string_lossy(),
+				"view_range": [-1, -1]
+			}),
+		};
+
+		let result = execute_text_editor(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(false)));
+		let content = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(
+			content.contains("5: line 5"),
+			"Should show last line: {}",
+			content
+		);
+
+		// Test -2 (second-to-last line)
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({
+				"command": "view",
+				"path": file_path.to_string_lossy(),
+				"view_range": [-2, -2]
+			}),
+		};
+
+		let result = execute_text_editor(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(false)));
+		let content = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(
+			content.contains("4: line 4"),
+			"Should show second-to-last line: {}",
+			content
+		);
+
+		// Test range with negative indices
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({
+				"command": "view",
+				"path": file_path.to_string_lossy(),
+				"view_range": [-3, -1]
+			}),
+		};
+
+		let result = execute_text_editor(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(false)));
+		let content = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(
+			content.contains("3: line 3"),
+			"Should show line 3: {}",
+			content
+		);
+		assert!(
+			content.contains("4: line 4"),
+			"Should show line 4: {}",
+			content
+		);
+		assert!(
+			content.contains("5: line 5"),
+			"Should show line 5: {}",
+			content
+		);
+
+		// Test mixed positive and negative indices
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({
+				"command": "view",
+				"path": file_path.to_string_lossy(),
+				"view_range": [2, -2]
+			}),
+		};
+
+		let result = execute_text_editor(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(false)));
+		let content = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(
+			content.contains("2: line 2"),
+			"Should show line 2: {}",
+			content
+		);
+		assert!(
+			content.contains("3: line 3"),
+			"Should show line 3: {}",
+			content
+		);
+		assert!(
+			content.contains("4: line 4"),
+			"Should show line 4: {}",
+			content
+		);
+	}
+
+	#[tokio::test]
+	async fn test_text_editor_view_negative_indexing_errors() {
+		let temp_dir = tempfile::TempDir::new().unwrap();
+		let file_path = temp_dir.path().join("test.txt");
+
+		// Create a file with 3 lines
+		fs::write(&file_path, "line 1\nline 2\nline 3\n")
+			.await
+			.unwrap();
+
+		// Test negative index beyond file length
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({
+				"command": "view",
+				"path": file_path.to_string_lossy(),
+				"view_range": [-5, -1]
+			}),
+		};
+
+		let result = execute_text_editor(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(true)));
+		let content = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(
+			content.contains("exceeds file length"),
+			"Should show error: {}",
+			content
+		);
+	}
+
+	#[tokio::test]
+	async fn test_extract_lines_negative_indexing() {
+		let temp_dir = tempfile::TempDir::new().unwrap();
+		let source_path = temp_dir.path().join("source.txt");
+		let target_path = temp_dir.path().join("target.txt");
+
+		// Create source file with 5 lines
+		fs::write(&source_path, "line 1\nline 2\nline 3\nline 4\nline 5\n")
+			.await
+			.unwrap();
+		fs::write(&target_path, "").await.unwrap();
+
+		// Test extracting last line with -1
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "extract_lines".to_string(),
+			parameters: json!({
+				"from_path": source_path.to_string_lossy(),
+				"from_range": [-1, -1],
+				"append_path": target_path.to_string_lossy(),
+				"append_line": -1
+			}),
+		};
+
+		let result = execute_extract_lines(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(false)));
+
+		let target_content = fs::read_to_string(&target_path).await.unwrap();
+		assert_eq!(target_content.trim(), "line 5", "Should extract last line");
+
+		// Test extracting last 2 lines
+		fs::write(&target_path, "").await.unwrap(); // Clear target
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "extract_lines".to_string(),
+			parameters: json!({
+				"from_path": source_path.to_string_lossy(),
+				"from_range": [-2, -1],
+				"append_path": target_path.to_string_lossy(),
+				"append_line": -1
+			}),
+		};
+
+		let result = execute_extract_lines(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(false)));
+
+		let target_content = fs::read_to_string(&target_path).await.unwrap();
+		assert_eq!(
+			target_content.trim(),
+			"line 4\nline 5",
+			"Should extract last 2 lines"
+		);
+
+		// Test mixed positive and negative indices
+		fs::write(&target_path, "").await.unwrap(); // Clear target
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "extract_lines".to_string(),
+			parameters: json!({
+				"from_path": source_path.to_string_lossy(),
+				"from_range": [2, -2],
+				"append_path": target_path.to_string_lossy(),
+				"append_line": -1
+			}),
+		};
+
+		let result = execute_extract_lines(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(false)));
+
+		let target_content = fs::read_to_string(&target_path).await.unwrap();
+		assert_eq!(
+			target_content.trim(),
+			"line 2\nline 3\nline 4",
+			"Should extract lines 2-4"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_extract_lines_negative_indexing_errors() {
+		let temp_dir = tempfile::TempDir::new().unwrap();
+		let source_path = temp_dir.path().join("source.txt");
+		let target_path = temp_dir.path().join("target.txt");
+
+		// Create source file with 3 lines
+		fs::write(&source_path, "line 1\nline 2\nline 3\n")
+			.await
+			.unwrap();
+		fs::write(&target_path, "").await.unwrap();
+
+		// Test negative index beyond file length
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "extract_lines".to_string(),
+			parameters: json!({
+				"from_path": source_path.to_string_lossy(),
+				"from_range": [-5, -1],
+				"append_path": target_path.to_string_lossy(),
+				"append_line": -1
+			}),
+		};
+
+		let result = execute_extract_lines(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(true)));
+		let content = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(
+			content.contains("exceeds file length"),
+			"Should show error: {}",
+			content
+		);
+	}
+
+	#[tokio::test]
+	async fn test_batch_edit_negative_indexing() {
+		let temp_dir = tempfile::TempDir::new().unwrap();
+		let file_path = temp_dir.path().join("test.txt");
+
+		// Create file with 5 lines
+		fs::write(&file_path, "line 1\nline 2\nline 3\nline 4\nline 5\n")
+			.await
+			.unwrap();
+
+		// Test replacing last line with negative index
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "batch_edit".to_string(),
+			parameters: json!({
+				"path": file_path.to_string_lossy(),
+				"operations": [
+					{
+						"operation": "replace",
+						"line_range": [-1, -1],
+						"content": "LAST LINE REPLACED"
+					}
+				]
+			}),
+		};
+
+		let result = execute_batch_edit(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(false)));
+
+		let content = fs::read_to_string(&file_path).await.unwrap();
+		assert!(
+			content.contains("LAST LINE REPLACED"),
+			"Should replace last line: {}",
+			content
+		);
+		assert!(
+			!content.contains("line 5"),
+			"Should not contain original last line"
+		);
+
+		// Test replacing last 2 lines with negative range
+		fs::write(&file_path, "line 1\nline 2\nline 3\nline 4\nline 5\n")
+			.await
+			.unwrap();
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "batch_edit".to_string(),
+			parameters: json!({
+				"path": file_path.to_string_lossy(),
+				"operations": [
+					{
+						"operation": "replace",
+						"line_range": [-2, -1],
+						"content": "REPLACED LINES 4-5"
+					}
+				]
+			}),
+		};
+
+		let result = execute_batch_edit(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(false)));
+
+		let content = fs::read_to_string(&file_path).await.unwrap();
+		assert!(
+			content.contains("REPLACED LINES 4-5"),
+			"Should replace last 2 lines: {}",
+			content
+		);
+		assert!(
+			!content.contains("line 4"),
+			"Should not contain original line 4"
+		);
+		assert!(
+			!content.contains("line 5"),
+			"Should not contain original line 5"
+		);
+
+		// Test insert after second-to-last line
+		fs::write(&file_path, "line 1\nline 2\nline 3\nline 4\nline 5\n")
+			.await
+			.unwrap();
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "batch_edit".to_string(),
+			parameters: json!({
+				"path": file_path.to_string_lossy(),
+				"operations": [
+					{
+						"operation": "insert",
+						"line_range": -2,
+						"content": "INSERTED AFTER LINE 4"
+					}
+				]
+			}),
+		};
+
+		let result = execute_batch_edit(&call, None).await.unwrap();
+		// Check if operation succeeded
+		if let Some(content_array) = result.result["content"].as_array() {
+			if let Some(first_content) = content_array.first() {
+				if let Some(text) = first_content["text"].as_str() {
+					if text.contains("error")
+						|| text.contains("Error")
+						|| text.contains("failed")
+						|| text.contains("Failed")
+					{
+						panic!("Batch edit failed: {}", text);
+					}
+				}
+			}
+		}
+
+		let content = fs::read_to_string(&file_path).await.unwrap();
+		let lines: Vec<&str> = content.lines().collect();
+		assert_eq!(
+			lines[4], "INSERTED AFTER LINE 4",
+			"Should insert after line 4"
+		);
+		assert_eq!(lines[5], "line 5", "Line 5 should be moved down");
+	}
+
+	#[tokio::test]
+	async fn test_batch_edit_negative_indexing_errors() {
+		let temp_dir = tempfile::TempDir::new().unwrap();
+		let file_path = temp_dir.path().join("test.txt");
+
+		// Create file with 3 lines
+		fs::write(&file_path, "line 1\nline 2\nline 3\n")
+			.await
+			.unwrap();
+
+		// Test negative index beyond file length
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "batch_edit".to_string(),
+			parameters: json!({
+				"path": file_path.to_string_lossy(),
+				"operations": [
+					{
+						"operation": "replace",
+						"line_range": [-5, -1],
+						"content": "SHOULD FAIL"
+					}
+				]
+			}),
+		};
+
+		let result = execute_batch_edit(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(true)));
+		let content = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(
+			content.contains("exceeds file length"),
+			"Should show error: {}",
+			content
+		);
+	}
+
+	#[tokio::test]
+	async fn test_negative_indexing_edge_cases() {
+		let temp_dir = tempfile::TempDir::new().unwrap();
+		let file_path = temp_dir.path().join("test.txt");
+
+		// Test with single line file
+		fs::write(&file_path, "only line\n").await.unwrap();
+
+		// Test -1 on single line file
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({
+				"command": "view",
+				"path": file_path.to_string_lossy(),
+				"view_range": [-1, -1]
+			}),
+		};
+
+		let result = execute_text_editor(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(false)));
+		let content = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(
+			content.contains("1: only line"),
+			"Should show the only line: {}",
+			content
+		);
+
+		// Test -2 on single line file (should fail)
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({
+				"command": "view",
+				"path": file_path.to_string_lossy(),
+				"view_range": [-2, -1]
+			}),
+		};
+
+		let result = execute_text_editor(&call, None).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&json!(true)));
+		let content = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(
+			content.contains("exceeds file length"),
+			"Should show error: {}",
 			content
 		);
 	}
