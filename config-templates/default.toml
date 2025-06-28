@@ -53,6 +53,12 @@ cache_timeout_seconds = 240
 
 # Wether to use long system cache (longer cache lifetime)
 use_long_system_cache = true
+
+# Maximum number of retries for API calls (can be overridden by --max-retries CLI flag)
+max_retries = 1
+
+# Base timeout for exponential backoff retry logic (config-only, no CLI override)
+retry_timeout = 30
 # ═══════════════════════════════════════════════════════════════════════════════
 # USER INTERFACE
 # Configure how Octomind displays information

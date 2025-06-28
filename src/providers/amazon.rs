@@ -335,61 +335,148 @@ impl AiProvider for AmazonBedrockProvider {
 			region, full_model_id
 		);
 
-		// Create HTTP client
-		let client = Client::new();
+		// Note: Amazon Bedrock uses complex AWS signing that doesn't work well with generic retry
+		// For now, we'll implement basic retry without re-signing on each attempt
+		// In production, consider using the AWS SDK which handles retries internally
 
-		// Prepare headers
-		let mut headers = std::collections::HashMap::new();
-		headers.insert("Content-Type".to_string(), "application/json".to_string());
-
-		// Sign the request (simplified - in production use AWS SDK)
-		self.sign_request("POST", &api_url, &mut headers, &request_body.to_string())
-			.await?;
-
-		// Make the API request
-		let mut request_builder = client
-			.post(&api_url)
-			.header("Content-Type", "application/json")
-			.json(&request_body);
-
-		// Add signed headers
-		for (key, value) in headers {
-			request_builder = request_builder.header(&key, &value);
+		// Implement retry logic with exponential backoff
+		if params.max_retries > 0 {
+			crate::log_debug!(
+				"🔄 Amazon provider configured with {} max retries",
+				params.max_retries
+			);
 		}
 
-		// Track API request time
-		let api_start = std::time::Instant::now();
-
-		let response = request_builder.send().await?;
-
-		// Calculate API request time
-		let api_duration = api_start.elapsed();
-		let api_time_ms = api_duration.as_millis() as u64;
-
-		// Get response status
-		let status = response.status();
-
-		// Get response body as text first for debugging
-		let response_text = response.text().await?;
-
-		// Parse the text to JSON
-		let response_json: serde_json::Value = match serde_json::from_str(&response_text) {
-			Ok(json) => json,
-			Err(e) => {
-				return Err(anyhow::anyhow!(
-					"Failed to parse response JSON: {}. Response: {}",
-					e,
-					response_text
-				));
+		let mut last_error = None;
+		for attempt in 0..=params.max_retries {
+			// Check for cancellation before each attempt
+			if let Some(ref token) = params.cancellation_token {
+				if token.load(std::sync::atomic::Ordering::SeqCst) {
+					return Err(anyhow::anyhow!(
+						"Request cancelled during retry attempt {}",
+						attempt
+					));
+				}
 			}
-		};
+
+			// Prepare headers (need fresh headers for each retry due to signing)
+			let mut headers = std::collections::HashMap::new();
+			headers.insert("Content-Type".to_string(), "application/json".to_string());
+
+			// Sign the request (simplified - in production use AWS SDK)
+			self.sign_request("POST", &api_url, &mut headers, &request_body.to_string())
+				.await?;
+
+			// Create HTTP client
+			let client = Client::new();
+
+			// Build the request
+			let mut request_builder = client
+				.post(&api_url)
+				.header("Content-Type", "application/json")
+				.json(&request_body);
+
+			// Add signed headers
+			for (key, value) in headers {
+				request_builder = request_builder.header(&key, &value);
+			}
+
+			// Track API request time
+			let api_start = std::time::Instant::now();
+
+			match request_builder.send().await {
+				Ok(response) => {
+					// Calculate API request time
+					let api_duration = api_start.elapsed();
+					let api_time_ms = api_duration.as_millis() as u64;
+
+					// Process successful response immediately
+					let status = response.status();
+					let response_text = response.text().await?;
+
+					// Parse the text to JSON
+					let response_json: serde_json::Value =
+						match serde_json::from_str(&response_text) {
+							Ok(json) => json,
+							Err(e) => {
+								return Err(anyhow::anyhow!(
+									"Failed to parse response JSON: {}. Response: {}",
+									e,
+									response_text
+								));
+							}
+						};
+
+					// Process the response and return early on success
+					return self.process_bedrock_response(
+						status,
+						response_json,
+						api_time_ms,
+						params.model,
+						params.temperature,
+						&request_body,
+						&response_text,
+						params.config,
+					);
+				}
+				Err(e) => {
+					crate::log_debug!(
+						"🔄 Amazon API request attempt {} failed: {}",
+						attempt + 1,
+						e
+					);
+
+					last_error = Some(e);
+
+					// Don't sleep after the last attempt
+					if attempt < params.max_retries {
+						// Exponential backoff: base_timeout * 2^attempt
+						let delay = params.retry_timeout * 2_u32.pow(attempt);
+						// Cap at 5 minutes for safety
+						let delay = std::cmp::min(delay, std::time::Duration::from_secs(300));
+
+						crate::log_debug!(
+							"🔄 Waiting {:?} before retry attempt {}",
+							delay,
+							attempt + 2
+						);
+
+						tokio::time::sleep(delay).await;
+					}
+				}
+			}
+		}
+
+		// If we get here, all retries failed
+		Err(anyhow::anyhow!(
+			"All retry attempts failed: {}",
+			last_error.unwrap()
+		))
+	}
+}
+
+impl AmazonBedrockProvider {
+	/// Process Bedrock API response (private helper method for retry logic)
+	#[allow(clippy::too_many_arguments)]
+	fn process_bedrock_response(
+		&self,
+		status: reqwest::StatusCode,
+		response_json: serde_json::Value,
+		api_time_ms: u64,
+		model: &str,
+		_temperature: f32,
+		request_body: &serde_json::Value,
+		response_text: &str,
+		_config: &Config,
+	) -> Result<ProviderResponse> {
+		let full_model_id = self.get_full_model_id(model);
 
 		// Handle error responses
 		if !status.is_success() {
 			let error_message = response_json
 				.get("message")
 				.and_then(|m| m.as_str())
-				.unwrap_or(&response_text);
+				.unwrap_or(response_text);
 			return Err(anyhow::anyhow!(
 				"Amazon Bedrock API error ({}): {}",
 				status,
@@ -557,7 +644,8 @@ impl AiProvider for AmazonBedrockProvider {
 		};
 
 		// Create exchange record
-		let exchange = ProviderExchange::new(request_body, response_json, usage, self.name());
+		let exchange =
+			ProviderExchange::new(request_body.clone(), response_json, usage, self.name());
 
 		Ok(ProviderResponse {
 			content,

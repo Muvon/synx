@@ -37,6 +37,8 @@ pub struct ChatCompletionParams<'a> {
 	pub max_tokens: u32,
 	/// Maximum retry attempts on failure
 	pub max_retries: u32,
+	/// Base timeout for exponential backoff retry logic
+	pub retry_timeout: std::time::Duration,
 	/// Configuration object
 	pub config: &'a Config,
 	/// Cancellation token for request abortion
@@ -57,7 +59,8 @@ impl<'a> ChatCompletionParams<'a> {
 			model,
 			temperature,
 			max_tokens,
-			max_retries: 0,
+			max_retries: config.max_retries,
+			retry_timeout: std::time::Duration::from_secs(config.retry_timeout as u64),
 			config,
 			cancellation_token: None,
 		}
@@ -83,6 +86,7 @@ pub mod deepseek;
 pub mod google;
 pub mod openai;
 pub mod openrouter;
+pub mod retry;
 
 // Re-export provider implementations
 pub use amazon::AmazonBedrockProvider;

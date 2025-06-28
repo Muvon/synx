@@ -106,6 +106,12 @@ pub struct Config {
 	// Use long-term (1h) caching for system messages (strict: must be in config)
 	pub use_long_system_cache: bool,
 
+	// Maximum number of retries for API calls (can be overridden by --max-retries CLI flag)
+	pub max_retries: u32,
+
+	// Base timeout for exponential backoff retry logic (config-only, no CLI override)
+	pub retry_timeout: u32,
+
 	// Agent configurations - array of layer definitions (same structure as commands)
 	#[serde(default)]
 	pub agents: Vec<crate::session::layers::LayerConfig>,

@@ -230,20 +230,40 @@ impl AiProvider for DeepSeekProvider {
 			}
 		}
 
-		// Create HTTP client
-		let client = Client::new();
+		// Implement retry logic with exponential backoff
+		if params.max_retries > 0 {
+			crate::log_debug!(
+				"🔄 DeepSeek provider configured with {} max retries",
+				params.max_retries
+			);
+		}
 
 		// Track API request time
 		let api_start = std::time::Instant::now();
 
-		// Make the actual API request
-		let response = client
-			.post(DEEPSEEK_API_URL)
-			.header("Authorization", format!("Bearer {}", api_key))
-			.header("Content-Type", "application/json")
-			.json(&request_body)
-			.send()
-			.await?;
+		// Make the actual API request with retry logic
+		let response = crate::providers::retry::retry_with_exponential_backoff(
+			|| {
+				let client = Client::new();
+				let request_body = request_body.clone();
+				let api_key = api_key.clone();
+
+				Box::pin(async move {
+					client
+						.post(DEEPSEEK_API_URL)
+						.header("Authorization", format!("Bearer {}", api_key))
+						.header("Content-Type", "application/json")
+						.json(&request_body)
+						.send()
+						.await
+						.map_err(|e| anyhow::anyhow!("HTTP request failed: {}", e))
+				})
+			},
+			params.max_retries,
+			params.retry_timeout,
+			params.cancellation_token.as_ref(),
+		)
+		.await?;
 
 		// Calculate API request time
 		let api_duration = api_start.elapsed();

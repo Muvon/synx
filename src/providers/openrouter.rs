@@ -267,44 +267,67 @@ impl AiProvider for OpenRouterProvider {
 			}
 		}
 
-		// Create HTTP client - USE THE OPTIMIZED GLOBAL POOL! 🚀
-		let client = get_optimized_client();
+		// Implement retry logic with exponential backoff
+		if params.max_retries > 0 {
+			crate::log_debug!(
+				"🔄 OpenRouter provider configured with {} max retries",
+				params.max_retries
+			);
+		}
 
 		// Track API request time
 		let api_start = std::time::Instant::now();
 
-		// Create the HTTP request
-		let request_future = client
-			.post(OPENROUTER_API_URL)
-			.header("Authorization", format!("Bearer {}", api_key))
-			.header("Content-Type", "application/json")
-			.header("HTTP-Referer", "https://github.com/muvon/octomind")
-			.header("X-Title", "Octomind")
-			.json(&request_body)
-			.send();
+		// Make the actual API request with retry logic
+		let response = crate::providers::retry::retry_with_exponential_backoff(
+			|| {
+				let client = get_optimized_client();
+				let request_body = request_body.clone();
+				let api_key = api_key.clone();
+				let cancellation_token = params.cancellation_token.clone();
 
-		// Race the HTTP request against cancellation
-		let response = if let Some(ref token) = params.cancellation_token {
-			let cancellation_future = async {
-				loop {
-					if token.load(std::sync::atomic::Ordering::SeqCst) {
-						break;
+				Box::pin(async move {
+					// Create the HTTP request
+					let request_future = client
+						.post(OPENROUTER_API_URL)
+						.header("Authorization", format!("Bearer {}", api_key))
+						.header("Content-Type", "application/json")
+						.header("HTTP-Referer", "https://github.com/muvon/octomind")
+						.header("X-Title", "Octomind")
+						.json(&request_body)
+						.send();
+
+					// Race the HTTP request against cancellation
+					if let Some(ref token) = cancellation_token {
+						let cancellation_future = async {
+							loop {
+								if token.load(std::sync::atomic::Ordering::SeqCst) {
+									break;
+								}
+								tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+							}
+						};
+
+						tokio::select! {
+							result = request_future => {
+								result.map_err(|e| anyhow::anyhow!("HTTP request failed: {}", e))
+							}
+							_ = cancellation_future => {
+								Err(anyhow::anyhow!("Request cancelled during HTTP call"))
+							}
+						}
+					} else {
+						request_future
+							.await
+							.map_err(|e| anyhow::anyhow!("HTTP request failed: {}", e))
 					}
-					tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-				}
-			};
-
-			tokio::select! {
-				result = request_future => {
-					result?
-				}
-				_ = cancellation_future => {
-					return Err(anyhow::anyhow!("Request cancelled during HTTP call"));
-				}
-			}
-		} else {
-			request_future.await?
-		};
+				})
+			},
+			params.max_retries,
+			params.retry_timeout,
+			params.cancellation_token.as_ref(),
+		)
+		.await?;
 
 		// Calculate API request time
 		let api_duration = api_start.elapsed();
