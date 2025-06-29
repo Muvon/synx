@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// The plan tool provides structured, step-by-step task execution, progress tracking, and session integration.
+// Registered here as a developer MCP function. See src/mcp/dev/plan/ for details and compliance patterns.
 // Function definitions for the Developer MCP provider
 
 use super::super::McpFunction;

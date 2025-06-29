@@ -13,7 +13,19 @@
 // limitations under the License.
 
 //! Plan tool - structured task execution with step-by-step progression
-
+/// MCP Tool: plan
+///
+/// Provides structured, step-by-step task execution and progress tracking for Octomind sessions.
+/// Commands:
+///   - start: Begin a new plan. Requires `title` (string) and `tasks` (array of strings).
+///   - step: Add progress to the current step. Requires `content` (string).
+///   - next: Mark current step as complete. Requires `content` (string).
+///   - list: Show full plan progress with completion status.
+///   - done: Complete the plan, optionally with `content` summary.
+///   - reset: Abort and clear the plan.
+///
+/// Parameters are strictly validated. All errors use MCP-compliant error responses.
+/// See core.rs for full logic and error handling.
 pub mod core;
 pub mod memory_storage;
 pub mod storage;

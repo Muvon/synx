@@ -21,12 +21,65 @@ MCP enables AI models to use external tools and services through a standardized 
 - ✅ **Standard Format**: All responses follow MCP standard: `{content: [{type: "text", text: "..."}], isError: true/false}`
 
 ### Built-in MCP Tools & Usage Patterns
-- Developer: shell, ast_grep, semantic_search, view_signatures
+
+- The `plan` tool provides structured, sequential task execution and progress tracking for session-driven workflows.
+- Developer: shell, ast_grep, semantic_search, view_signatures, plan
 - Filesystem: text_editor, list_files, extract_lines
 - Web: web_search, read_html
 - Agent: agent_<name> task routing
 
 **Tool Invocation:**
+
+---
+
+### plan — Structured Task Management Tool
+
+The `plan` tool enables interactive, step-by-step task management inside Octomind sessions. It supports workflow breakdown, progress tracking, and structured execution for complex development tasks.
+
+**Purpose:**
+- Break down large objectives into clear, actionable steps
+- Track progress and provide visual feedback for each step
+- Integrate seamlessly with session and MCP protocols
+
+**Commands & Parameters:**
+- `command` (string, required): One of the following commands:
+  - **start**: Begin a new plan
+    - `title` (string, required): Plan title
+    - `tasks` (array of strings, required): List of subtasks/steps
+  - **step**: Add progress or notes to current step
+    - `content` (string, required): Progress detail
+  - **next**: Mark current step as complete and advance
+    - `content` (string, required): Completion summary
+  - **list**: Show all steps with completion status
+  - **done**: Mark plan as complete and trigger session cleanup
+    - `content` (string, optional): Final summary
+  - **reset**: Abort and clear current plan
+
+**Usage Example:**
+```json
+{"command": "start", "title": "Implement Feature X", "tasks": ["Design API", "Write tests", "Implement logic"]}
+{"command": "step", "content": "Started API design..."}
+{"command": "next", "content": "API designed, moving to tests"}
+{"command": "list"}
+{"command": "done", "content": "Feature implemented and tests passing"}
+```
+
+**MCP Compliance:**
+- All errors use `Ok(McpToolResult::error(...))` (never `Err()`)
+- Parameter validation is strict; missing/invalid params return actionable MCP error objects
+- Output always includes `tool_id` and follows `{content: [{type: "text", text: "..."}], isError: ...}`
+- Handles cancellation, session cleanup, and preserves MCP protocol integrity
+
+**Session Integration:**
+- `/done` triggers plan completion, summary, and memory cleanup
+- Full progress is tracked for review and reporting
+
+**Benefits:**
+- Structured, sequential execution of complex tasks
+- Visual progress feedback within session
+- Clean error handling and robust MCP protocol support
+
+See `src/mcp/dev/plan/` for code, and test integration in `src/session/chat/session/runner.rs`.
 - Single tool: clean header, no index
 - Multiple tools: indexed headers
 

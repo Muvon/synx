@@ -13,7 +13,20 @@
 // limitations under the License.
 
 //! Core plan tool implementation
-
+/// Core implementation of the plan MCP tool.
+///
+/// Handles all supported commands (start, step, next, list, done, reset).
+///
+/// - Validates all parameters with clear MCP-compliant error messages.
+/// - Ensures all errors use Ok(McpToolResult::error(...))—never Err().
+/// - Handles cancellation, session cleanup, and output format.
+///
+/// # Commands and Parameters
+/// - `command` (string): required; one of start, step, next, list, done, reset
+///     - start: requires `title` (string) and `tasks` (array)
+///     - step/next/done: require `content` (string)
+///
+/// Output: Always {content: [{type: "text", text: ...}], isError: ...} and includes tool_id.
 use super::memory_storage::MemoryPlanStorage;
 use super::storage::{PlanStorage, TaskStatus};
 use crate::mcp::{McpToolCall, McpToolResult};
