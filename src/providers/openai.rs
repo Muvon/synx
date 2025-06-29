@@ -579,12 +579,15 @@ async fn execute_openai_request(
 					let name = function.get("name")?.as_str()?.to_string();
 					let arguments = function.get("arguments")?.as_str()?.to_string();
 
+					// ✅ CRITICAL FIX: Extract the tool_call_id from OpenAI response (same as OpenRouter)
+					let tool_id = tool_call.get("id").and_then(|i| i.as_str()).unwrap_or("");
+
 					// Parse arguments as JSON
 					match serde_json::from_str::<serde_json::Value>(&arguments) {
 						Ok(args) => Some(crate::mcp::McpToolCall {
 							tool_name: name,
 							parameters: args,
-							tool_id: String::new(), // OpenAI doesn't provide tool_id in this context
+							tool_id: tool_id.to_string(), // ✅ FIXED: Use extracted tool_call_id
 						}),
 						Err(_) => None,
 					}
