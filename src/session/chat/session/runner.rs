@@ -467,6 +467,11 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				// Reset first_message_processed to false so that the next message goes through layers again
 				first_message_processed = false;
 
+				// Clear plan data
+				if let Err(e) = crate::mcp::dev::plan::clear_plan_data().await {
+					crate::log_debug!("Failed to clear plan data: {}", e);
+				}
+
 				// Apply reducer functionality to optimize context
 				let result = super::super::context_reduction::perform_context_reduction(
 					&mut chat_session,
@@ -1156,6 +1161,11 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 
 		// Handle special /done command separately
 		if input.trim() == "/done" {
+			// Clear plan data
+			if let Err(e) = crate::mcp::dev::plan::clear_plan_data().await {
+				crate::log_debug!("Failed to clear plan data: {}", e);
+			}
+
 			println!(
 				"{}",
 				"✓ Session optimized and ready for next message".bright_green()

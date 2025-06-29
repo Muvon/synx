@@ -669,6 +669,25 @@ async fn try_execute_tool_call(
 								}
 							}
 						}
+						"plan" => {
+							crate::log_debug!(
+								"Executing plan command via developer server '{}'",
+								target_server.name()
+							);
+							match dev::execute_plan(call, cancellation_token.clone()).await {
+								Ok(mut result) => {
+									result.tool_id = call.tool_id.clone();
+									return Ok(result);
+								}
+								Err(e) => {
+									return Ok(McpToolResult::error(
+										call.tool_name.clone(),
+										call.tool_id.clone(),
+										format!("Plan execution failed: {}", e),
+									));
+								}
+							}
+						}
 						_ => {
 							return Err(anyhow::anyhow!(
 								"Tool '{}' not implemented in developer server",

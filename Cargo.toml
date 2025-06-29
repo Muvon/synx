@@ -34,7 +34,7 @@ tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "time", "
 crossterm = "0.29.0"
 indicatif = "0.17.11"
 parking_lot = "0.12.4"
-chrono = "0.4.41"
+chrono = { version = "0.4.41", features = ["serde"] }
 serde = { version = "1.0.219", features = ["derive"] }
 uuid = { version = "1.17.0", features = ["v4"] }
 tiktoken-rs = "0.7.0" # Token counter
