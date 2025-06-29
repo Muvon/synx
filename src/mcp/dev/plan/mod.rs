@@ -50,7 +50,7 @@ pub fn get_plan_function() -> McpFunction {
                     "description": "Array of task titles (required for 'start' command)"
                 },
                 "content": {
-                    "type": "string", 
+                    "type": "string",
                     "description": "Task details for 'step' command, task summary for 'next' command, or final summary for 'done' command"
                 }
             },
