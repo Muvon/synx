@@ -185,8 +185,18 @@ async fn handle_start_command(call: &McpToolCall) -> Result<McpToolResult> {
 		}
 	};
 
-	// Create plan
+	// Create plan - but first check if one already exists
 	let mut storage = PLAN_STORAGE.lock().unwrap();
+
+	// Safety check: prevent accidental overwrite of existing plan
+	if storage.has_active_plan().unwrap_or(false) {
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			"Active plan already exists. Use 'done' to complete current plan, 'reset' to clear it, or 'list' to view current progress before starting a new plan.".to_string(),
+		));
+	}
+
 	if let Err(e) = storage.create_plan(title.clone(), tasks.clone()) {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),

@@ -47,7 +47,7 @@ pub fn get_plan_function() -> McpFunction {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The operation to perform: start, step, next, list, done, reset",
+                    "description": "The operation to perform:\n- start: Create new plan with tasks (ERROR if plan exists - use 'done' or 'reset' first)\n- step: Add progress details to current task (does NOT complete it)\n- next: Mark current task as COMPLETED and advance to next task\n- list: Show all tasks with progress status\n- done: Complete entire plan with final summary\n- reset: Clear all plan data",
                     "enum": ["start", "step", "next", "list", "done", "reset"]
                 },
                 "title": {

@@ -321,4 +321,142 @@ mod tests {
 		assert!(content.contains("✅ 1. Task 1")); // Now completed
 		assert!(content.contains("🔄 2. Task 2 (IN PROGRESS)")); // Now current
 	}
+
+	#[tokio::test]
+	async fn test_plan_start_prevents_overwrite() {
+		// Clear any existing plan data
+		let _ = clear_plan_data().await;
+
+		// Create first plan
+		let start_call1 = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "First Plan",
+				"tasks": ["Task A", "Task B"]
+			})),
+		);
+		let result1 = execute_plan(&start_call1, None).await.unwrap();
+		let output1 = result1.result.as_object().unwrap();
+		assert_eq!(output1["isError"], false);
+		let content1 = extract_mcp_content(&result1.result);
+		assert!(content1.contains("First Plan"));
+		assert!(content1.contains("Task A"));
+
+		// Add some progress to first plan
+		let step_call = create_plan_call(
+			"step",
+			Some(json!({
+				"content": "Working on Task A"
+			})),
+		);
+		let _ = execute_plan(&step_call, None).await;
+
+		// Try to create second plan - should ERROR with clear message
+		let start_call2 = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "Second Plan",
+				"tasks": ["Task X", "Task Y", "Task Z"]
+			})),
+		);
+		let result2 = execute_plan(&start_call2, None).await.unwrap();
+		let output2 = result2.result.as_object().unwrap();
+		assert_eq!(output2["isError"], true); // Should fail
+		let error_content = extract_mcp_content(&result2.result);
+		assert!(error_content.contains("Active plan already exists"));
+		assert!(error_content.contains("'done' to complete current plan"));
+		assert!(error_content.contains("'reset' to clear it"));
+		assert!(error_content.contains("'list' to view current progress"));
+
+		// Verify the first plan is still intact
+		let list_call = create_plan_call("list", None);
+		let result = execute_plan(&list_call, None).await.unwrap();
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("First Plan"));
+		assert!(content.contains("Task A"));
+		assert!(!content.contains("Second Plan")); // Second plan was NOT created
+		assert!(!content.contains("Task X"));
+	}
+
+	#[tokio::test]
+	async fn test_plan_start_after_done_works() {
+		// Clear any existing plan data
+		let _ = clear_plan_data().await;
+
+		// Create and complete first plan
+		let start_call1 = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "First Plan",
+				"tasks": ["Task A"]
+			})),
+		);
+		let _ = execute_plan(&start_call1, None).await;
+
+		let done_call = create_plan_call(
+			"done",
+			Some(json!({
+				"content": "First plan completed"
+			})),
+		);
+		let _ = execute_plan(&done_call, None).await;
+
+		// Now start second plan should work
+		let start_call2 = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "Second Plan",
+				"tasks": ["Task X", "Task Y"]
+			})),
+		);
+		let result2 = execute_plan(&start_call2, None).await.unwrap();
+		let output2 = result2.result.as_object().unwrap();
+		assert_eq!(output2["isError"], false); // Should succeed
+		let content2 = extract_mcp_content(&result2.result);
+		assert!(content2.contains("Second Plan"));
+		assert!(content2.contains("Task X"));
+	}
+
+	#[tokio::test]
+	async fn test_plan_start_after_reset_works() {
+		// Clear any existing plan data
+		let _ = clear_plan_data().await;
+
+		// Create first plan with progress
+		let start_call1 = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "First Plan",
+				"tasks": ["Task A", "Task B"]
+			})),
+		);
+		let _ = execute_plan(&start_call1, None).await;
+
+		let step_call = create_plan_call(
+			"step",
+			Some(json!({
+				"content": "Working on Task A"
+			})),
+		);
+		let _ = execute_plan(&step_call, None).await;
+
+		// Reset the plan
+		let reset_call = create_plan_call("reset", None);
+		let _ = execute_plan(&reset_call, None).await;
+
+		// Now start second plan should work
+		let start_call2 = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "Second Plan",
+				"tasks": ["Task X", "Task Y"]
+			})),
+		);
+		let result2 = execute_plan(&start_call2, None).await.unwrap();
+		let output2 = result2.result.as_object().unwrap();
+		assert_eq!(output2["isError"], false); // Should succeed
+		let content2 = extract_mcp_content(&result2.result);
+		assert!(content2.contains("Second Plan"));
+		assert!(content2.contains("Task X"));
+	}
 }
