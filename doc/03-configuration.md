@@ -30,21 +30,23 @@ Roles now use a simplified, more explicit configuration model:
 - **Minimal Inheritance**: Roles have minimal default settings
 - **Environment Variable Overrides**: Can modify any configuration setting
 
-## Basic Configuration
+## Adding Tools, Commands, and Agents
+
+- Add new tools/commands/agents by editing the config only—no code changes needed
+- **Commands**: Add to `[commands]` section (global or role-specific)
+- **Agents**: Add to `[agents]` and map to layers using AgentConfig (see template)
+- All registration, allowed_tools, and server_refs are config-driven
+- See [`config-templates/default.toml`](../config-templates/default.toml) for structure and examples
 
 ### Creating Configuration
-
 ```bash
 # Create default configuration
 octomind config
-
 # Set embedding provider
 octomind config --provider fastembed
-
 # Configure with validation
 octomind config --validate
 ```
-
 ### Example Configuration File
 
 **View Complete Template**: [`config-templates/default.toml`](../config-templates/default.toml)

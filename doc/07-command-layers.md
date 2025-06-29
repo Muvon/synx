@@ -21,29 +21,12 @@ Use the `/run` command followed by the command name:
 ```
 
 ## Configuration
-
-Command layers are defined in the `[commands]` section of your configuration file. They can be defined at different levels:
-
-1. **Role-specific**: `[developer.commands.estimate]` or `[assistant.commands.summarize]`
-2. **Global**: `[commands.help]` (fallback for any role)
-
-### Basic Configuration
-
-**Note**: The `description` field is now **required** for all command layers and is used in help text when running `/help`.
-
-```toml
-[[commands]]
-name = "estimate"
-description = "Provides project estimation and time analysis for development tasks"
-model = "openrouter:openai/gpt-4.1-mini"  # Optional - uses session model if not specified
-system_prompt = "You are a project estimation expert..."
-temperature = 0.2
-input_mode = "last"  # "last", "all", or "summary" (case-insensitive)
-
-[commands.mcp]
-server_refs = ["developer", "filesystem"]  # Reference servers from registry
-allowed_tools = []  # Empty means all tools from referenced servers
-```
+## Configuration
+- Register new commands by editing config only; no code needed
+- Commands can be global (`[commands]`) or role-specific (`[developer.commands.<name>]`)
+- Command config must include `name`, `description`, and may specify model, system_prompt, input_mode, server_refs, allowed_tools
+- Input modes: `last`, `all`, `summary`
+- See `config-templates/default.toml` for up-to-date examples
 
 ### Available Input Modes
 

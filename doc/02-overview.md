@@ -34,20 +34,28 @@ graph TB
 ### 1. Session Management
 - **Interactive conversations** with AI assistants
 - **Session persistence** - save, resume, and organize conversations
-- **Role-based configuration** - different behavior for different use cases
-- **Context management** - automatic optimization and token management
+- **Role-based configuration** - developer/assistant/custom roles
+- **Context management** - smart truncation, auto token management, cache/cost tracking
+- **Session continuation** - automatic when token limits are reached
 
-### 2. MCP Tool Integration
-Development tools are provided through the MCP (Model-Centric Programming) protocol:
-- **File Operations**: Read, write, edit files with AI assistance
-- **Code Analysis**: Understand code structure and relationships
-- **Shell Commands**: Execute development commands when needed
-- **External Tools**: Integrate with external MCP servers
+### 2. Tool & Agent Integration (MCP)
+- Unified tool system via Model-Centric Programming (MCP) protocol
+- Tools: file operations, code analysis, shell, web, advanced AST search
+- **/run <command>**: invokes command layers (config-driven, does not affect session history)
+- **agent_<name>(task=...)**: invokes a config-driven agent tool as a specialized AI helper
+- **All tools/commands/agents are added via config only (no code needed)**
 
-### 3. Role-Based Configuration
-- **Developer Role**: Full development environment with all tools enabled
-- **Assistant Role**: Simple conversation mode without development tools
-- **Custom Roles**: User-defined roles with specific tool configurations
+### 3. Layered Architecture
+- Every session, command, and agent is a layer with its own config
+- Layer config determines input/output mode, system prompt, allowed tools, and model
+- Agents are registered as MCP tools, accessible as `agent_<name>`
+
+### 4. Role-Based Usage
+- **Developer Role**: Full toolset, codebase access
+- **Assistant Role**: Chat only, no tools
+- **Custom Roles**: Fully configurable via config
+
+See [Session Guide](./05-sessions.md), [Advanced Features](./06-advanced.md), and [Command Layers](./07-command-layers.md) for full details.
 
 ### 4. AI Provider Support
 Extensive support for multiple AI providers with unified interface:

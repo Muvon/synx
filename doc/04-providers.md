@@ -38,8 +38,10 @@ model = "openrouter:anthropic/claude-sonnet-4"
 api_key = "your_key"  # Optional, can use env var
 ```
 
-#### Popular Models
-```bash
+#### Caching & Cost Tracking
+- All providers supporting Claude (Anthropic, OpenRouter) enable caching and cost tracking
+- Vision models supported via OpenRouter: Claude 3+, GPT-4o, Gemini, Llama 3.2 vision, Pixtral
+- Use `octomind session --model <provider:model>` everywhere
 # Anthropic models via OpenRouter
 octomind session --model "openrouter:anthropic/claude-3.5-sonnet"
 octomind session --model "openrouter:anthropic/claude-sonnet-4"

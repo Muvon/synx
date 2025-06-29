@@ -1,8 +1,11 @@
 # Session Modes and Interactive Usage
 
 ## Overview
-
-Octomind supports flexible session roles for different use cases, with two defaults provided and an extensible system for custom roles.
+- Sessions are always interactive (no batch mode)
+- Session continuation: automatic when token limits are reached (modular, user-visible)
+- **Cache/cost tracking**: All sessions track token usage and cost in real time
+- **Role selection**: Use `--role` or config to pick developer/assistant/custom
+- **/run**: run command layers (no history impact); **agent_<name>**: call agent tools as needed
 
 ## Session Roles Comparison
 

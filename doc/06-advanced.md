@@ -20,27 +20,19 @@ MCP enables AI models to use external tools and services through a standardized 
 - ✅ **Cancellation Support**: Proper handling of user cancellation requests
 - ✅ **Standard Format**: All responses follow MCP standard: `{content: [{type: "text", text: "..."}], isError: true/false}`
 
-### Built-in MCP Tools
+### Built-in MCP Tools & Usage Patterns
+- Developer: shell, ast_grep, semantic_search, view_signatures
+- Filesystem: text_editor, list_files, extract_lines
+- Web: web_search, read_html
+- Agent: agent_<name> task routing
 
-#### Developer Tools (type: "builtin")
+**Tool Invocation:**
+- Single tool: clean header, no index
+- Multiple tools: indexed headers
 
-The developer MCP server provides essential development tools for code analysis, shell operations, and structural code transformations.
-
-**shell** - Execute terminal commands with foreground and background execution support
-- **Foreground execution**: Standard command execution with output capture
-- **Background execution**: Long-running processes that return PID for manual management
-- **Process management**: Background processes continue until explicitly killed or app exits
-- **Shell history integration**: Commands are automatically added to shell history
-- **Error handling**: Clear messages for missing commands, execution failures, and cancellation
-
-**ast_grep** - AST-based code search and refactoring with semantic understanding
-- **Pattern Matching**: Use AST patterns like `$NAME`, `$ARGS`, `$$$` for flexible code matching
-- **Language Support**: JavaScript/TypeScript, PHP, Rust, Python, Go, Java, C/C++
-- **Rewrite Capabilities**: Transform code using rewrite patterns with `--update-all` support
-- **Context Control**: Configurable context lines around matches
-- **Glob Support**: Search across multiple files using glob patterns with file count protection
-- **Error handling**: Validation of patterns, file limits, and execution failures
-
+**Adding a Tool/Server:**
+- Add your tool/server in config and code (see [08-mcp-server-development.md](./08-mcp-server-development.md))
+- Always use config for registration, server_refs, allowed_tools
 ```json
 // Foreground execution (default)
 {"command": "ls -la"}

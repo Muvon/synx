@@ -26,10 +26,7 @@ The pre-commit hooks run the following checks on every commit:
 - **cargo check** - Ensures code compiles successfully
 
 ### General checks:
-- **trailing-whitespace** - Removes trailing whitespace
-- **end-of-file-fixer** - Ensures files end with newline
 - **check-merge-conflict** - Prevents committing merge conflict markers
-- **check-yaml** - Validates YAML syntax
 - **check-toml** - Validates TOML syntax
 - **check-added-large-files** - Prevents large files (>1MB) from being committed
 

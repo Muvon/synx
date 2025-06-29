@@ -5,21 +5,14 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 > **📝 Note**: The main README has been streamlined to focus on core principles and quick start. All detailed installation methods, configuration examples, and advanced features have been moved to this documentation for better organization.
 
 ## Table of Contents
-
-### 📖 Getting Started
-- **[01-installation.md](./01-installation.md)** - Installation methods, cross-compilation, shell completions
-- **[02-overview.md](./02-overview.md)** - Introduction and core concepts
-- **[03-configuration.md](./03-configuration.md)** - Configuration system and settings
-- **[04-providers.md](./04-providers.md)** - AI provider setup and management
-
-### 🔧 Core Features
-- **[05-sessions.md](./05-sessions.md)** - Interactive sessions and modes
-- **[07-command-layers.md](./07-command-layers.md)** - Specialized AI helpers and command processing
-
-### 🚀 Advanced Features
-- **[06-advanced.md](./06-advanced.md)** - MCP tools, layered architecture, and extensibility
-- **[08-mcp-server-development.md](./08-mcp-server-development.md)** - Guide for adding new built-in MCP servers
-
+- [01-installation.md](./01-installation.md) — Installation (user and dev separation)
+- [02-overview.md](./02-overview.md) — Core architecture, roles, session/layer/agent system
+- [03-configuration.md](./03-configuration.md) — Config, adding tools/agents/commands
+- [04-providers.md](./04-providers.md) — Providers, caching, cost tracking
+- [05-sessions.md](./05-sessions.md) — Session usage, continuation, cache/cost
+- [07-command-layers.md](./07-command-layers.md) — Command layers, /run usage
+- [06-advanced.md](./06-advanced.md) — Advanced features, MCP protocol, tool patterns
+- [08-mcp-server-development.md](./08-mcp-server-development.md) — Adding servers, protocol compliance
 ## Recent Updates
 
 ### Smart Session Continuation System (Latest) - **REFACTORED & ENHANCED**

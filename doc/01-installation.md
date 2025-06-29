@@ -41,12 +41,12 @@ brew install muvon/tap/octomind
 cargo install --git https://github.com/muvon/octomind.git
 ```
 
-## Building from Source
-
-### Prerequisites
-- Rust 1.70+ and Cargo installed on your system
-- No additional runtime dependencies - embedded SurrealDB is used for storage
-
+### Basic Build
+- Use ONLY for development (not needed for normal users)
+- Preferred: `cargo check --message-format=short` (fastest, validates code)
+- Use `cargo build` only if you need to run binaries (debug builds)
+- **NEVER** use `cargo build --release` for development (slow, unnecessary)
+- Do NOT modify configs or run tests that affect global configuration during build. Development instructions are now in INSTRUCTIONS.md.
 ### Basic Build
 ```bash
 # Clone the repository

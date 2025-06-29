@@ -20,28 +20,13 @@ Add a new built-in MCP server when you have:
 - Functionality that doesn't fit well in existing servers
 
 ## Step-by-Step Implementation
-
-### 1. Add Server Type to Enum
-
-**File: `src/config/mcp.rs`**
-
-Add your server type to the `McpServerType` enum:
-
-```rust
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub enum McpServerType {
-    #[serde(rename = "external")]
-    External,
-    #[serde(rename = "developer")]
-    Developer,
-    #[serde(rename = "filesystem")]
-    Filesystem,
-    #[serde(rename = "agent")]
-    Agent,
-    #[serde(rename = "database")]  // <- Add your new server type
-    Database,
-}
-```
+1. Add your server type to the `McpServerType` enum in `src/config/mcp.rs`
+2. Update server config helpers in the same file
+3. Register tool routing and error handling in `src/mcp/mod.rs` (never return Err, always MCP error)
+4. Add config-driven registration and allowed_tools patterns
+5. Validate parameters using MCP-compliant patterns
+6. Never add fallback or default tool logic for missing config
+7. See [src/mcp/*/functions.rs] for examples
 
 ### 2. Update Server Config Helper Methods
 
