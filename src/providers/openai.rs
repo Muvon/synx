@@ -27,43 +27,63 @@ use std::env;
 /// Source: https://platform.openai.com/docs/pricing (as of January 2025)
 const PRICING: &[(&str, f64, f64)] = &[
 	// Model, Input price per 1M tokens, Output price per 1M tokens
-	// GPT-4o models
+	// Latest models (2025)
+	// GPT-4.1 and variants
+	("gpt-4.1", 2.00, 8.00),
+	("gpt-4.1-2025-04-14", 2.00, 8.00),
+	("gpt-4.1-mini", 0.40, 1.60),
+	("gpt-4.1-mini-2025-04-14", 0.40, 1.60),
+	("gpt-4.1-nano", 0.10, 0.40),
+	("gpt-4.1-nano-2025-04-14", 0.10, 0.40),
+	// GPT-4.5
+	("gpt-4.5-preview", 75.00, 150.00),
+	("gpt-4.5-preview-2025-02-27", 75.00, 150.00),
+	// GPT-4o series
 	("gpt-4o", 2.50, 10.00),
-	("gpt-4o-mini", 0.15, 0.60),
-	("gpt-4o-2024-11-20", 2.50, 10.00),
 	("gpt-4o-2024-08-06", 2.50, 10.00),
-	("gpt-4o-2024-05-13", 5.00, 15.00),
-	("chatgpt-4o-latest", 2.50, 10.00),
-	// O-series reasoning models
-	("o4", 25.00, 100.00),    // Latest O4 model
-	("o3", 20.00, 80.00),     // O3 model
-	("o3-mini", 5.00, 20.00), // O3 mini variant
+	("gpt-4o-realtime-preview", 5.00, 20.00),
+	("gpt-4o-realtime-preview-2025-06-03", 5.00, 20.00),
+	("gpt-4o-mini", 0.15, 0.60),
+	("gpt-4o-mini-2024-07-18", 0.15, 0.60),
+	("gpt-4o-mini-realtime-preview", 0.60, 2.40),
+	("gpt-4o-mini-realtime-preview-2024-12-17", 0.60, 2.40),
+	("gpt-4o-mini-search-preview", 0.15, 0.60),
+	("gpt-4o-mini-search-preview-2025-03-11", 0.15, 0.60),
+	("gpt-4o-search-preview", 2.50, 10.00),
+	("gpt-4o-search-preview-2025-03-11", 2.50, 10.00),
+	// O-series and variants
 	("o1", 15.00, 60.00),
-	("o1-preview", 15.00, 60.00),
-	("o1-mini", 3.00, 12.00),
-	// GPT-4.5 models (newest series)
-	("gpt-4.5-turbo", 6.00, 20.00),
-	("gpt-4.5", 20.00, 40.00),
-	("gpt-4.5-preview", 6.00, 20.00),
-	// GPT-4.1 models (newer series)
-	("gpt-4.1-turbo", 8.00, 25.00),
-	("gpt-4.1", 25.00, 50.00),
-	("gpt-4.1-preview", 8.00, 25.00),
-	// GPT-4 Turbo models
+	("o1-2024-12-17", 15.00, 60.00),
+	("o1-pro", 150.00, 600.00),
+	("o1-pro-2025-03-19", 150.00, 600.00),
+	("o1-mini", 1.10, 4.40),
+	("o1-mini-2024-09-12", 1.10, 4.40),
+	("o3", 2.00, 8.00),
+	("o3-2025-04-16", 2.00, 8.00),
+	("o3-pro", 20.00, 80.00),
+	("o3-pro-2025-06-10", 20.00, 80.00),
+	("o3-mini", 1.10, 4.40),
+	("o3-mini-2025-01-31", 1.10, 4.40),
+	("o3-deep-research", 10.00, 40.00),
+	("o3-deep-research-2025-06-26", 10.00, 40.00),
+	("o4-mini", 1.10, 4.40),
+	("o4-mini-2025-04-16", 1.10, 4.40),
+	("o4-mini-deep-research", 2.00, 8.00),
+	("o4-mini-deep-research-2025-06-26", 2.00, 8.00),
+	// GPT-4 Turbo
 	("gpt-4-turbo", 10.00, 30.00),
 	("gpt-4-turbo-2024-04-09", 10.00, 30.00),
-	("gpt-4-0125-preview", 10.00, 30.00),
-	("gpt-4-1106-preview", 10.00, 30.00),
-	// GPT-4 models
+	// GPT-4
 	("gpt-4", 30.00, 60.00),
 	("gpt-4-0613", 30.00, 60.00),
-	("gpt-4-0314", 30.00, 60.00),
-	// GPT-3.5 Turbo models
+	("gpt-4-32k", 60.00, 120.00),
+	// GPT-3.5 Turbo
 	("gpt-3.5-turbo", 0.50, 1.50),
 	("gpt-3.5-turbo-0125", 0.50, 1.50),
-	("gpt-3.5-turbo-1106", 1.00, 2.00),
+	("gpt-3.5-turbo-instruct", 1.50, 2.00),
+	("gpt-3.5-turbo-16k-0613", 3.00, 4.00),
+	// End of models
 ];
-
 /// Calculate cost for OpenAI models with basic pricing
 fn calculate_cost(model: &str, prompt_tokens: u64, completion_tokens: u64) -> Option<f64> {
 	for (pricing_model, input_price, output_price) in PRICING {
