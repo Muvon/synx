@@ -51,7 +51,7 @@ pub fn get_plan_function() -> McpFunction {
                 },
                 "content": {
                     "type": "string",
-                    "description": "Task details for 'step' command, task summary for 'next' command, or final summary for 'done' command"
+                    "description": "Progress details for 'step' command (adds to current task without completing), completion summary for 'next' command (marks task as done), or final summary for 'done' command"
                 }
             },
             "required": ["command"],

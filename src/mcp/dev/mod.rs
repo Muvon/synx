@@ -23,6 +23,9 @@ pub mod shell;
 #[cfg(test)]
 mod dev_tests;
 
+#[cfg(test)]
+mod plan_tests;
+
 // Re-export main functionality
 pub use ast_grep::execute_ast_grep_command;
 pub use functions::get_all_functions;

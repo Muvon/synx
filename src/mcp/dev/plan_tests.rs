@@ -1,0 +1,324 @@
+// Copyright 2025 Muvon Un Limited
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Plan tool tests
+//
+// NOTE: These tests use a global static storage (PLAN_STORAGE) which can cause race conditions
+// when tests run in parallel. If tests fail intermittently, run with: cargo test test_plan -- --test-threads=1
+// This is not an issue in production since each session runs independently.
+
+#[cfg(test)]
+mod tests {
+	use crate::mcp::dev::plan::{clear_plan_data, execute_plan};
+	use crate::mcp::{extract_mcp_content, McpToolCall};
+	use serde_json::json;
+
+	// Helper function to create plan tool calls
+	fn create_plan_call(
+		command: &str,
+		additional_params: Option<serde_json::Value>,
+	) -> McpToolCall {
+		let mut params = serde_json::Map::new();
+		params.insert("command".to_string(), json!(command));
+
+		if let Some(serde_json::Value::Object(map)) = additional_params {
+			for (key, value) in map {
+				params.insert(key, value);
+			}
+		}
+
+		McpToolCall {
+			tool_name: "plan".to_string(),
+			parameters: serde_json::Value::Object(params),
+			tool_id: "test-id".to_string(),
+		}
+	}
+
+	#[tokio::test]
+	async fn test_plan_start_command_success() {
+		// Clear any existing plan data
+		let _ = clear_plan_data().await;
+
+		let call = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "Test Plan",
+				"tasks": ["Task 1", "Task 2"]
+			})),
+		);
+		let result = execute_plan(&call, None).await.unwrap();
+
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], false);
+
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("Test Plan"));
+		assert!(content.contains("Task 1"));
+		assert!(content.contains("Task 2"));
+		assert!(content.contains("CURRENT: Task 1/2 - Task 1"));
+	}
+
+	#[tokio::test]
+	async fn test_plan_start_command_validation_errors() {
+		// Clear any existing plan data
+		let _ = clear_plan_data().await;
+
+		// Test missing title
+		let call = create_plan_call(
+			"start",
+			Some(json!({
+				"tasks": ["Task 1"]
+			})),
+		);
+		let result = execute_plan(&call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], true);
+		assert!(extract_mcp_content(&result.result).contains("Missing required parameter 'title'"));
+
+		// Test missing tasks
+		let call = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "Test Plan"
+			})),
+		);
+		let result = execute_plan(&call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], true);
+		assert!(extract_mcp_content(&result.result).contains("Missing required parameter 'tasks'"));
+
+		// Test empty tasks array
+		let call = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "Test Plan",
+				"tasks": []
+			})),
+		);
+		let result = execute_plan(&call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], true);
+		assert!(extract_mcp_content(&result.result).contains("Tasks array cannot be empty"));
+
+		// Test empty title
+		let call = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "",
+				"tasks": ["Task 1"]
+			})),
+		);
+		let result = execute_plan(&call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], true);
+		assert!(extract_mcp_content(&result.result).contains("Title parameter cannot be empty"));
+	}
+
+	#[tokio::test]
+	async fn test_plan_step_command() {
+		// Clear any existing plan data and setup plan first
+		let _ = clear_plan_data().await;
+		let start_call = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "Test Plan",
+				"tasks": ["Task 1", "Task 2"]
+			})),
+		);
+		let _ = execute_plan(&start_call, None).await;
+
+		// Test adding step details
+		let step_call = create_plan_call(
+			"step",
+			Some(json!({
+				"content": "Working on authentication logic"
+			})),
+		);
+		let result = execute_plan(&step_call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], false);
+		assert!(extract_mcp_content(&result.result).contains("Step details added to Task"));
+
+		// Test getting step details (no content parameter)
+		let get_call = create_plan_call("step", None);
+		let result = execute_plan(&get_call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], false);
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("CURRENT TASK"));
+		assert!(content.contains("Working on authentication logic"));
+
+		// Test empty content error
+		let empty_call = create_plan_call(
+			"step",
+			Some(json!({
+				"content": ""
+			})),
+		);
+		let result = execute_plan(&empty_call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], true);
+		assert!(extract_mcp_content(&result.result).contains("Content parameter cannot be empty"));
+	}
+
+	#[tokio::test]
+	async fn test_plan_list_command() {
+		// Clear any existing plan data and setup plan with some progress
+		let _ = clear_plan_data().await;
+		let start_call = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "Development Tasks",
+				"tasks": ["Design", "Implement", "Test", "Deploy"]
+			})),
+		);
+		let _ = execute_plan(&start_call, None).await;
+
+		// Complete first task
+		let next_call = create_plan_call(
+			"next",
+			Some(json!({
+				"content": "Design completed"
+			})),
+		);
+		let _ = execute_plan(&next_call, None).await;
+
+		// Test list command
+		let list_call = create_plan_call("list", None);
+		let result = execute_plan(&list_call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], false);
+
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("Development Tasks"));
+		assert!(content.contains("✅ 1. Design"));
+		assert!(content.contains("🔄 2. Implement (IN PROGRESS)"));
+		assert!(content.contains("⏳ 3. Test"));
+		assert!(content.contains("⏳ 4. Deploy"));
+	}
+
+	#[tokio::test]
+	async fn test_plan_done_command() {
+		// Clear any existing plan data and setup plan
+		let _ = clear_plan_data().await;
+		let start_call = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "Simple Task",
+				"tasks": ["Complete project"]
+			})),
+		);
+		let _ = execute_plan(&start_call, None).await;
+
+		// Test done command
+		let done_call = create_plan_call(
+			"done",
+			Some(json!({
+				"content": "Project completed successfully"
+			})),
+		);
+		let result = execute_plan(&done_call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], false);
+
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("PLAN COMPLETED"));
+		assert!(content.contains("Simple Task"));
+	}
+
+	#[tokio::test]
+	async fn test_plan_reset_command() {
+		// Clear any existing plan data and setup plan first
+		let _ = clear_plan_data().await;
+		let start_call = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "Test Plan",
+				"tasks": ["Task 1"]
+			})),
+		);
+		let _ = execute_plan(&start_call, None).await;
+
+		// Test reset command
+		let reset_call = create_plan_call("reset", None);
+		let result = execute_plan(&reset_call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], false);
+		assert!(extract_mcp_content(&result.result).contains("Plan data cleared successfully"));
+
+		// Verify plan is cleared
+		let list_call = create_plan_call("list", None);
+		let result = execute_plan(&list_call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], true);
+		assert!(extract_mcp_content(&result.result).contains("No active plan"));
+	}
+
+	#[tokio::test]
+	async fn test_plan_invalid_command() {
+		let call = create_plan_call("invalid_command", None);
+		let result = execute_plan(&call, None).await.unwrap();
+		let output = result.result.as_object().unwrap();
+		assert_eq!(output["isError"], true);
+		assert!(extract_mcp_content(&result.result).contains("Unknown command 'invalid_command'"));
+	}
+
+	#[tokio::test]
+	async fn test_plan_step_vs_next_behavior() {
+		// Clear any existing plan data
+		let _ = clear_plan_data().await;
+
+		// Create a plan with 2 tasks
+		let start_call = create_plan_call(
+			"start",
+			Some(json!({
+				"title": "Behavior Test",
+				"tasks": ["Task 1", "Task 2"]
+			})),
+		);
+		let _ = execute_plan(&start_call, None).await;
+
+		// Add step details - should NOT complete the task
+		let step_call = create_plan_call(
+			"step",
+			Some(json!({
+				"content": "Working on task 1"
+			})),
+		);
+		let _ = execute_plan(&step_call, None).await;
+
+		// Check that we're still on task 1
+		let list_call = create_plan_call("list", None);
+		let result = execute_plan(&list_call, None).await.unwrap();
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("🔄 1. Task 1 (IN PROGRESS)")); // Still in progress
+		assert!(content.contains("⏳ 2. Task 2")); // Still pending
+
+		// Now use next to complete task 1
+		let next_call = create_plan_call(
+			"next",
+			Some(json!({
+				"content": "Task 1 completed"
+			})),
+		);
+		let _ = execute_plan(&next_call, None).await;
+
+		// Check that task 1 is completed and we moved to task 2
+		let list_call = create_plan_call("list", None);
+		let result = execute_plan(&list_call, None).await.unwrap();
+		let content = extract_mcp_content(&result.result);
+		assert!(content.contains("✅ 1. Task 1")); // Now completed
+		assert!(content.contains("🔄 2. Task 2 (IN PROGRESS)")); // Now current
+	}
+}
