@@ -23,24 +23,27 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
 
-/// DeepSeek pricing constants (per 1M tokens in USD)
-/// Source: https://api-docs.deepseek.com/quick_start/pricing (as of January 2025)
-/// DeepSeek has time-based pricing with standard and discount rates
-const PRICING: &[(&str, f64, f64, f64, f64)] = &[
-	// Model, Standard Input (cache miss), Standard Output, Discount Input (cache miss), Discount Output
-	// deepseek-chat (DeepSeek-V3-0324) - Standard: UTC 00:30-16:30, Discount: UTC 16:30-00:30
-	("deepseek-chat", 0.27, 1.10, 0.135, 0.550),
-	// deepseek-reasoner (DeepSeek-R1-0528) - Standard: UTC 00:30-16:30, Discount: UTC 16:30-00:30
-	("deepseek-reasoner", 0.55, 2.19, 0.135, 0.550),
-];
+// Model pricing maps: Standard and Discount (per 1M tokens in USD)
+lazy_static::lazy_static! {
+	/// Standard pricing: model -> (input, output)
+	static ref STANDARD_PRICING: std::collections::HashMap<&'static str, (f64, f64)> = [
+		("deepseek-chat", (0.27, 1.10)),
+		("deepseek-reasoner", (0.55, 2.19)),
+	].iter().cloned().collect();
+	/// Discount pricing: model -> (input, output)
+	static ref DISCOUNT_PRICING: std::collections::HashMap<&'static str, (f64, f64)> = [
+		("deepseek-chat", (0.135, 0.55)),
+		("deepseek-reasoner", (0.135, 0.55)),
+	].iter().cloned().collect();
+}
 
-/// Cache pricing for DeepSeek models (cache hit pricing)
-/// Cache hit tokens are priced at these rates regardless of time
-const CACHE_PRICING: &[(&str, f64, f64)] = &[
-	// Model, Standard Cache Hit Price, Discount Cache Hit Price
-	("deepseek-chat", 0.07, 0.035),
-	("deepseek-reasoner", 0.14, 0.035),
-];
+// Cache pricing: model -> (standard, discount)
+lazy_static::lazy_static! {
+	static ref CACHE_PRICING: std::collections::HashMap<&'static str, (f64, f64)> = [
+		("deepseek-chat", (0.07, 0.035)),
+		("deepseek-reasoner", (0.14, 0.035)),
+	].iter().cloned().collect();
+}
 
 /// Check if current UTC time falls within discount hours (16:30-00:30 UTC)
 fn is_discount_time() -> bool {
@@ -63,39 +66,40 @@ fn calculate_cost_with_cache(
 	completion_tokens: u64,
 ) -> Option<f64> {
 	let is_discount = is_discount_time();
-
-	// Find model pricing
-	let (input_price, output_price) = PRICING
-		.iter()
-		.find(|(pricing_model, _, _, _, _)| model.contains(pricing_model))
-		.map(|(_, std_input, std_output, disc_input, disc_output)| {
-			if is_discount {
-				(*disc_input, *disc_output)
-			} else {
-				(*std_input, *std_output)
-			}
-		})?;
-
-	// Find cache pricing
-	let cache_price = CACHE_PRICING
-		.iter()
-		.find(|(pricing_model, _, _)| model.contains(pricing_model))
-		.map(
-			|(_, std_cache, disc_cache)| {
-				if is_discount {
-					*disc_cache
-				} else {
-					*std_cache
-				}
-			},
-		)?;
-
-	// Calculate costs
+	let (input_price, output_price) = if is_discount {
+		get_discount_pricing(model)?
+	} else {
+		get_standard_pricing(model)?
+	};
+	let cache_price = if is_discount {
+		get_discount_cache_pricing(model)?
+	} else {
+		get_standard_cache_pricing(model)?
+	};
 	let regular_input_cost = (regular_input_tokens as f64 / 1_000_000.0) * input_price;
 	let cache_hit_cost = (cache_hit_tokens as f64 / 1_000_000.0) * cache_price;
 	let output_cost = (completion_tokens as f64 / 1_000_000.0) * output_price;
-
 	Some(regular_input_cost + cache_hit_cost + output_cost)
+}
+
+/// Return (input, output) pricing for standard period
+fn get_standard_pricing(model: &str) -> Option<(f64, f64)> {
+	STANDARD_PRICING.get(model).cloned()
+}
+
+/// Return (input, output) pricing for discount period
+fn get_discount_pricing(model: &str) -> Option<(f64, f64)> {
+	DISCOUNT_PRICING.get(model).cloned()
+}
+
+/// Return cache hit price for standard period
+fn get_standard_cache_pricing(model: &str) -> Option<f64> {
+	CACHE_PRICING.get(model).map(|(std, _)| *std)
+}
+
+/// Return cache hit price for discount period
+fn get_discount_cache_pricing(model: &str) -> Option<f64> {
+	CACHE_PRICING.get(model).map(|(_, disc)| *disc)
 }
 
 /// Calculate cost for DeepSeek models with basic time-based pricing
