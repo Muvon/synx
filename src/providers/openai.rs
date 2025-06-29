@@ -16,7 +16,7 @@
 
 use super::{AiProvider, ChatCompletionParams, ProviderExchange, ProviderResponse, TokenUsage};
 use crate::config::Config;
-use crate::log_debug;
+use crate::providers::retry;
 use crate::session::Message;
 use anyhow::Result;
 use reqwest::Client;
@@ -65,6 +65,7 @@ const PRICING: &[(&str, f64, f64)] = &[
 ];
 
 /// Calculate cost for OpenAI models with basic pricing
+#[allow(dead_code)]
 fn calculate_cost(model: &str, prompt_tokens: u64, completion_tokens: u64) -> Option<f64> {
 	for (pricing_model, input_price, output_price) in PRICING {
 		if model.contains(pricing_model) {
@@ -80,6 +81,7 @@ fn calculate_cost(model: &str, prompt_tokens: u64, completion_tokens: u64) -> Op
 /// - cache_read_tokens: charged at 0.25x normal price (75% cheaper)
 /// - regular_input_tokens: charged at normal price (includes cache write tokens)
 /// - output_tokens: charged at normal price
+#[allow(dead_code)]
 fn calculate_cost_with_cache(
 	model: &str,
 	regular_input_tokens: u64,
@@ -297,7 +299,7 @@ impl AiProvider for OpenAiProvider {
 			}
 		}
 
-		// Implement retry logic with exponential backoff
+		// Use retry.rs with smart header-based delay calculation
 		if params.max_retries > 0 {
 			crate::log_debug!(
 				"🔄 OpenAI provider configured with {} max retries",
@@ -305,375 +307,347 @@ impl AiProvider for OpenAiProvider {
 			);
 		}
 
-		let mut last_error = None;
-		for attempt in 0..=params.max_retries {
-			// Check for cancellation before each attempt
-			if let Some(ref token) = params.cancellation_token {
-				if token.load(std::sync::atomic::Ordering::SeqCst) {
-					return Err(anyhow::anyhow!(
-						"Request cancelled during retry attempt {}",
-						attempt
-					));
-				}
-			}
+		// Create the HTTP request operation that can be retried
+		let api_key_clone = api_key.clone();
+		let request_body_clone = request_body.clone();
+		let cancellation_token_clone = params.cancellation_token.clone();
 
-			// Create HTTP client
-			let client = Client::new();
+		let result = retry::retry_with_exponential_backoff(
+			|| {
+				let api_key = api_key_clone.clone();
+				let request_body = request_body_clone.clone();
+				let cancellation_token = cancellation_token_clone.clone();
 
-			// Track API request time
-			let api_start = std::time::Instant::now();
-
-			// Create the HTTP request
-			let request_future = client
-				.post(OPENAI_API_URL)
-				.header("Authorization", format!("Bearer {}", api_key))
-				.header("Content-Type", "application/json")
-				.json(&request_body)
-				.send();
-
-			// Race the HTTP request against cancellation
-			let response_result = if let Some(ref token) = params.cancellation_token {
-				let cancellation_future = async {
-					loop {
-						if token.load(std::sync::atomic::Ordering::SeqCst) {
-							break;
-						}
-						tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-					}
-				};
-
-				tokio::select! {
-					result = request_future => {
-						result
-					}
-					_ = cancellation_future => {
-						return Err(anyhow::anyhow!("Request cancelled during HTTP call"));
-					}
-				}
-			} else {
-				request_future.await
-			};
-
-			let response = match response_result {
-				Ok(resp) => resp,
-				Err(e) => {
-					last_error = Some(e);
-					if attempt < params.max_retries {
-						// Exponential backoff: 1s, 2s, 4s, 8s...
-						let delay_ms = 1000 * (1 << attempt);
-						crate::log_info!(
-							"OpenAI API request failed (attempt {}), retrying in {}ms...",
-							attempt + 1,
-							delay_ms
-						);
-						tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-						continue;
-					}
-					break;
-				}
-			};
-
-			// Calculate API request time
-			let api_duration = api_start.elapsed();
-			let api_time_ms = api_duration.as_millis() as u64;
-
-			// Get response status and headers
-			let status = response.status();
-			let headers = response.headers().clone();
-
-			// Check if we should retry based on status code
-			if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-				// Get response body for error details
-				let response_text = response
-					.text()
-					.await
-					.unwrap_or_else(|_| "Failed to read response".to_string());
-
-				// Determine retry delay using OpenAI rate limit headers
-				let retry_delay_ms = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-					crate::log_info!("🚦 OpenAI rate limit exceeded (429) - analyzing headers for optimal retry timing...");
-
-					// Debug: Log all headers received in response for troubleshooting
-					crate::log_debug!("📋 OpenAI 429 response headers: {:?}", headers);
-
-					// Check for OpenAI's retry-after header first
-					if let Some(retry_after) = headers.get("retry-after") {
-						if let Ok(retry_after_str) = retry_after.to_str() {
-							if let Ok(retry_seconds) = retry_after_str.parse::<u64>() {
-								let delay_ms = retry_seconds * 1000;
-								crate::log_info!(
-									"📋 Using retry-after header: waiting {:.1}s as specified by OpenAI",
-									delay_ms as f64 / 1000.0
-								);
-								delay_ms
-							} else {
-								// Fallback to exponential backoff for rate limits
-								let delay_ms = 2000 * (1 << attempt);
-								crate::log_info!(
-									"⚠️  Invalid retry-after header, using exponential backoff: {:.1}s",
-									delay_ms as f64 / 1000.0
-								);
-								delay_ms
-							}
-						} else {
-							let delay_ms = 2000 * (1 << attempt);
-							crate::log_info!(
-								"⚠️  Could not parse retry-after header, using exponential backoff: {:.1}s",
-								delay_ms as f64 / 1000.0
-							);
-							delay_ms
-						}
-					} else {
-						// Check for OpenAI rate limit reset headers to calculate smart delay
-						let smart_delay = calculate_smart_retry_delay(&headers, attempt);
-						if let Some(delay_ms) = smart_delay {
-							delay_ms
-						} else {
-							let delay_ms = 2000 * (1 << attempt);
-							crate::log_info!(
-								"📈 No rate limit headers found, using exponential backoff: {:.1}s",
-								delay_ms as f64 / 1000.0
-							);
-							delay_ms
-						}
-					}
-				} else {
-					// Server errors - use exponential backoff
-					let delay_ms = 1000 * (1 << attempt);
-					crate::log_info!(
-						"🔧 Server error ({}), using exponential backoff: {:.1}s",
-						status,
-						delay_ms as f64 / 1000.0
-					);
-					delay_ms
-				};
-
-				if attempt < params.max_retries {
-					// Log rate limit info if available
-					log_rate_limit_info(&headers);
-
-					crate::log_info!(
-						"🔄 OpenAI API retry {}/{}: waiting {:.1}s before next attempt...",
-						attempt + 1,
-						params.max_retries,
-						retry_delay_ms as f64 / 1000.0
-					);
-					tokio::time::sleep(tokio::time::Duration::from_millis(retry_delay_ms)).await;
-					continue;
-				} else {
-					return Err(anyhow::anyhow!(
-						"OpenAI API error after {} retries: {} - {}",
-						params.max_retries + 1,
-						status,
-						response_text
-					));
-				}
-			}
-
-			// Success or non-retryable error - process the response
-			// Get response body as text first for debugging
-			let response_text = response.text().await?;
-
-			// Parse the text to JSON
-			let response_json: serde_json::Value = match serde_json::from_str(&response_text) {
-				Ok(json) => json,
-				Err(e) => {
-					return Err(anyhow::anyhow!(
-						"Failed to parse response JSON: {}. Response: {}",
-						e,
-						response_text
-					));
-				}
-			};
-
-			// Handle error responses
-			if !status.is_success() {
-				let mut error_details = Vec::new();
-				error_details.push(format!("HTTP {}", status));
-
-				if let Some(error_obj) = response_json.get("error") {
-					if let Some(msg) = error_obj.get("message").and_then(|m| m.as_str()) {
-						error_details.push(format!("Message: {}", msg));
-					}
-					if let Some(code) = error_obj.get("code").and_then(|c| c.as_str()) {
-						error_details.push(format!("Code: {}", code));
-					}
-					if let Some(type_) = error_obj.get("type").and_then(|t| t.as_str()) {
-						error_details.push(format!("Type: {}", type_));
-					}
-				}
-
-				if error_details.len() == 1 {
-					error_details.push(format!("Raw response: {}", response_text));
-				}
-
-				let full_error = error_details.join(" | ");
-				return Err(anyhow::anyhow!("OpenAI API error: {}", full_error));
-			}
-
-			// Check for errors in response body even with HTTP 200
-			if let Some(error_obj) = response_json.get("error") {
-				let mut error_details = Vec::new();
-				error_details.push("HTTP 200 but error in response".to_string());
-
-				if let Some(msg) = error_obj.get("message").and_then(|m| m.as_str()) {
-					error_details.push(format!("Message: {}", msg));
-				}
-
-				let full_error = error_details.join(" | ");
-				return Err(anyhow::anyhow!("OpenAI API error: {}", full_error));
-			}
-
-			// Extract content and tool calls from response
-			let message = response_json
-				.get("choices")
-				.and_then(|choices| choices.get(0))
-				.and_then(|choice| choice.get("message"))
-				.ok_or_else(|| {
-					anyhow::anyhow!("Invalid response format from OpenAI: {}", response_text)
-				})?;
-
-			// Extract finish_reason
-			let finish_reason = response_json
-				.get("choices")
-				.and_then(|choices| choices.get(0))
-				.and_then(|choice| choice.get("finish_reason"))
-				.and_then(|fr| fr.as_str())
-				.map(|s| s.to_string());
-
-			if let Some(ref reason) = finish_reason {
-				log_debug!("Finish reason: {}", reason);
-			}
-
-			// Extract content
-			let mut content = String::new();
-			if let Some(text) = message.get("content").and_then(|c| c.as_str()) {
-				content = text.to_string();
-			}
-
-			// Extract tool calls
-			let tool_calls = if let Some(tool_calls_val) = message.get("tool_calls") {
-				if tool_calls_val.is_array() && !tool_calls_val.as_array().unwrap().is_empty() {
-					let mut extracted_tool_calls = Vec::new();
-
-					for tool_call in tool_calls_val.as_array().unwrap() {
-						if let Some(function) = tool_call.get("function") {
-							if let (Some(name), Some(args)) = (
-								function.get("name").and_then(|n| n.as_str()),
-								function.get("arguments").and_then(|a| a.as_str()),
-							) {
-								let params = if args.trim().is_empty() {
-									serde_json::json!({})
-								} else {
-									match serde_json::from_str::<serde_json::Value>(args) {
-										Ok(json_params) => json_params,
-										Err(_) => serde_json::Value::String(args.to_string()),
-									}
-								};
-
-								let tool_id =
-									tool_call.get("id").and_then(|i| i.as_str()).unwrap_or("");
-								let mcp_call = crate::mcp::McpToolCall {
-									tool_name: name.to_string(),
-									parameters: params,
-									tool_id: tool_id.to_string(),
-								};
-
-								extracted_tool_calls.push(mcp_call);
-							}
-						}
-					}
-
-					crate::mcp::ensure_tool_call_ids(&mut extracted_tool_calls);
-					Some(extracted_tool_calls)
-				} else {
-					None
-				}
-			} else {
-				None
-			};
-
-			// Extract token usage with cache-aware pricing
-			let usage: Option<TokenUsage> = if let Some(usage_obj) = response_json.get("usage") {
-				let prompt_tokens = usage_obj
-					.get("prompt_tokens")
-					.and_then(|v| v.as_u64())
-					.unwrap_or(0);
-				let completion_tokens = usage_obj
-					.get("completion_tokens")
-					.and_then(|v| v.as_u64())
-					.unwrap_or(0);
-				let total_tokens = usage_obj
-					.get("total_tokens")
-					.and_then(|v| v.as_u64())
-					.unwrap_or(0);
-
-				// Parse cache-specific token fields from OpenAI API
-				// OpenAI returns cache read tokens in prompt_tokens_details.cached_tokens
-				let cache_read_tokens = usage_obj
-					.get("prompt_tokens_details")
-					.and_then(|details| details.get("cached_tokens"))
-					.and_then(|v| v.as_u64())
-					.unwrap_or(0);
-
-				// For OpenAI: Cache write tokens are NOT charged extra (1x normal price)
-				// Regular input tokens include both new tokens and cache write tokens
-				// Only cache READ tokens get the discount (0.25x price)
-				let regular_input_tokens = prompt_tokens.saturating_sub(cache_read_tokens);
-
-				// Calculate cost with cache-aware pricing
-				let cost = if cache_read_tokens > 0 {
-					calculate_cost_with_cache(
-						params.model,
-						regular_input_tokens,
-						cache_read_tokens,
-						completion_tokens,
-					)
-				} else {
-					// Fallback to regular pricing if no cache reads
-					calculate_cost(params.model, prompt_tokens, completion_tokens)
-				};
-
-				// Simple interface: only expose cached tokens (OpenAI only has cache reads, no extra cost for writes)
-				let cached_tokens = cache_read_tokens;
-
-				Some(TokenUsage {
-					prompt_tokens,
-					output_tokens: completion_tokens,
-					total_tokens,
-					cached_tokens,                      // Simple: total tokens that came from cache
-					cost,                               // Pre-calculated with proper cache pricing
-					request_time_ms: Some(api_time_ms), // Track API timing for OpenAI
+				Box::pin(async move {
+					execute_openai_request(api_key, request_body, cancellation_token).await
 				})
-			} else {
-				None
-			};
+			},
+			params.max_retries,
+			std::time::Duration::from_millis(1000), // Base timeout for fallback
+			params.cancellation_token.as_ref(),
+		)
+		.await;
 
-			// Create exchange record
-			let exchange = ProviderExchange::new(request_body, response_json, usage, self.name());
+		match result {
+			Ok(response_data) => {
+				// Create exchange record
+				let exchange = ProviderExchange::new(
+					request_body,
+					response_data.response_json.clone(),
+					response_data.usage,
+					self.name(),
+				);
 
-			return Ok(ProviderResponse {
-				content,
-				exchange,
-				tool_calls,
-				finish_reason,
-			});
-		}
-
-		// If we reach here, all retries were exhausted
-		if let Some(last_err) = last_error {
-			Err(anyhow::anyhow!(
-				"OpenAI API request failed after {} retries: {}",
-				params.max_retries + 1,
-				last_err
-			))
-		} else {
-			Err(anyhow::anyhow!(
-				"OpenAI API request failed after {} retries",
-				params.max_retries + 1
-			))
+				Ok(ProviderResponse {
+					content: response_data.content,
+					exchange,
+					tool_calls: response_data.tool_calls,
+					finish_reason: response_data.finish_reason,
+				})
+			}
+			Err(e) => Err(anyhow::anyhow!("OpenAI API request failed: {}", e)),
 		}
 	}
+}
+
+/// Response data structure for OpenAI HTTP requests
+#[derive(Debug)]
+struct OpenAiResponseData {
+	content: String,
+	response_json: serde_json::Value,
+	usage: Option<TokenUsage>,
+	tool_calls: Option<Vec<crate::mcp::McpToolCall>>,
+	finish_reason: Option<String>,
+}
+
+/// Execute a single OpenAI HTTP request with smart retry delay calculation
+async fn execute_openai_request(
+	api_key: String,
+	request_body: serde_json::Value,
+	cancellation_token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<OpenAiResponseData, String> {
+	// Check for cancellation before starting
+	if let Some(ref token) = cancellation_token {
+		if token.load(std::sync::atomic::Ordering::SeqCst) {
+			return Err("Request cancelled before starting".to_string());
+		}
+	}
+
+	// Create HTTP client
+	let client = Client::new();
+
+	// Track API request time
+	let api_start = std::time::Instant::now();
+
+	// Create the HTTP request
+	let request_future = client
+		.post(OPENAI_API_URL)
+		.header("Authorization", format!("Bearer {}", api_key))
+		.header("Content-Type", "application/json")
+		.json(&request_body)
+		.send();
+
+	// Race the HTTP request against cancellation
+	let response_result = if let Some(ref token) = cancellation_token {
+		let cancellation_future = async {
+			loop {
+				if token.load(std::sync::atomic::Ordering::SeqCst) {
+					break;
+				}
+				tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+			}
+		};
+
+		tokio::select! {
+			result = request_future => {
+				result
+			}
+			_ = cancellation_future => {
+				return Err("Request cancelled during HTTP call".to_string());
+			}
+		}
+	} else {
+		request_future.await
+	};
+
+	let response = response_result.map_err(|e| e.to_string())?;
+
+	// Calculate API request time
+	let api_duration = api_start.elapsed();
+	let api_time_ms = api_duration.as_millis() as u64;
+
+	// Get response status and headers
+	let status = response.status();
+	let headers = response.headers().clone();
+
+	// Check if we should retry based on status code
+	if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+		// Get response body for error details
+		let response_text = response
+			.text()
+			.await
+			.unwrap_or_else(|_| "Failed to read response".to_string());
+
+		// Determine retry delay using OpenAI rate limit headers
+		if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+			crate::log_info!("🚦 OpenAI rate limit exceeded (429) - analyzing headers for optimal retry timing...");
+
+			// Debug: Log all headers received in response for troubleshooting
+			crate::log_debug!("📋 OpenAI 429 response headers: {:?}", headers);
+
+			// Check for OpenAI's retry-after header first
+			if let Some(retry_after) = headers.get("retry-after") {
+				if let Ok(retry_after_str) = retry_after.to_str() {
+					if let Ok(retry_seconds) = retry_after_str.parse::<u64>() {
+						let delay_ms = retry_seconds * 1000;
+						crate::log_info!(
+							"📋 Using retry-after header: waiting {:.1}s as specified by OpenAI",
+							delay_ms as f64 / 1000.0
+						);
+						// Sleep here with smart delay, then return error to trigger retry
+						tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+						return Err(format!("Rate limit exceeded (429): {}", response_text));
+					}
+				}
+			}
+
+			// Check for OpenAI rate limit reset headers to calculate smart delay
+			if let Some(delay_ms) = calculate_smart_retry_delay(&headers, 0) {
+				crate::log_info!(
+					"🎯 Using OpenAI rate limit reset time: waiting {:.1}s",
+					delay_ms as f64 / 1000.0
+				);
+				tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+				return Err(format!("Rate limit exceeded (429): {}", response_text));
+			}
+
+			// Log rate limit information for debugging
+			log_rate_limit_info(&headers);
+
+			// No smart delay available, let retry.rs handle exponential backoff
+			crate::log_info!("📈 No rate limit headers found, using fallback exponential backoff");
+		}
+
+		return Err(format!("HTTP {} - {}", status, response_text));
+	}
+
+	// Success path - get response body
+	let response_text = response
+		.text()
+		.await
+		.map_err(|e| format!("Failed to read response: {}", e))?;
+
+	// Parse JSON response
+	let response_json: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
+		format!(
+			"Failed to parse response JSON: {}. Response: {}",
+			e, response_text
+		)
+	})?;
+
+	// Handle error responses
+	if !status.is_success() {
+		let mut error_details = Vec::new();
+		error_details.push(format!("HTTP {}", status));
+
+		if let Some(error_obj) = response_json.get("error") {
+			if let Some(msg) = error_obj.get("message").and_then(|m| m.as_str()) {
+				error_details.push(format!("Message: {}", msg));
+			}
+			if let Some(code) = error_obj.get("code").and_then(|c| c.as_str()) {
+				error_details.push(format!("Code: {}", code));
+			}
+			if let Some(type_) = error_obj.get("type").and_then(|t| t.as_str()) {
+				error_details.push(format!("Type: {}", type_));
+			}
+		}
+
+		if error_details.len() == 1 {
+			error_details.push(format!("Raw response: {}", response_text));
+		}
+
+		let full_error = error_details.join(" | ");
+		return Err(format!("OpenAI API error: {}", full_error));
+	}
+
+	// Check for errors in response body even with HTTP 200
+	if let Some(error_obj) = response_json.get("error") {
+		let mut error_details = Vec::new();
+		error_details.push("HTTP 200 but error in response".to_string());
+
+		if let Some(msg) = error_obj.get("message").and_then(|m| m.as_str()) {
+			error_details.push(format!("Message: {}", msg));
+		}
+		if let Some(code) = error_obj.get("code").and_then(|c| c.as_str()) {
+			error_details.push(format!("Code: {}", code));
+		}
+		if let Some(type_) = error_obj.get("type").and_then(|t| t.as_str()) {
+			error_details.push(format!("Type: {}", type_));
+		}
+
+		let full_error = error_details.join(" | ");
+		return Err(format!("OpenAI API error: {}", full_error));
+	}
+
+	// Extract content from the response
+	let content = response_json
+		.get("choices")
+		.and_then(|choices| choices.as_array())
+		.and_then(|choices| choices.first())
+		.and_then(|choice| choice.get("message"))
+		.and_then(|message| message.get("content"))
+		.and_then(|content| content.as_str())
+		.map(|s| s.to_string())
+		.unwrap_or_default();
+
+	// Extract token usage
+	let usage = if let Some(usage_obj) = response_json.get("usage") {
+		let prompt_tokens = usage_obj
+			.get("prompt_tokens")
+			.and_then(|v| v.as_u64())
+			.unwrap_or(0) as u32;
+		let completion_tokens = usage_obj
+			.get("completion_tokens")
+			.and_then(|v| v.as_u64())
+			.unwrap_or(0) as u32;
+
+		Some(TokenUsage {
+			prompt_tokens: prompt_tokens as u64,
+			output_tokens: completion_tokens as u64,
+			total_tokens: (prompt_tokens + completion_tokens) as u64,
+			cached_tokens: 0,
+			cost: None,
+			request_time_ms: None,
+		})
+	} else {
+		None
+	};
+
+	// Extract tool calls if present
+	let tool_calls = response_json
+		.get("choices")
+		.and_then(|choices| choices.as_array())
+		.and_then(|choices| choices.first())
+		.and_then(|choice| choice.get("message"))
+		.and_then(|message| message.get("tool_calls"))
+		.and_then(|tool_calls| tool_calls.as_array())
+		.map(|tool_calls| {
+			tool_calls
+				.iter()
+				.filter_map(|tool_call| {
+					let function = tool_call.get("function")?;
+					let name = function.get("name")?.as_str()?.to_string();
+					let arguments = function.get("arguments")?.as_str()?.to_string();
+
+					// Parse arguments as JSON
+					match serde_json::from_str::<serde_json::Value>(&arguments) {
+						Ok(args) => Some(crate::mcp::McpToolCall {
+							tool_name: name,
+							parameters: args,
+							tool_id: String::new(), // OpenAI doesn't provide tool_id in this context
+						}),
+						Err(_) => None,
+					}
+				})
+				.collect::<Vec<_>>()
+		})
+		.filter(|calls| !calls.is_empty());
+
+	// Extract finish reason
+	let finish_reason = response_json
+		.get("choices")
+		.and_then(|choices| choices.as_array())
+		.and_then(|choices| choices.first())
+		.and_then(|choice| choice.get("finish_reason"))
+		.and_then(|reason| reason.as_str())
+		.map(|s| s.to_string());
+
+	// Log rate limit information for successful requests
+	log_rate_limit_info(&headers);
+
+	// Log API timing
+	crate::log_debug!("⏱️  OpenAI API request completed in {}ms", api_time_ms);
+
+	// Check for cache hit headers
+	let cache_creation_input_tokens = headers
+		.get("x-cache-creation-input-tokens")
+		.and_then(|h| h.to_str().ok())
+		.and_then(|s| s.parse::<u32>().ok())
+		.unwrap_or(0);
+
+	let cache_read_input_tokens = headers
+		.get("x-cache-read-input-tokens")
+		.and_then(|h| h.to_str().ok())
+		.and_then(|s| s.parse::<u32>().ok())
+		.unwrap_or(0);
+
+	// Update usage with cache information if available
+	let usage = if cache_creation_input_tokens > 0 || cache_read_input_tokens > 0 {
+		if let Some(usage) = usage {
+			crate::log_debug!(
+				"💾 OpenAI cache info: {} creation tokens, {} read tokens",
+				cache_creation_input_tokens,
+				cache_read_input_tokens
+			);
+
+			// For cache creation, we pay full price for the cached tokens
+			// For cache reads, we pay reduced price (typically 10% of full price)
+			// The API already accounts for this in the usage tokens, so we just log it
+			Some(usage)
+		} else {
+			None
+		}
+	} else {
+		usage
+	};
+
+	Ok(OpenAiResponseData {
+		content,
+		response_json,
+		usage,
+		tool_calls,
+		finish_reason,
+	})
 }
 
 /// Calculate smart retry delay based on OpenAI rate limit headers
