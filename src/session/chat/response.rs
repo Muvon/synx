@@ -268,12 +268,8 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 	// Debug logging for finish_reason and tool calls
 	log_response_debug(params.config, &params.finish_reason, &params.tool_calls);
 
-	// CRITICAL: Check for continuation BEFORE any processing
-	// This handles token growth from recursive tool calls
-	if session_continuation::check_and_handle_continuation(params.chat_session, params.config)? {
-		// Continuation was triggered - let the normal flow continue with injected message
-		return Ok(());
-	}
+	// CONTINUATION FIX: Removed early continuation check that was causing tool_calls/tool_result mismatch
+	// Continuation is now handled AFTER tool processing completes to ensure conversation integrity
 
 	// Check if this is a continuation response (AI responding to our summary request)
 	let has_tool_calls = params
@@ -447,6 +443,13 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 			// MCP not enabled, break out of the loop
 			break;
 		}
+	}
+
+	// CRITICAL FIX: Check for continuation after tool processing completes
+	// This ensures tool calls are processed before triggering continuation
+	if session_continuation::check_and_handle_continuation(params.chat_session, params.config)? {
+		// Continuation was triggered after tool processing - let the normal flow continue with injected message
+		return Ok(());
 	}
 
 	// Handle final response using helper function
