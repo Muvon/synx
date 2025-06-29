@@ -65,7 +65,6 @@ const PRICING: &[(&str, f64, f64)] = &[
 ];
 
 /// Calculate cost for OpenAI models with basic pricing
-#[allow(dead_code)]
 fn calculate_cost(model: &str, prompt_tokens: u64, completion_tokens: u64) -> Option<f64> {
 	for (pricing_model, input_price, output_price) in PRICING {
 		if model.contains(pricing_model) {
@@ -540,6 +539,19 @@ async fn execute_openai_request(
 		.map(|s| s.to_string())
 		.unwrap_or_default();
 
+	// Check for cache hit headers first
+	let cache_creation_input_tokens = headers
+		.get("x-cache-creation-input-tokens")
+		.and_then(|h| h.to_str().ok())
+		.and_then(|s| s.parse::<u32>().ok())
+		.unwrap_or(0);
+
+	let cache_read_input_tokens = headers
+		.get("x-cache-read-input-tokens")
+		.and_then(|h| h.to_str().ok())
+		.and_then(|s| s.parse::<u32>().ok())
+		.unwrap_or(0);
+
 	// Extract token usage
 	let usage = if let Some(usage_obj) = response_json.get("usage") {
 		let prompt_tokens = usage_obj
@@ -551,13 +563,34 @@ async fn execute_openai_request(
 			.and_then(|v| v.as_u64())
 			.unwrap_or(0) as u32;
 
+		// Calculate cost using local pricing tables if model is available
+		let cost = request_body
+			.get("model")
+			.and_then(|m| m.as_str())
+			.and_then(|model| {
+				if cache_creation_input_tokens > 0 || cache_read_input_tokens > 0 {
+					// Use cache-aware pricing when cache tokens are present
+					let regular_input_tokens =
+						prompt_tokens.saturating_sub(cache_read_input_tokens) as u64;
+					calculate_cost_with_cache(
+						model,
+						regular_input_tokens,
+						cache_read_input_tokens as u64,
+						completion_tokens as u64,
+					)
+				} else {
+					// Use basic pricing when no cache tokens
+					calculate_cost(model, prompt_tokens as u64, completion_tokens as u64)
+				}
+			});
+
 		Some(TokenUsage {
 			prompt_tokens: prompt_tokens as u64,
 			output_tokens: completion_tokens as u64,
 			total_tokens: (prompt_tokens + completion_tokens) as u64,
-			cached_tokens: 0,
-			cost: None,
-			request_time_ms: None,
+			cached_tokens: cache_read_input_tokens as u64,
+			cost,
+			request_time_ms: Some(api_time_ms),
 		})
 	} else {
 		None
@@ -611,38 +644,14 @@ async fn execute_openai_request(
 	// Log API timing
 	crate::log_debug!("⏱️  OpenAI API request completed in {}ms", api_time_ms);
 
-	// Check for cache hit headers
-	let cache_creation_input_tokens = headers
-		.get("x-cache-creation-input-tokens")
-		.and_then(|h| h.to_str().ok())
-		.and_then(|s| s.parse::<u32>().ok())
-		.unwrap_or(0);
-
-	let cache_read_input_tokens = headers
-		.get("x-cache-read-input-tokens")
-		.and_then(|h| h.to_str().ok())
-		.and_then(|s| s.parse::<u32>().ok())
-		.unwrap_or(0);
-
-	// Update usage with cache information if available
-	let usage = if cache_creation_input_tokens > 0 || cache_read_input_tokens > 0 {
-		if let Some(usage) = usage {
-			crate::log_debug!(
-				"💾 OpenAI cache info: {} creation tokens, {} read tokens",
-				cache_creation_input_tokens,
-				cache_read_input_tokens
-			);
-
-			// For cache creation, we pay full price for the cached tokens
-			// For cache reads, we pay reduced price (typically 10% of full price)
-			// The API already accounts for this in the usage tokens, so we just log it
-			Some(usage)
-		} else {
-			None
-		}
-	} else {
-		usage
-	};
+	// Log cache information if available
+	if cache_creation_input_tokens > 0 || cache_read_input_tokens > 0 {
+		crate::log_debug!(
+			"💾 OpenAI cache info: {} creation tokens, {} read tokens",
+			cache_creation_input_tokens,
+			cache_read_input_tokens
+		);
+	}
 
 	Ok(OpenAiResponseData {
 		content,

@@ -913,7 +913,7 @@ async fn execute_anthropic_request(
 		}
 
 		Some(TokenUsage {
-			prompt_tokens: total_tokens as u64,
+			prompt_tokens: input_tokens as u64,
 			output_tokens: output_tokens as u64,
 			total_tokens: total_tokens as u64,
 			cached_tokens: cached_tokens as u64,
