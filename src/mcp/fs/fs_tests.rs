@@ -1591,7 +1591,7 @@ mod tests {
 		);
 
 		// Check result details
-		let batch_summary = &result.result["batch_summary"];
+		let batch_summary = &result.result["metadata"]["batch_summary"];
 		assert_eq!(batch_summary["total_operations"], 3);
 		assert_eq!(batch_summary["successful_operations"], 3);
 		assert_eq!(batch_summary["failed_operations"], 0);

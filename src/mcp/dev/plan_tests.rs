@@ -23,6 +23,7 @@ mod tests {
 	use crate::mcp::dev::plan::{clear_plan_data, execute_plan};
 	use crate::mcp::{extract_mcp_content, McpToolCall};
 	use serde_json::json;
+	use serial_test::serial;
 
 	// Helper function to create plan tool calls
 	fn create_plan_call(
@@ -45,6 +46,7 @@ mod tests {
 		}
 	}
 
+	#[serial]
 	#[tokio::test]
 	async fn test_plan_start_command_success() {
 		// Clear any existing plan data
@@ -60,15 +62,19 @@ mod tests {
 		let result = execute_plan(&call, None).await.unwrap();
 
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], false);
+		assert_eq!(output["isError"], json!(false));
 
 		let content = extract_mcp_content(&result.result);
 		assert!(content.contains("Test Plan"));
 		assert!(content.contains("Task 1"));
 		assert!(content.contains("Task 2"));
 		assert!(content.contains("CURRENT: Task 1/2 - Task 1"));
+
+		// Cleanup for test isolation
+		let _ = clear_plan_data().await;
 	}
 
+	#[serial]
 	#[tokio::test]
 	async fn test_plan_start_command_validation_errors() {
 		// Clear any existing plan data
@@ -83,7 +89,7 @@ mod tests {
 		);
 		let result = execute_plan(&call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], true);
+		assert_eq!(output["isError"], json!(true));
 		assert!(extract_mcp_content(&result.result).contains("Missing required parameter 'title'"));
 
 		// Test missing tasks
@@ -95,7 +101,7 @@ mod tests {
 		);
 		let result = execute_plan(&call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], true);
+		assert_eq!(output["isError"], json!(true));
 		assert!(extract_mcp_content(&result.result).contains("Missing required parameter 'tasks'"));
 
 		// Test empty tasks array
@@ -108,7 +114,7 @@ mod tests {
 		);
 		let result = execute_plan(&call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], true);
+		assert_eq!(output["isError"], json!(true));
 		assert!(extract_mcp_content(&result.result).contains("Tasks array cannot be empty"));
 
 		// Test empty title
@@ -121,10 +127,11 @@ mod tests {
 		);
 		let result = execute_plan(&call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], true);
+		assert_eq!(output["isError"], json!(true));
 		assert!(extract_mcp_content(&result.result).contains("Title parameter cannot be empty"));
 	}
 
+	#[serial]
 	#[tokio::test]
 	async fn test_plan_step_command() {
 		// Clear any existing plan data and setup plan first
@@ -147,14 +154,14 @@ mod tests {
 		);
 		let result = execute_plan(&step_call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], false);
+		assert_eq!(output["isError"], json!(false));
 		assert!(extract_mcp_content(&result.result).contains("Step details added to Task"));
 
 		// Test getting step details (no content parameter)
 		let get_call = create_plan_call("step", None);
 		let result = execute_plan(&get_call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], false);
+		assert_eq!(output["isError"], json!(false));
 		let content = extract_mcp_content(&result.result);
 		assert!(content.contains("CURRENT TASK"));
 		assert!(content.contains("Working on authentication logic"));
@@ -168,10 +175,14 @@ mod tests {
 		);
 		let result = execute_plan(&empty_call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], true);
+		assert_eq!(output["isError"], json!(true));
 		assert!(extract_mcp_content(&result.result).contains("Content parameter cannot be empty"));
+
+		// Cleanup for test isolation
+		let _ = clear_plan_data().await;
 	}
 
+	#[serial]
 	#[tokio::test]
 	async fn test_plan_list_command() {
 		// Clear any existing plan data and setup plan with some progress
@@ -198,7 +209,7 @@ mod tests {
 		let list_call = create_plan_call("list", None);
 		let result = execute_plan(&list_call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], false);
+		assert_eq!(output["isError"], json!(false));
 
 		let content = extract_mcp_content(&result.result);
 		assert!(content.contains("Development Tasks"));
@@ -206,8 +217,12 @@ mod tests {
 		assert!(content.contains("🔄 2. Implement (IN PROGRESS)"));
 		assert!(content.contains("⏳ 3. Test"));
 		assert!(content.contains("⏳ 4. Deploy"));
+
+		// Cleanup for test isolation
+		let _ = clear_plan_data().await;
 	}
 
+	#[serial]
 	#[tokio::test]
 	async fn test_plan_done_command() {
 		// Clear any existing plan data and setup plan
@@ -230,13 +245,17 @@ mod tests {
 		);
 		let result = execute_plan(&done_call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], false);
+		assert_eq!(output["isError"], json!(false));
 
 		let content = extract_mcp_content(&result.result);
 		assert!(content.contains("PLAN COMPLETED"));
 		assert!(content.contains("Simple Task"));
+
+		// Cleanup for test isolation
+		let _ = clear_plan_data().await;
 	}
 
+	#[serial]
 	#[tokio::test]
 	async fn test_plan_reset_command() {
 		// Clear any existing plan data and setup plan first
@@ -254,26 +273,28 @@ mod tests {
 		let reset_call = create_plan_call("reset", None);
 		let result = execute_plan(&reset_call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], false);
+		assert_eq!(output["isError"], json!(false));
 		assert!(extract_mcp_content(&result.result).contains("Plan data cleared successfully"));
 
 		// Verify plan is cleared
 		let list_call = create_plan_call("list", None);
 		let result = execute_plan(&list_call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], true);
+		assert_eq!(output["isError"], json!(true));
 		assert!(extract_mcp_content(&result.result).contains("No active plan"));
 	}
 
+	#[serial]
 	#[tokio::test]
 	async fn test_plan_invalid_command() {
 		let call = create_plan_call("invalid_command", None);
 		let result = execute_plan(&call, None).await.unwrap();
 		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], true);
+		assert_eq!(output["isError"], json!(true));
 		assert!(extract_mcp_content(&result.result).contains("Unknown command 'invalid_command'"));
 	}
 
+	#[serial]
 	#[tokio::test]
 	async fn test_plan_step_vs_next_behavior() {
 		// Clear any existing plan data
@@ -320,8 +341,12 @@ mod tests {
 		let content = extract_mcp_content(&result.result);
 		assert!(content.contains("✅ 1. Task 1")); // Now completed
 		assert!(content.contains("🔄 2. Task 2 (IN PROGRESS)")); // Now current
+
+		// Cleanup for test isolation
+		let _ = clear_plan_data().await;
 	}
 
+	#[serial]
 	#[tokio::test]
 	async fn test_plan_start_prevents_overwrite() {
 		// Clear any existing plan data
@@ -337,7 +362,7 @@ mod tests {
 		);
 		let result1 = execute_plan(&start_call1, None).await.unwrap();
 		let output1 = result1.result.as_object().unwrap();
-		assert_eq!(output1["isError"], false);
+		assert_eq!(output1["isError"], json!(false));
 		let content1 = extract_mcp_content(&result1.result);
 		assert!(content1.contains("First Plan"));
 		assert!(content1.contains("Task A"));
@@ -361,7 +386,7 @@ mod tests {
 		);
 		let result2 = execute_plan(&start_call2, None).await.unwrap();
 		let output2 = result2.result.as_object().unwrap();
-		assert_eq!(output2["isError"], true); // Should fail
+		assert_eq!(output2["isError"], json!(true)); // Should fail
 		let error_content = extract_mcp_content(&result2.result);
 		assert!(error_content.contains("Active plan already exists"));
 		assert!(error_content.contains("'done' to complete current plan"));
@@ -376,8 +401,12 @@ mod tests {
 		assert!(content.contains("Task A"));
 		assert!(!content.contains("Second Plan")); // Second plan was NOT created
 		assert!(!content.contains("Task X"));
+
+		// Cleanup for test isolation
+		let _ = clear_plan_data().await;
 	}
 
+	#[serial]
 	#[tokio::test]
 	async fn test_plan_start_after_done_works() {
 		// Clear any existing plan data
@@ -411,12 +440,16 @@ mod tests {
 		);
 		let result2 = execute_plan(&start_call2, None).await.unwrap();
 		let output2 = result2.result.as_object().unwrap();
-		assert_eq!(output2["isError"], false); // Should succeed
+		assert_eq!(output2["isError"], json!(false)); // Should succeed
 		let content2 = extract_mcp_content(&result2.result);
 		assert!(content2.contains("Second Plan"));
 		assert!(content2.contains("Task X"));
+
+		// Cleanup for test isolation
+		let _ = clear_plan_data().await;
 	}
 
+	#[serial]
 	#[tokio::test]
 	async fn test_plan_start_after_reset_works() {
 		// Clear any existing plan data
@@ -454,9 +487,12 @@ mod tests {
 		);
 		let result2 = execute_plan(&start_call2, None).await.unwrap();
 		let output2 = result2.result.as_object().unwrap();
-		assert_eq!(output2["isError"], false); // Should succeed
+		assert_eq!(output2["isError"], json!(false)); // Should succeed
 		let content2 = extract_mcp_content(&result2.result);
 		assert!(content2.contains("Second Plan"));
 		assert!(content2.contains("Task X"));
+
+		// Cleanup for test isolation
+		let _ = clear_plan_data().await;
 	}
 }
