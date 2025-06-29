@@ -101,11 +101,19 @@ impl Layer for LayerProcessor {
 			return Err(anyhow::anyhow!("Operation cancelled"));
 		}
 
+		// Track total processing time
+		let total_start = std::time::Instant::now();
+		let mut api_time_ms = 0u64;
+		let mut tool_time_ms = 0u64;
+
 		// Get the effective model for this layer
 		let effective_model = self.config.get_effective_model(&session.info.model);
 
 		// Create messages for this layer
 		let messages = self.create_messages(input, session);
+
+		// Track initial API call time
+		let api_start = std::time::Instant::now();
 
 		// Call the model directly with session messages
 		let response = crate::session::chat_completion_with_provider(
@@ -117,6 +125,9 @@ impl Layer for LayerProcessor {
 			0, // Default max_retries for layer processor
 		)
 		.await?;
+
+		// Add initial API call time
+		api_time_ms += api_start.elapsed().as_millis() as u64;
 
 		let (output, exchange, direct_tool_calls, _finish_reason) = (
 			response.content,
@@ -168,7 +179,11 @@ impl Layer for LayerProcessor {
 					)
 					.await
 					{
-						Ok((res, _tool_time_ms)) => res, // Extract result from tuple
+						Ok((res, single_tool_time_ms)) => {
+							// Accumulate tool execution time
+							tool_time_ms += single_tool_time_ms;
+							res
+						}
 						Err(e) => {
 							crate::log_error!("{} {}", "Tool execution error:", e);
 							continue;
@@ -222,6 +237,8 @@ impl Layer for LayerProcessor {
 
 					// Call the model again with tool results
 					// Important: We use THIS LAYER'S model to process the function call results
+					let api_start_tool_processing = std::time::Instant::now();
+
 					match crate::session::chat_completion_with_provider(
 						&layer_session,
 						&effective_model,
@@ -233,8 +250,14 @@ impl Layer for LayerProcessor {
 					.await
 					{
 						Ok(response) => {
+							// Add tool result processing API time
+							api_time_ms += api_start_tool_processing.elapsed().as_millis() as u64;
+
 							// Extract token usage if available
 							let token_usage = response.exchange.usage.clone();
+
+							// Calculate total processing time
+							let total_time_ms = total_start.elapsed().as_millis() as u64;
 
 							// Return the result with the updated output
 							return Ok(LayerResult {
@@ -242,9 +265,9 @@ impl Layer for LayerProcessor {
 								exchange: response.exchange,
 								token_usage,
 								tool_calls: response.tool_calls,
-								api_time_ms: 0, // TODO: Add time tracking to processor
-								tool_time_ms: 0,
-								total_time_ms: 0,
+								api_time_ms,
+								tool_time_ms,
+								total_time_ms,
 							});
 						}
 						Err(e) => {
@@ -259,15 +282,18 @@ impl Layer for LayerProcessor {
 		// Extract token usage if available
 		let token_usage = exchange.usage.clone();
 
+		// Calculate total processing time
+		let total_time_ms = total_start.elapsed().as_millis() as u64;
+
 		// Return the result
 		Ok(LayerResult {
 			outputs: vec![output],
 			exchange,
 			token_usage,
 			tool_calls: direct_tool_calls,
-			api_time_ms: 0, // TODO: Add time tracking to processor
-			tool_time_ms: 0,
-			total_time_ms: 0,
+			api_time_ms,
+			tool_time_ms,
+			total_time_ms,
 		})
 	}
 }
