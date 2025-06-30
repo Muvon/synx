@@ -44,6 +44,11 @@ pub fn should_trigger_continuation(params: &ContinuationParams) -> bool {
 		return false;
 	}
 
+	// Check if continuation is temporarily disabled
+	if params.chat_session.continuation_disabled {
+		return false;
+	}
+
 	// Use existing adaptive threshold logic from context_truncation
 	let effective_threshold =
 		crate::session::chat::context_truncation::calculate_effective_threshold(

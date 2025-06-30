@@ -133,6 +133,7 @@ pub struct ChatSession {
 	pub pending_image: Option<crate::session::image::ImageAttachment>, // Pending image attachment
 	pub max_retries: u32,              // Maximum number of retries for provider errors
 	pub continuation_pending: bool,    // Flag for session continuation state
+	pub continuation_disabled: bool,   // Flag to temporarily disable continuation triggers
 }
 
 impl ChatSession {
@@ -197,6 +198,7 @@ impl ChatSession {
 			pending_image: None,                // Initialize pending image
 			max_retries: max_retries_value,     // Set max retries value
 			continuation_pending: false,        // Initialize continuation state
+			continuation_disabled: false,       // Initialize continuation control flag
 		}
 	}
 
@@ -318,6 +320,7 @@ impl ChatSession {
 						pending_image: None,                // Initialize pending image
 						max_retries: params.max_retries.unwrap_or(0), // Use provided max_retries or default to 0
 						continuation_pending: false,        // Initialize continuation state
+						continuation_disabled: false,       // Initialize continuation control flag
 					};
 
 					// Update the estimated cost from the loaded session
@@ -539,5 +542,20 @@ impl ChatSession {
 		role: &str,
 	) -> Result<bool> {
 		super::commands::process_command(self, input, config, role).await
+	}
+
+	/// Disable continuation triggers temporarily
+	pub fn disable_continuation(&mut self) {
+		self.continuation_disabled = true;
+	}
+
+	/// Re-enable continuation triggers
+	pub fn enable_continuation(&mut self) {
+		self.continuation_disabled = false;
+	}
+
+	/// Check if continuation is currently disabled
+	pub fn is_continuation_disabled(&self) -> bool {
+		self.continuation_disabled
 	}
 }

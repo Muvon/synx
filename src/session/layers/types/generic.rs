@@ -355,8 +355,9 @@ impl GenericLayer {
 			cache_next_user_message: false,
 			pending_image: None,
 			spending_threshold_checkpoint: 0.0,
-			max_retries: 0,              // Default max_retries for layers
-			continuation_pending: false, // Initialize continuation state
+			max_retries: 0,               // Default max_retries for layers
+			continuation_pending: false,  // Initialize continuation state
+			continuation_disabled: false, // Initialize continuation control flag
 		}
 	}
 
