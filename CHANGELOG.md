@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased] - 2025-07-01
+
+### 🐛 Critical Bug Fixes
+
+- **session**: fix OpenAI API 400 errors during parallel tool execution `[current]`
+  - Fixed session continuation triggering mid-tool processing causing incomplete tool_calls/tool_results mapping
+  - Added `TruncationOptions` struct with `defer_continuation` flag for clean API
+  - Implemented proper cancellation support with CTRL-C handling during continuation operations
+  - Refactored duplicate functions and eliminated code smells following senior developer practices
+
+### 🔧 Code Quality Improvements
+
+- **context_truncation**: eliminate duplicate functions and parameter pollution `[current]`
+  - Replaced `check_and_truncate_context_with_defer` with clean options pattern
+  - Removed unused `_role` and `_operation_cancelled` parameters
+  - Added proper `TruncationOptions` struct following Rust best practices
+  - Implemented cancellation-aware versions with `Option<Arc<AtomicBool>>` pattern
+
+### ✨ New Features
+
+- **cancellation**: add CTRL-C support to session continuation system `[current]`
+  - Users can now interrupt long-running summarization operations
+  - Added `check_and_truncate_context_with_cancellation` function
+  - Added `check_and_handle_continuation_with_cancellation` function
+  - Integrated with existing cancellation infrastructure from runner.rs
+
 ## [0.7.0] - 2025-06-27
 
 ### 📋 Release Summary

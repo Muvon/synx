@@ -21,16 +21,39 @@ use crate::session::chat::session_continuation;
 use crate::session::SmartSummarizer;
 use anyhow::Result;
 use colored::Colorize;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-// Check and handle auto-truncation using session continuation when token limit is approaching
+/// Options for context truncation behavior
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TruncationOptions {
+	/// Whether to defer continuation during tool processing
+	pub defer_continuation: bool,
+}
+
+/// Check and handle auto-truncation using session continuation when token limit is approaching
 pub async fn check_and_truncate_context(
 	chat_session: &mut ChatSession,
 	config: &Config,
-	_role: &str,
-	_operation_cancelled: Arc<AtomicBool>,
+	options: TruncationOptions,
 ) -> Result<()> {
+	check_and_truncate_context_with_cancellation(chat_session, config, options, None).await
+}
+
+/// Check and handle auto-truncation with cancellation support
+pub async fn check_and_truncate_context_with_cancellation(
+	chat_session: &mut ChatSession,
+	config: &Config,
+	options: TruncationOptions,
+	operation_cancelled: Option<Arc<AtomicBool>>,
+) -> Result<()> {
+	// Check for cancellation at the start
+	if let Some(ref cancelled) = operation_cancelled {
+		if cancelled.load(Ordering::SeqCst) {
+			return Err(anyhow::anyhow!("Operation cancelled"));
+		}
+	}
+
 	// Check if session token truncation is enabled in config (0 = disabled)
 	if config.max_session_tokens_threshold == 0 {
 		return Ok(());
@@ -51,9 +74,25 @@ pub async fn check_and_truncate_context(
 		return Ok(());
 	}
 
-	// Use session continuation for auto-truncation (NEW smart system)
-	let _continuation_triggered =
-		session_continuation::check_and_handle_continuation(chat_session, config)?;
+	// CRITICAL FIX: During tool processing, defer continuation to prevent incomplete tool_calls/tool_results
+	if options.defer_continuation {
+		crate::log_debug!("Token threshold exceeded during tool processing - deferring continuation until all tools complete");
+		return Ok(());
+	}
+
+	// Check for cancellation before starting continuation
+	if let Some(ref cancelled) = operation_cancelled {
+		if cancelled.load(Ordering::SeqCst) {
+			return Err(anyhow::anyhow!("Operation cancelled"));
+		}
+	}
+
+	// Use session continuation for auto-truncation with cancellation support
+	session_continuation::check_and_handle_continuation_with_cancellation(
+		chat_session,
+		config,
+		operation_cancelled,
+	)?;
 
 	Ok(())
 }

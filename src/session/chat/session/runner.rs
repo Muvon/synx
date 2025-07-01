@@ -16,7 +16,9 @@
 
 use super::super::animation::{show_loading_animation, show_no_animation};
 use super::super::commands::*;
-use super::super::context_truncation::check_and_truncate_context;
+use super::super::context_truncation::{
+	check_and_truncate_context_with_cancellation, TruncationOptions,
+};
 use super::super::input::read_user_input;
 use super::super::response::{process_response, ResponseProcessingParams};
 use super::core::{ChatSession, SessionInitParams};
@@ -707,12 +709,11 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		);
 
 		// Check if we need to truncate the context to stay within token limits
-		let truncate_cancelled = Arc::new(AtomicBool::new(false));
-		check_and_truncate_context(
+		check_and_truncate_context_with_cancellation(
 			&mut chat_session,
 			&current_config,
-			&role,
-			truncate_cancelled.clone(),
+			TruncationOptions::default(), // Normal truncation, no defer
+			Some(operation_cancelled.clone()),
 		)
 		.await?;
 
@@ -1255,12 +1256,11 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	chat_session.add_user_message(&input)?;
 
 	// Check and truncate context - same as interactive
-	let truncate_cancelled = Arc::new(AtomicBool::new(false));
-	check_and_truncate_context(
+	check_and_truncate_context_with_cancellation(
 		&mut chat_session,
 		&current_config,
-		&role,
-		truncate_cancelled.clone(),
+		TruncationOptions::default(), // Normal truncation, no defer
+		Some(operation_cancelled.clone()),
 	)
 	.await?;
 

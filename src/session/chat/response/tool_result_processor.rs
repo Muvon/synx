@@ -115,13 +115,13 @@ pub async fn process_tool_results(
 
 		// Check truncation only for large individual tool outputs (file contents, search results, etc.)
 		if is_large_output {
-			let tool_truncate_cancelled = Arc::new(AtomicBool::new(false));
 			let truncation_start = std::time::Instant::now();
 			if let Err(e) = crate::session::chat::context_truncation::check_and_truncate_context(
 				chat_session,
 				config,
-				role,
-				tool_truncate_cancelled.clone(),
+				crate::session::chat::TruncationOptions {
+					defer_continuation: true, // Defer during tool processing
+				},
 			)
 			.await
 			{
@@ -137,13 +137,13 @@ pub async fn process_tool_results(
 
 	// BATCH TRUNCATION: Check once after all small tool results are processed
 	if needs_truncation_check {
-		let batch_truncate_cancelled = Arc::new(AtomicBool::new(false));
 		let truncation_start = std::time::Instant::now();
 		if let Err(e) = crate::session::chat::context_truncation::check_and_truncate_context(
 			chat_session,
 			config,
-			role,
-			batch_truncate_cancelled.clone(),
+			crate::session::chat::TruncationOptions {
+				defer_continuation: true, // Defer during tool processing
+			},
 		)
 		.await
 		{
@@ -155,13 +155,11 @@ pub async fn process_tool_results(
 	// FINAL SAFETY CHECK: Truncate context before making follow-up API call
 	// This ensures we don't send an oversized context to the API after processing
 	// multiple large tool results
-	let final_truncate_cancelled = Arc::new(AtomicBool::new(false));
 	let final_truncation_start = std::time::Instant::now();
 	if let Err(e) = crate::session::chat::context_truncation::check_and_truncate_context(
 		chat_session,
 		config,
-		role,
-		final_truncate_cancelled.clone(),
+		crate::session::chat::TruncationOptions::default(), // Normal truncation after all tools complete
 	)
 	.await
 	{

@@ -23,4 +23,7 @@ pub mod processing;
 // Re-export main public API
 pub use detection::{is_continuation_in_progress, should_trigger_continuation, ContinuationParams};
 pub use injection::inject_summary_request;
-pub use processing::{check_and_handle_continuation, process_continuation_response};
+pub use processing::{
+	check_and_handle_continuation, check_and_handle_continuation_with_cancellation,
+	process_continuation_response,
+};

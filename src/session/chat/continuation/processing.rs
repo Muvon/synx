@@ -199,11 +199,37 @@ pub fn check_and_handle_continuation(
 	chat_session: &mut ChatSession,
 	config: &Config,
 ) -> Result<bool> {
+	check_and_handle_continuation_with_cancellation(chat_session, config, None)
+}
+
+/// Check and handle continuation with cancellation support
+/// This allows CTRL-C to interrupt long-running continuation operations
+pub fn check_and_handle_continuation_with_cancellation(
+	chat_session: &mut ChatSession,
+	config: &Config,
+	operation_cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<bool> {
+	use std::sync::atomic::Ordering;
+
+	// Check for cancellation at the start
+	if let Some(ref cancelled) = operation_cancelled {
+		if cancelled.load(Ordering::SeqCst) {
+			return Err(anyhow::anyhow!("Operation cancelled"));
+		}
+	}
+
 	let current_tokens = crate::session::estimate_message_tokens(&chat_session.session.messages);
 
 	let mut params = ContinuationParams::new(chat_session, config, current_tokens);
 
 	if should_trigger_continuation(&params) {
+		// Check for cancellation before injecting summary request
+		if let Some(ref cancelled) = operation_cancelled {
+			if cancelled.load(Ordering::SeqCst) {
+				return Err(anyhow::anyhow!("Operation cancelled"));
+			}
+		}
+
 		inject_summary_request(&mut params)?;
 		return Ok(true); // Continuation triggered
 	}

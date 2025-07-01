@@ -17,6 +17,7 @@
 
 // Re-export the main public API from the continuation submodules
 pub use crate::session::chat::continuation::{
-	check_and_handle_continuation, inject_summary_request, is_continuation_in_progress,
-	process_continuation_response, should_trigger_continuation, ContinuationParams,
+	check_and_handle_continuation, check_and_handle_continuation_with_cancellation,
+	inject_summary_request, is_continuation_in_progress, process_continuation_response,
+	should_trigger_continuation, ContinuationParams,
 };
