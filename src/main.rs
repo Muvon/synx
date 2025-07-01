@@ -60,10 +60,17 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+	// Initialize environment tracker before loading .env
+	let _tracker = octomind::config::get_env_tracker();
+
 	// Load .env file from current directory (if exists)
 	// This will override existing environment variables with .env values
-	if dotenvy::from_filename(".env").is_ok() {
-		octomind::log_debug!("Loaded .env file from current directory");
+	if let Err(e) = octomind::config::get_env_tracker()
+		.lock()
+		.unwrap()
+		.load_dotenv_override()
+	{
+		octomind::log_debug!("Failed to load .env file: {}", e);
 	}
 
 	let args = CliArgs::parse();

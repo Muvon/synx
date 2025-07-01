@@ -16,8 +16,18 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+
+// Global environment tracker for source detection
+static ENV_TRACKER: OnceLock<Mutex<env_source::EnvTracker>> = OnceLock::new();
+
+/// Get global environment tracker instance
+pub fn get_env_tracker() -> &'static Mutex<env_source::EnvTracker> {
+	ENV_TRACKER.get_or_init(|| Mutex::new(env_source::EnvTracker::new()))
+}
 
 // Re-export all modules
+pub mod env_source;
 pub mod layers;
 pub mod loading;
 pub mod mcp;
