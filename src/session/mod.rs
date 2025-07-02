@@ -38,7 +38,7 @@ pub use layers::{process_with_layers, InputMode, Layer, LayerConfig, LayerMcpCon
 pub use model_utils::model_supports_caching;
 pub use project_context::ProjectContext;
 pub use smart_summarizer::SmartSummarizer;
-pub use token_counter::{estimate_message_tokens, estimate_tokens}; // Export token counting functions // Export cache management
+pub use token_counter::{estimate_full_context_tokens, estimate_message_tokens, estimate_tokens}; // Export token counting functions // Export cache management
 
 // Re-export constants
 // Constants moved to config

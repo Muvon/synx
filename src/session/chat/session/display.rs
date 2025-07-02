@@ -559,11 +559,51 @@ impl ChatSession {
 			filtered_messages.len()
 		));
 
-		// Calculate current session context tokens
-		let current_context_tokens =
-			crate::session::token_counter::estimate_message_tokens(&self.session.messages);
+		// Calculate current session context tokens including system prompt and tools
+		let current_context_tokens = {
+			// Get system prompt for accurate token counting
+			// Try to get the actual system prompt used by the session
+			let system_prompt = if !self.session.messages.is_empty() {
+				// Look for system message in the session
+				self.session
+					.messages
+					.iter()
+					.find(|m| m.role == "system")
+					.map(|m| m.content.as_str())
+					.unwrap_or("You are a helpful assistant.")
+			} else {
+				"You are a helpful assistant."
+			};
+
+			// Estimate tool count based on MCP configuration
+			// For accurate display, we estimate tool overhead based on configured servers
+			let estimated_tool_count = if !config.mcp.servers.is_empty() {
+				// Estimate ~10-15 tools per MCP server on average
+				config.mcp.servers.len() * 12
+			} else {
+				0
+			};
+
+			// Calculate tokens with estimated tool overhead
+			let mut total =
+				crate::session::token_counter::estimate_message_tokens(&self.session.messages);
+
+			// Add system prompt tokens
+			total += crate::session::token_counter::estimate_tokens(system_prompt);
+			total += 10; // API formatting overhead
+
+			// Add estimated tool definition overhead
+			if estimated_tool_count > 0 {
+				// Estimate ~50 tokens per tool definition on average
+				total += estimated_tool_count * 50;
+				total += 10; // Tools array overhead
+			}
+
+			total
+		};
+
 		markdown_content.push_str(&format!(
-			"- **Current Context Tokens:** {}\n",
+			"- **Current Context Tokens:** {} (includes system prompt + tools)\n",
 			crate::session::chat::format_number(current_context_tokens as u64)
 		));
 

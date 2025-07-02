@@ -55,3 +55,42 @@ pub fn estimate_message_tokens(messages: &[crate::session::Message]) -> usize {
 
 	total
 }
+
+// Estimate tokens for full context including system prompt and tools
+// This provides accurate estimates that match what's actually sent to API providers
+pub fn estimate_full_context_tokens(
+	messages: &[crate::session::Message],
+	system_prompt: Option<&str>,
+	tools: Option<&[crate::mcp::McpFunction]>,
+) -> usize {
+	// Start with basic message tokens
+	let mut total = estimate_message_tokens(messages);
+
+	// Add system prompt tokens if present
+	if let Some(prompt) = system_prompt {
+		total += estimate_tokens(prompt);
+		// Add API formatting overhead for system message
+		total += 10;
+	}
+
+	// Add tool definition tokens if present
+	if let Some(tool_list) = tools {
+		for tool in tool_list {
+			// Estimate tokens for tool definition JSON
+			// Create a simplified representation of the tool for token counting
+			let tool_json = serde_json::json!({
+				"name": tool.name,
+				"description": tool.description,
+				"input_schema": tool.parameters
+			});
+			let tool_str = serde_json::to_string(&tool_json).unwrap_or_default();
+			total += estimate_tokens(&tool_str);
+		}
+		// Add JSON formatting overhead per tool (arrays, brackets, etc.)
+		total += tool_list.len() * 5;
+		// Add tools array overhead
+		total += 10;
+	}
+
+	total
+}
