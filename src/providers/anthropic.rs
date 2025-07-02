@@ -882,7 +882,6 @@ async fn execute_anthropic_request(
 
 		// Calculate cached tokens and cost
 		let cached_tokens = cache_read_input_tokens;
-		let total_tokens = input_tokens + output_tokens;
 
 		// Calculate cost with proper cache pricing
 		let cost = calculate_anthropic_cost(
@@ -905,9 +904,9 @@ async fn execute_anthropic_request(
 		}
 
 		Some(TokenUsage {
-			prompt_tokens: input_tokens as u64,
+			prompt_tokens: (input_tokens + cache_read_input_tokens) as u64,
 			output_tokens: output_tokens as u64,
-			total_tokens: total_tokens as u64,
+			total_tokens: (input_tokens + cache_read_input_tokens + output_tokens) as u64,
 			cached_tokens: cached_tokens as u64,
 			cost,
 			request_time_ms: Some(api_time_ms),
