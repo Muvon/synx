@@ -130,7 +130,6 @@ pub fn execute(args: &ConfigArgs, mut config: Config) -> Result<(), anyhow::Erro
 		}
 
 		let provider = parts[0];
-		let _key = parts[1]; // Unused but needed for parsing
 
 		// API keys are now only supported via environment variables for security
 		octomind::log_error!(

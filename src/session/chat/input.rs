@@ -164,7 +164,7 @@ fn load_history_from_file() -> Result<Vec<String>> {
 pub fn read_user_input(estimated_cost: f64) -> Result<String> {
 	// Configure rustyline with proper completion behavior for file completion
 	let config = RustylineConfig::builder()
-		.completion_type(CompletionType::Circular) // Cycle through completions inline, no menu
+		.completion_type(CompletionType::List) // Bash-like completion with partial matches
 		.edit_mode(EditMode::Emacs)
 		.auto_add_history(true) // Automatically add lines to history
 		.bell_style(rustyline::config::BellStyle::None) // No bell
@@ -190,6 +190,12 @@ pub fn read_user_input(estimated_cost: f64) -> Result<String> {
 	editor.bind_sequence(
 		Event::KeySeq(vec![KeyEvent::new('\t', Modifiers::empty())]),
 		EventHandler::Simple(Cmd::Complete),
+	);
+
+	// Shift+Tab for reverse completion (bash-like)
+	editor.bind_sequence(
+		Event::KeySeq(vec![KeyEvent::new('\t', Modifiers::SHIFT)]),
+		EventHandler::Simple(Cmd::ReverseSearchHistory),
 	);
 
 	// Right arrow to accept hint when at end of line

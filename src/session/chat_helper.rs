@@ -189,14 +189,55 @@ impl CommandCompleter {
 		candidates
 	}
 
-	/// Filter and prepare completion candidates for better UX with circular completion
-	fn filter_and_limit_candidates(candidates: Vec<Pair>, _file_part: &str) -> Vec<Pair> {
-		// For circular completion, limit to fewer total candidates for better UX
-		const MAX_TOTAL: usize = 8; // Reasonable limit for circular experience
+	/// Filter and prepare completion candidates for better UX with bash-like completion
+	fn filter_and_limit_candidates(candidates: Vec<Pair>, file_part: &str) -> Vec<Pair> {
+		// For bash-like completion, find common prefix for partial completion
+		if candidates.is_empty() {
+			return candidates;
+		}
 
+		// If there's a common prefix longer than current input, add it as first candidate
+		let common_prefix = Self::find_common_prefix(&candidates);
 		let mut result = candidates;
+
+		// If common prefix is longer than current input, add it for partial completion
+		if common_prefix.len() > file_part.len() {
+			let partial_completion = Pair {
+				display: format!("{} (partial)", common_prefix),
+				replacement: common_prefix,
+			};
+			result.insert(0, partial_completion);
+		}
+
+		// Limit total candidates for better UX
+		const MAX_TOTAL: usize = 10; // More options for list mode
 		result.truncate(MAX_TOTAL);
 		result
+	}
+
+	/// Find common prefix among all candidates for partial completion
+	fn find_common_prefix(candidates: &[Pair]) -> String {
+		if candidates.is_empty() {
+			return String::new();
+		}
+
+		let first = &candidates[0].replacement;
+		let mut common_len = first.len();
+
+		for candidate in candidates.iter().skip(1) {
+			let replacement = &candidate.replacement;
+			let mut len = 0;
+			for (a, b) in first.chars().zip(replacement.chars()) {
+				if a == b {
+					len += a.len_utf8();
+				} else {
+					break;
+				}
+			}
+			common_len = common_len.min(len);
+		}
+
+		first[..common_len].to_string()
 	}
 }
 
@@ -214,15 +255,12 @@ impl Completer for CommandCompleter {
 			let image_prefix = "/image ";
 			let prefix_len = image_prefix.len();
 
-			// Extract the file path part after "/image "
-			let file_part = if line.len() > prefix_len {
-				&line[prefix_len..]
+			// Extract the file path part up to cursor position
+			let file_part = if pos > prefix_len {
+				&line[prefix_len..pos]
 			} else {
 				""
 			};
-
-			// Calculate position within the file part (not used in our custom completion)
-			let _file_pos = pos.saturating_sub(prefix_len);
 
 			// Use our custom file completion that handles absolute paths and tilde expansion
 			let candidates = Self::complete_file_path(file_part);
@@ -234,18 +272,32 @@ impl Completer for CommandCompleter {
 			// No completion for non-commands
 			Ok((0, vec![]))
 		} else {
-			// Handle regular command completion
+			// Handle regular command completion with cursor position awareness
+			let command_part = &line[..pos.min(line.len())];
 			let candidates: Vec<Pair> = self
 				.commands
 				.iter()
-				.filter(|cmd| cmd.starts_with(line))
+				.filter(|cmd| cmd.starts_with(command_part))
 				.map(|cmd| Pair {
 					display: cmd.clone(),
 					replacement: cmd.clone(),
 				})
 				.collect();
 
-			Ok((0, candidates))
+			// Find common prefix for partial completion
+			let common_prefix = Self::find_common_prefix(&candidates);
+			let mut result = candidates;
+
+			// If there's a longer common prefix, add it as first option
+			if common_prefix.len() > command_part.len() {
+				let partial = Pair {
+					display: format!("{} (partial)", common_prefix),
+					replacement: common_prefix,
+				};
+				result.insert(0, partial);
+			}
+
+			Ok((0, result))
 		}
 	}
 }
