@@ -237,21 +237,6 @@ impl ChatSession {
 			// Read from root configuration - STRICT: assume it exists
 			params.config.get_effective_max_tokens()
 		};
-		// Validate session token threshold if enabled
-		if params.config.max_session_tokens_threshold > 0 {
-			if let Err(e) =
-				crate::session::validate_session_token_threshold(params.config, params.role).await
-			{
-				return Err(anyhow::anyhow!(
-					"Session initialization failed: {}\n\n\
-					 To fix this issue:\n\
-					 1. Increase max_session_tokens_threshold in your config\n\
-					 2. Or disable session continuation by setting max_session_tokens_threshold = 0\n\
-					 3. Or reduce the number of MCP servers to lower tool overhead",
-					e
-				));
-			}
-		}
 
 		// Check if we should load or create a session
 		let should_resume = if params.resume.is_some() {

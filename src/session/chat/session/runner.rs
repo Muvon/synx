@@ -169,6 +169,23 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	}
 	session_params = session_params.with_max_retries(max_retries);
 
+	// Validate session token threshold if enabled (before initializing session)
+	if config_for_role.max_session_tokens_threshold > 0 {
+		if let Err(e) =
+			crate::session::validate_session_token_threshold(&config_for_role, &role, &current_dir)
+				.await
+		{
+			return Err(anyhow::anyhow!(
+				"Session initialization failed: {}
+To fix this issue
+1. Increase max_session_tokens_threshold in your config
+2. Or disable session continuation by setting max_session_tokens_threshold = 0
+3. Or reduce the number of MCP servers to lower tool overhead",
+				e
+			));
+		}
+	}
+
 	let mut chat_session = ChatSession::initialize(session_params).await?;
 
 	// If runtime model override is provided, update the session's model (runtime only)

@@ -281,10 +281,10 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 		.tool_calls
 		.as_ref()
 		.is_some_and(|calls| !calls.is_empty());
-	
+
 	// Check if continuation is pending - if so, handle it immediately and skip tools
-	if params.chat_session.continuation_pending {
-		if session_continuation::process_continuation_response(
+	if params.chat_session.continuation_pending
+		&& session_continuation::process_continuation_response(
 			params.chat_session,
 			&params.content,
 			has_tool_calls,
@@ -292,10 +292,9 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 			params.role,
 		)
 		.await?
-		{
-			// Continuation was processed - skip ALL tool processing
-			return process_continuation_message_immediately(params).await;
-		}
+	{
+		// Continuation was processed - skip ALL tool processing
+		return process_continuation_message_immediately(params).await;
 	}
 
 	// First, add the user message before processing response
