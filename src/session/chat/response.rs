@@ -423,6 +423,12 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 							}
 						}
 					} else {
+						// No follow-up response - check if this was due to continuation being triggered
+						if params.chat_session.continuation_pending {
+							log_debug!("Tool processing stopped due to continuation trigger - breaking out of tool loop to handle continuation");
+							// Break out of tool processing loop to let the main continuation check handle it
+							break;
+						}
 						// No follow-up response (cancelled or error), exit
 						return Ok(());
 					}

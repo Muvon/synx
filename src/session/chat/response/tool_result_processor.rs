@@ -170,6 +170,18 @@ pub async fn process_tool_results(
 	}
 	truncation_time += final_truncation_start.elapsed().as_millis();
 
+	// CRITICAL FIX: Check if continuation was triggered during truncation check
+	// If continuation_pending is now true, stop tool processing and return None
+	// This allows the main response processing loop to handle the continuation properly
+	if chat_session.continuation_pending {
+		// Stop animation before returning
+		animation_cancel.store(true, Ordering::SeqCst);
+		let _ = animation_task.await;
+
+		log_info!("Continuation triggered during tool processing - stopping tool flow to handle continuation");
+		return Ok(None); // Return None to stop tool processing and let continuation be handled
+	}
+
 	// CRITICAL FIX: Check cache threshold AFTER all tool results are processed
 	// This ensures cache markers are set at the correct boundary - after all parallel
 	// tool results are added to session, but before sending the complete batch to server
