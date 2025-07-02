@@ -125,6 +125,7 @@ pub struct ChatSession {
 	pub session: Session,
 	pub last_response: String,
 	pub model: String,
+	pub role: String, // Role for the session
 	pub temperature: f32,
 	pub max_tokens: u32,
 	pub estimated_cost: f64,
@@ -145,6 +146,7 @@ impl ChatSession {
 		max_tokens: Option<u32>,
 		max_retries: Option<u32>,
 		config: &Config,
+		role: &str,
 	) -> Self {
 		let model_name = model.unwrap_or_else(|| config.get_effective_model());
 		// STRICT: temperature should always be provided from role config, no fallbacks
@@ -190,6 +192,7 @@ impl ChatSession {
 			},
 			last_response: String::new(),
 			model: model_name,
+			role: role.to_string(),             // Store the role in ChatSession
 			temperature: temperature_value,     // Use the provided temperature
 			max_tokens: max_tokens_value,       // Use the provided max_tokens
 			estimated_cost: 0.0,                // Initialize estimated cost as zero
@@ -203,7 +206,7 @@ impl ChatSession {
 	}
 
 	// Initialize a new chat session or load existing one
-	pub fn initialize(params: SessionInitParams<'_>) -> Result<Self> {
+	pub async fn initialize(params: SessionInitParams<'_>) -> Result<Self> {
 		let sessions_dir = get_sessions_dir()?;
 
 		// Determine session name
@@ -234,6 +237,21 @@ impl ChatSession {
 			// Read from root configuration - STRICT: assume it exists
 			params.config.get_effective_max_tokens()
 		};
+		// Validate session token threshold if enabled
+		if params.config.max_session_tokens_threshold > 0 {
+			if let Err(e) =
+				crate::session::validate_session_token_threshold(params.config, params.role).await
+			{
+				return Err(anyhow::anyhow!(
+					"Session initialization failed: {}\n\n\
+					 To fix this issue:\n\
+					 1. Increase max_session_tokens_threshold in your config\n\
+					 2. Or disable session continuation by setting max_session_tokens_threshold = 0\n\
+					 3. Or reduce the number of MCP servers to lower tool overhead",
+					e
+				));
+			}
+		}
 
 		// Check if we should load or create a session
 		let should_resume = if params.resume.is_some() {
@@ -312,6 +330,7 @@ impl ChatSession {
 						session,
 						last_response: String::new(),
 						model: restored_model,              // Use restored model from session
+						role: params.role.to_string(),      // Add role from params
 						temperature: effective_temperature, // Use config-based temperature
 						max_tokens: effective_max_tokens,   // Use config-based max_tokens
 						estimated_cost: 0.0,
@@ -381,6 +400,7 @@ impl ChatSession {
 						Some(effective_max_tokens),  // Use config-based max_tokens
 						params.max_retries,          // Pass max_retries through
 						params.config,
+						params.role, // Add role parameter
 					);
 					chat_session.session.session_file = Some(new_session_file);
 
@@ -422,6 +442,7 @@ impl ChatSession {
 				Some(effective_max_tokens),
 				params.max_retries,
 				params.config,
+				params.role,
 			);
 			chat_session.session.session_file = Some(session_file);
 

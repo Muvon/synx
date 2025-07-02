@@ -94,3 +94,86 @@ pub fn estimate_full_context_tokens(
 
 	total
 }
+/// Calculate minimum tokens required for a session with given role and config
+/// This includes system prompt + tool definitions + safety margin
+pub async fn calculate_minimum_session_tokens(
+	config: &crate::config::Config,
+	role: &str,
+) -> anyhow::Result<usize> {
+	// Get system prompt for the role
+	let (_, _, _, _, system_prompt) = config.get_role_config(role);
+	let system_tokens = estimate_tokens(system_prompt);
+
+	// Get tool definitions tokens
+	let tool_tokens = if !config.mcp.servers.is_empty() {
+		let tools = crate::mcp::get_available_functions(config).await;
+		let mut total = 0;
+		for tool in &tools {
+			let tool_json = serde_json::json!({
+				"name": tool.name,
+				"description": tool.description,
+				"input_schema": tool.parameters
+			});
+			let tool_str = serde_json::to_string(&tool_json).unwrap_or_default();
+			total += estimate_tokens(&tool_str);
+		}
+		total + (tools.len() * 5) + 10 // JSON overhead
+	} else {
+		0
+	};
+
+	Ok(system_tokens + tool_tokens)
+}
+
+/// Validate that max_session_tokens_threshold is sufficient for role requirements
+pub async fn validate_session_token_threshold(
+	config: &crate::config::Config,
+	role: &str,
+) -> anyhow::Result<()> {
+	if config.max_session_tokens_threshold == 0 {
+		return Ok(()); // Disabled, no validation needed
+	}
+
+	let minimum_tokens = calculate_minimum_session_tokens(config, role).await?;
+	let threshold = config.max_session_tokens_threshold;
+
+	// Get detailed breakdown for error message
+	let (_, _, _, _, system_prompt) = config.get_role_config(role);
+	let system_tokens = estimate_tokens(system_prompt);
+	let tool_tokens = minimum_tokens - system_tokens;
+
+	// Apply 2x safety check
+	if minimum_tokens * 2 > threshold {
+		return Err(anyhow::anyhow!(
+			"max_session_tokens_threshold ({}) is too low for role '{}'\n\
+			 Minimum required: {} tokens (system prompt + tools)\n\
+			 Recommended minimum: {} tokens (2x safety margin)\n\
+			 \n\
+			 Breakdown:\n\
+			 - System prompt: {} tokens\n\
+			 - Tool definitions: {} tokens\n\
+			 - Safety margin: 2x multiplier\n\
+			 \n\
+			 Please increase max_session_tokens_threshold to at least {}",
+			threshold,
+			role,
+			minimum_tokens,
+			minimum_tokens * 2,
+			system_tokens,
+			tool_tokens,
+			minimum_tokens * 2
+		));
+	}
+
+	// Warn if threshold is close to minimum (less than 3x)
+	if minimum_tokens * 3 > threshold {
+		crate::log_info!(
+			"⚠️  max_session_tokens_threshold ({}) is close to minimum requirements ({} tokens). \
+			 Consider increasing for better session continuity.",
+			threshold,
+			minimum_tokens
+		);
+	}
+
+	Ok(())
+}

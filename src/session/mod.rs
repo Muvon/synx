@@ -38,7 +38,10 @@ pub use layers::{process_with_layers, InputMode, Layer, LayerConfig, LayerMcpCon
 pub use model_utils::model_supports_caching;
 pub use project_context::ProjectContext;
 pub use smart_summarizer::SmartSummarizer;
-pub use token_counter::{estimate_full_context_tokens, estimate_message_tokens, estimate_tokens}; // Export token counting functions // Export cache management
+pub use token_counter::{
+	calculate_minimum_session_tokens, estimate_full_context_tokens, estimate_message_tokens,
+	estimate_tokens, validate_session_token_threshold,
+}; // Export token counting functions // Export cache management
 
 // Re-export constants
 // Constants moved to config
@@ -992,15 +995,24 @@ pub async fn chat_completion_with_validation(
 	// Get maximum input tokens for this provider/model (actual context window)
 	let max_input_tokens = provider.get_max_input_tokens(&actual_model);
 
-	// Calculate EXACTLY what we're about to send to the API
-	let mut total_input_tokens = estimate_message_tokens(params.messages);
+	// Calculate EXACTLY what we're about to send to the API using enhanced token counting
+	let total_input_tokens = if let Some(ref session) = params.chat_session {
+		// Get system prompt for the role from ChatSession
+		let (_, _, _, _, system_prompt) = params.config.get_role_config(&session.role);
 
-	// Add estimated tokens for tool definitions if MCP is configured
-	if !params.config.mcp.servers.is_empty() {
-		// More accurate estimate: ~150 tokens per tool definition on average
-		let tool_count = params.config.mcp.servers.len();
-		total_input_tokens += tool_count * 150;
-	}
+		// Get tool definitions
+		let tools = crate::mcp::get_available_functions(params.config).await;
+
+		// Use enhanced token counting that includes system prompt + tools
+		estimate_full_context_tokens(
+			params.messages,
+			Some(system_prompt),
+			if tools.is_empty() { None } else { Some(&tools) },
+		)
+	} else {
+		// Fallback for cases without chat session - use basic counting
+		estimate_message_tokens(params.messages)
+	};
 
 	// Check if our total input exceeds what the provider can handle
 	if total_input_tokens > max_input_tokens {
@@ -1018,7 +1030,9 @@ pub async fn chat_completion_with_validation(
 			if crate::session::chat::session_continuation::check_and_handle_continuation(
 				session,
 				params.config,
-			)? {
+			)
+			.await?
+			{
 				// Continuation was triggered - now make API call with updated messages
 				// Clone messages to avoid borrowing conflicts
 				let messages = session.session.messages.clone();

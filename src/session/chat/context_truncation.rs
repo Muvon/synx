@@ -92,7 +92,8 @@ pub async fn check_and_truncate_context_with_cancellation(
 		chat_session,
 		config,
 		operation_cancelled,
-	)?;
+	)
+	.await?;
 
 	Ok(())
 }

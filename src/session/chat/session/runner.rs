@@ -169,7 +169,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	}
 	session_params = session_params.with_max_retries(max_retries);
 
-	let mut chat_session = ChatSession::initialize(session_params)?;
+	let mut chat_session = ChatSession::initialize(session_params).await?;
 
 	// If runtime model override is provided, update the session's model (runtime only)
 	if let Some(runtime_model) = &model {
@@ -525,7 +525,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					let session_params = SessionInitParams::new(&current_config, &role)
 						.with_name(new_session_name)
 						.with_max_retries(max_retries);
-					let new_chat_session = ChatSession::initialize(session_params)?;
+					let new_chat_session = ChatSession::initialize(session_params).await?;
 
 					// Replace the current chat session
 					chat_session = new_chat_session;
@@ -1031,7 +1031,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	}
 	session_params = session_params.with_max_retries(max_retries);
 
-	let mut chat_session = ChatSession::initialize(session_params)?;
+	let mut chat_session = ChatSession::initialize(session_params).await?;
 
 	// Apply runtime overrides - same as interactive
 	if let Some(runtime_model) = &model {

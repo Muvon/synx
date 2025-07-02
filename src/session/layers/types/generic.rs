@@ -348,6 +348,7 @@ impl GenericLayer {
 		crate::session::chat::session::ChatSession {
 			session,
 			model: model.to_string(),
+			role: "layer".to_string(), // Default role for layers
 			temperature: self.config.temperature,
 			max_tokens: self.config.max_tokens,
 			last_response: String::new(),

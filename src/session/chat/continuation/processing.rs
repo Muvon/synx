@@ -195,16 +195,16 @@ pub async fn process_continuation_response(
 
 /// Check and handle continuation at any point during processing
 /// This is the main entry point that should be called during response processing
-pub fn check_and_handle_continuation(
+pub async fn check_and_handle_continuation(
 	chat_session: &mut ChatSession,
 	config: &Config,
 ) -> Result<bool> {
-	check_and_handle_continuation_with_cancellation(chat_session, config, None)
+	check_and_handle_continuation_with_cancellation(chat_session, config, None).await
 }
 
 /// Check and handle continuation with cancellation support
 /// This allows CTRL-C to interrupt long-running continuation operations
-pub fn check_and_handle_continuation_with_cancellation(
+pub async fn check_and_handle_continuation_with_cancellation(
 	chat_session: &mut ChatSession,
 	config: &Config,
 	operation_cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -218,7 +218,20 @@ pub fn check_and_handle_continuation_with_cancellation(
 		}
 	}
 
-	let current_tokens = crate::session::estimate_message_tokens(&chat_session.session.messages);
+	let current_tokens = {
+		// Get system prompt for the role from ChatSession
+		let (_, _, _, _, system_prompt) = config.get_role_config(&chat_session.role);
+
+		// Get tool definitions
+		let tools = crate::mcp::get_available_functions(config).await;
+
+		// Use enhanced token counting that includes system prompt + tools
+		crate::session::estimate_full_context_tokens(
+			&chat_session.session.messages,
+			Some(system_prompt),
+			if tools.is_empty() { None } else { Some(&tools) },
+		)
+	};
 
 	let mut params = ContinuationParams::new(chat_session, config, current_tokens);
 

@@ -447,7 +447,9 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 
 	// CRITICAL FIX: Check for continuation after tool processing completes
 	// This ensures tool calls are processed before triggering continuation
-	if session_continuation::check_and_handle_continuation(params.chat_session, params.config)? {
+	if session_continuation::check_and_handle_continuation(params.chat_session, params.config)
+		.await?
+	{
 		// Continuation was triggered after tool processing - let the normal flow continue with injected message
 		return Ok(());
 	}
