@@ -724,6 +724,25 @@ To fix this issue
 		// UNIFIED STANDARD PROCESSING FLOW
 		// The same code path is used whether the input is from layers or direct user input
 
+		// NEW FLOW: Check for continuation BEFORE processing new user request
+		// This is one of the two correct moments to trigger continuation:
+		// 1) On new user request (HERE)
+		// 2) After all tool results gathered, before sending to AI (in tool_result_processor)
+		if !chat_session.continuation_pending {
+			use crate::session::chat::session_continuation;
+			if session_continuation::check_and_handle_continuation(
+				&mut chat_session,
+				&current_config,
+			)
+			.await?
+			{
+				log_debug!("Token limit reached on new user request - continuation triggered, skipping to next iteration");
+				// The summary request message has already been injected by check_and_handle_continuation
+				// Just continue the loop to process it immediately without waiting for user input
+				continue;
+			}
+		}
+
 		// Add user message for standard processing flow
 		// CRITICAL FIX: Skip adding if continuation_pending since the message is already added
 		if !chat_session.continuation_pending {

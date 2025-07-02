@@ -458,16 +458,18 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 		}
 	}
 
-	// CRITICAL FIX: Check for continuation after tool processing completes
-	// This ensures tool calls are processed before triggering continuation
-	if session_continuation::check_and_handle_continuation(params.chat_session, params.config)
-		.await?
-	{
-		// Continuation was triggered after tool processing - let the normal flow continue with injected message
+	// CRITICAL FIX: Check for continuation after tool processing loop
+	// When continuation is triggered during tool execution, we broke out of the tool loop (line 430)
+	// The main session runner will detect continuation_pending and handle it automatically (runner.rs:984-988)
+	// We just need to skip final response processing and return cleanly
+	if params.chat_session.continuation_pending {
+		log_debug!("Continuation pending after tool processing - skipping final response, main session loop will handle continuation");
+		// DO NOT process final response when continuation is pending
+		// The main session loop will detect continuation_pending and continue to process the summary request
 		return Ok(());
 	}
 
-	// Handle final response using helper function
+	// Handle final response using helper function (only when no continuation is pending)
 	handle_final_response(
 		&params.content,
 		&current_content,
@@ -476,10 +478,6 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 		params.config,
 		params.role,
 	)?;
-
-	// REMOVED: Late continuation check that was causing dual processing
-	// Continuation is now handled ONLY in the early check (before tool processing)
-	// This ensures continuation triggers immediately and skips all tool processing
 
 	Ok(())
 }

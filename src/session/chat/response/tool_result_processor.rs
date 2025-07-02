@@ -152,34 +152,18 @@ pub async fn process_tool_results(
 		truncation_time += truncation_start.elapsed().as_millis();
 	}
 
-	// FINAL SAFETY CHECK: Truncate context before making follow-up API call
-	// This ensures we don't send an oversized context to the API after processing
-	// multiple large tool results
-	let final_truncation_start = std::time::Instant::now();
-	if let Err(e) = crate::session::chat::context_truncation::check_and_truncate_context(
-		chat_session,
-		config,
-		crate::session::chat::TruncationOptions::default(), // Normal truncation after all tools complete
-	)
-	.await
-	{
-		log_info!(
-			"Warning: Error during final truncation check before API call: {}",
-			e
-		);
-	}
-	truncation_time += final_truncation_start.elapsed().as_millis();
-
-	// CRITICAL FIX: Check if continuation was triggered during truncation check
-	// If continuation_pending is now true, stop tool processing and return None
-	// This allows the main response processing loop to handle the continuation properly
-	if chat_session.continuation_pending {
+	// NEW FLOW: Check for continuation AFTER all tool results are gathered
+	// This is one of the two correct moments to trigger continuation:
+	// 1) On new user request (handled in session runner)
+	// 2) After all tool results gathered, before sending to AI (HERE)
+	use crate::session::chat::session_continuation;
+	if session_continuation::check_and_handle_continuation(chat_session, config).await? {
 		// Stop animation before returning
 		animation_cancel.store(true, Ordering::SeqCst);
 		let _ = animation_task.await;
 
-		log_info!("Continuation triggered during tool processing - stopping tool flow to handle continuation");
-		return Ok(None); // Return None to stop tool processing and let continuation be handled
+		log_info!("Token limit reached after processing all tool results - continuation triggered");
+		return Ok(None); // Return None to stop tool processing and let continuation be handled by main loop
 	}
 
 	// CRITICAL FIX: Check cache threshold AFTER all tool results are processed
