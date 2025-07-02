@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.8.0] - 2025-07-02
+
+### 📋 Release Summary
+
+This release introduces enhanced session management with improved token tracking, continuation controls, and time monitoring, alongside expanded developer tools and multimodal support (6fabe56, b0ce4657, 3b81c7f). Configurable retry logic and updated pricing models improve AI provider integrations, while comprehensive documentation and testing bolster usability and reliability. Several bug fixes address token calculation accuracy, error handling, and session stability to ensure a smoother user experience (41090fc, c79cfb5f, f7270aee).
+
+
+### ✨ New Features & Enhancements
+
+- **session**: add role-based token counting and continuation checks `6fabe563`
+- **session**: include system prompt and tools in context token count `b0ce4657`
+- **session**: add flag to disable continuation triggers temporarily `174ca557`
+- **deepseek**: update pricing scheme to use hash maps and helpers `d6ceb6e8`
+- **dev**: add plan tool to developer MCP server `3b81c7fd`
+- **session**: add API, tool, and total time tracking in layers `d5fcb59b`
+- **fs**: support negative line ranges in text editor view_range `63778fed`
+- **api**: add configurable retry logic for Amazon provider `2885fb13`
+- **session**: preserve initial instructions and welcome messages on ... `880ed2d8`
+- **batch_edit**: support single-file multiple operations with origin... `b497a2ca`
+
+### 🔧 Improvements & Optimizations
+
+- **providers**: unify Anthropic and OpenAI retry logic using ret... `ad111d0f`
+- **agent,session**: source temperature from role config instead ... `d792da03`
+- **batch_edit**: extract batch_edit as independent tool from tex... `2ac3c987`
+- **ci**: fix markdown code block formatting in release workflow `0f2fde3e`
+
+### 🐛 Bug Fixes & Stability
+
+- **anthropic**: correct token usage calculation including cache tokens `41090fcd`
+- **config**: track and display env var source including .env override `8f3805db`
+- **session**: resolve OpenAI 400 errors and add CTRL-C cancellation `c79cfb5f`
+- **plan**: prevent overwriting active plan on start command `4bd44337`
+- **session**: correct continuation trigger timing in response processing `f513f964`
+- **openai**: correct token cost calculation with cache tokens `10716178`
+- **openai**: extract and set tool_call_id from response `1d76a461`
+- **chat**: use correct model and params for auto threshold continuation `f7270aee`
+
+### 📚 Documentation & Examples
+
+- **mcp**: add detailed docs for new plan tool and usage `f597b7c0`
+- **doc**: actualize installation, overview, and config guides `8dc57fce`
+- specify cargo check with short message format in instructions `24862099`
+
+### 🔄 Other Changes
+
+- **plan**: fix async test assertions and add serial execution `d44b768a`
+- **plan**: add comprehensive tests for plan tool commands `3f49e94a`
+- **anthropic**: update model pricing to June 2025 rates `4f558d96`
+- **openai**: update model list and pricing to 2025 versions `e9f0841f`
+
+### 📊 Release Summary
+
+**Total commits**: 29 across 5 categories
+
+✨ **10** new features - *Enhanced functionality*
+🔧 **4** improvements - *Better performance & code quality*
+🐛 **8** bug fixes - *Improved stability*
+📚 **3** documentation updates - *Better developer experience*
+🔄 **4** other changes - *Maintenance & tooling*
+
 ## [Unreleased] - 2025-07-01
 
 ### 🐛 Critical Bug Fixes
