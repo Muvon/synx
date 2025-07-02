@@ -95,12 +95,11 @@ fn calculate_cost(model: &str, prompt_tokens: u64, completion_tokens: u64) -> Op
 	}
 	None
 }
-
-/// Calculate cost for OpenAI models with cache-aware pricing
+/// Calculate cost with cache-aware pricing
+/// This function handles the different pricing tiers for cached vs non-cached tokens:
 /// - cache_read_tokens: charged at 0.25x normal price (75% cheaper)
 /// - regular_input_tokens: charged at normal price (includes cache write tokens)
 /// - output_tokens: charged at normal price
-#[allow(dead_code)]
 fn calculate_cost_with_cache(
 	model: &str,
 	regular_input_tokens: u64,

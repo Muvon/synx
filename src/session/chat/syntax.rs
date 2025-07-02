@@ -67,23 +67,6 @@ impl SyntaxHighlighter {
 
 		Ok(highlighted)
 	}
-
-	/// Get a list of available syntax themes
-	#[allow(dead_code)]
-	pub fn available_themes(&self) -> Vec<String> {
-		self.theme_set.themes.keys().cloned().collect()
-	}
-
-	/// Get a list of supported languages for debugging
-	#[allow(dead_code)]
-	pub fn supported_languages(&self) -> Vec<String> {
-		self.syntax_set
-			.syntaxes()
-			.iter()
-			.flat_map(|syntax| syntax.file_extensions.iter())
-			.map(|ext| ext.to_string())
-			.collect()
-	}
 }
 
 impl Default for SyntaxHighlighter {
@@ -101,18 +84,6 @@ mod tests {
 		let highlighter = SyntaxHighlighter::new();
 		assert!(!highlighter.syntax_set.syntaxes().is_empty());
 		assert!(!highlighter.theme_set.themes.is_empty());
-	}
-
-	#[test]
-	fn test_available_themes() {
-		let highlighter = SyntaxHighlighter::new();
-		let themes = highlighter.available_themes();
-		println!("Available syntax themes: {:?}", themes);
-		// Print them one by one for easier reading
-		for theme in &themes {
-			println!("Theme: {}", theme);
-		}
-		assert!(!themes.is_empty());
 	}
 
 	#[test]

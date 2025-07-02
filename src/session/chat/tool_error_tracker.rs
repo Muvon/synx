@@ -62,13 +62,6 @@ impl ToolErrorTracker {
 		}
 		0
 	}
-
-	// Not used for now, but kept for future extensibility
-	#[allow(dead_code)]
-	pub fn reset(&mut self) {
-		self.tool_errors.clear();
-	}
-
 	// Public getter for max_consecutive_errors
 	pub fn max_consecutive_errors(&self) -> usize {
 		self.max_consecutive_errors
