@@ -271,23 +271,31 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 	// CONTINUATION FIX: Removed early continuation check that was causing tool_calls/tool_result mismatch
 	// Continuation is now handled AFTER tool processing completes to ensure conversation integrity
 
-	// Check if this is a continuation response (AI responding to our summary request)
+	// CRITICAL FIX: Check for continuation BEFORE any tool processing
+	// LOGIC: If continuation_pending=true, skip ALL tool processing and handle continuation immediately
+	// FLOW: Token limit → inject_summary_request() → continuation_pending=true → AI responds with summary
+	//       → Check continuation_pending FIRST → If true: skip tools, process continuation immediately
+	//       → If false: continue normal tool processing
+	// IMPORTANT: This prevents tool calls in summary responses from interfering with continuation
 	let has_tool_calls = params
 		.tool_calls
 		.as_ref()
 		.is_some_and(|calls| !calls.is_empty());
-	if session_continuation::process_continuation_response(
-		params.chat_session,
-		&params.content,
-		has_tool_calls,
-		params.config,
-		params.role,
-	)
-	.await?
-	{
-		// This was a continuation response - session has been reset with continuation message
-		// Process the continuation message immediately to make it invisible to user
-		return process_continuation_message_immediately(params).await;
+	
+	// Check if continuation is pending - if so, handle it immediately and skip tools
+	if params.chat_session.continuation_pending {
+		if session_continuation::process_continuation_response(
+			params.chat_session,
+			&params.content,
+			has_tool_calls,
+			params.config,
+			params.role,
+		)
+		.await?
+		{
+			// Continuation was processed - skip ALL tool processing
+			return process_continuation_message_immediately(params).await;
+		}
 	}
 
 	// First, add the user message before processing response
@@ -464,42 +472,9 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 		params.role,
 	)?;
 
-	// CRITICAL FIX: Check for continuation after tool processing completes
-	// This handles cases where AI responded to summary request with tool calls
-	// After tool calls execute, we need to process the continuation
-	if params.chat_session.continuation_pending {
-		// This is a continuation response that included tool calls
-		// Now that tool calls are complete, process the continuation
-		let has_tool_calls = params
-			.tool_calls
-			.as_ref()
-			.is_some_and(|calls| !calls.is_empty());
-
-		if session_continuation::process_continuation_response(
-			params.chat_session,
-			&current_content, // Use the final processed content
-			has_tool_calls,
-			params.config,
-			params.role,
-		)
-		.await?
-		{
-			// Continuation was processed - create new params for continuation message processing
-			let continuation_params = ResponseProcessingParams::new(
-				current_content,
-				current_exchange,
-				params.tool_calls.clone(),
-				params.finish_reason.clone(),
-				params.chat_session,
-				params.config,
-				params.role,
-				params.operation_cancelled.clone(),
-			);
-
-			// Execute the continuation message
-			return process_continuation_message_immediately(continuation_params).await;
-		}
-	}
+	// REMOVED: Late continuation check that was causing dual processing
+	// Continuation is now handled ONLY in the early check (before tool processing)
+	// This ensures continuation triggers immediately and skips all tool processing
 
 	Ok(())
 }
