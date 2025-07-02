@@ -25,6 +25,13 @@ pub fn inject_summary_request(params: &mut ContinuationParams) -> Result<()> {
 	// Log token limit reached (less visible to user)
 	log_info!("Token limit reached during processing - requesting work summary...");
 
+	// CRITICAL FIX: Also show user-visible message so they know what's happening
+	use colored::Colorize;
+	println!(
+		"{}",
+		"Token limit reached during processing - requesting work summary...".bright_yellow()
+	);
+
 	// Add summary request as user message
 	let summary_message = crate::session::Message {
 		role: "user".to_string(),

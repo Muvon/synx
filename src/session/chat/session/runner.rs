@@ -465,8 +465,25 @@ To fix this issue
 		// Create a fresh cancellation flag for this iteration
 		let operation_cancelled = Arc::new(AtomicBool::new(false));
 
-		// Read user input with command completion and cost estimation
-		let mut input = read_user_input(chat_session.estimated_cost)?;
+		// CRITICAL FIX: Check if continuation is pending from previous iteration
+		// If so, skip reading user input and process the injected summary request immediately
+		let mut input = if chat_session.continuation_pending {
+			log_debug!("Continuation pending - processing injected summary request automatically");
+			// Get the last message which should be the injected summary request
+			chat_session
+				.session
+				.messages
+				.last()
+				.filter(|msg| msg.role == "user")
+				.map(|msg| msg.content.clone())
+				.unwrap_or_else(|| {
+					log_debug!("Warning: Expected summary request message not found, falling back to user input");
+					read_user_input(chat_session.estimated_cost).unwrap_or_default()
+				})
+		} else {
+			// Read user input with command completion and cost estimation
+			read_user_input(chat_session.estimated_cost)?
+		};
 
 		// Check if the input is an exit command from Ctrl+D
 		if input == "/exit" || input == "/quit" {
@@ -708,7 +725,10 @@ To fix this issue
 		// The same code path is used whether the input is from layers or direct user input
 
 		// Add user message for standard processing flow
-		chat_session.add_user_message(&input)?;
+		// CRITICAL FIX: Skip adding if continuation_pending since the message is already added
+		if !chat_session.continuation_pending {
+			chat_session.add_user_message(&input)?;
+		}
 
 		// Create operation context for tracking
 		*current_operation.lock().unwrap() = Some(OperationContext {
@@ -937,6 +957,16 @@ To fix this issue
 					// Print colorful error message
 					use colored::*;
 					println!("\n{}: {}", "Error processing response".bright_red(), e);
+				}
+
+				// CRITICAL FIX: Check if continuation was triggered during tool processing
+				// If continuation_pending is true, it means a summary request was injected
+				// and we need to skip waiting for user input and process it immediately
+				if chat_session.continuation_pending {
+					log_debug!("Continuation triggered during tool processing - skipping to next iteration to process summary request automatically");
+					// The summary request message has already been injected by check_and_handle_continuation
+					// Just continue the loop to process it immediately without waiting for user input
+					continue;
 				}
 
 				// NOTE: Continuation check moved to AFTER potential summary response

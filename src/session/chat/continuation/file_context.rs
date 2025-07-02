@@ -22,10 +22,12 @@ use std::path::Path;
 /// Filters out system-generated messages and keeps last 5-7 user requests
 pub fn collect_user_request_history(messages: &[crate::session::Message]) -> String {
 	let mut user_requests = Vec::new();
+	let mut last_was_user = false;
 
 	for message in messages {
 		// Only collect user messages
 		if message.role != "user" {
+			last_was_user = false;
 			continue;
 		}
 
@@ -34,18 +36,28 @@ pub fn collect_user_request_history(messages: &[crate::session::Message]) -> Str
 			.content
 			.contains("CRITICAL: Session approaching token limits")
 		{
+			last_was_user = false;
 			continue;
 		}
 
 		// Skip empty or very short messages
 		let content = message.content.trim();
 		if content.is_empty() || content.len() < 10 {
+			last_was_user = false;
 			continue;
 		}
 
 		// Skip session commands (starting with /)
 		if content.starts_with('/') {
+			last_was_user = false;
 			continue;
+		}
+
+		// SMART DETECTION: If we have two user messages in a row, the first one is likely
+		// the initial instructions (INSTRUCTIONS.md content). Skip it and keep only the second.
+		if last_was_user && !user_requests.is_empty() {
+			// Remove the previous message (initial instructions) and add current one
+			user_requests.pop();
 		}
 
 		// Truncate very long requests for readability
@@ -56,6 +68,7 @@ pub fn collect_user_request_history(messages: &[crate::session::Message]) -> Str
 		};
 
 		user_requests.push(truncated_content);
+		last_was_user = true;
 	}
 
 	// Keep only the last 5-7 requests to avoid overwhelming context

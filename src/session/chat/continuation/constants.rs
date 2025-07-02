@@ -120,6 +120,12 @@ Here's the required file context:
 {}
 </files>
 
+---
+
 Let's continue our work from where we left off.
+
+You can use use plan tool to get list of tasks we are working in if any.
+
 Please proceed with the next steps as outlined in your summary.
-CRITICAL: use tool calling in paralell when its possible to reach results faster and more efficiently."#;
+
+CRITICAL: use tool calling in parallel when its possible to reach results faster and more efficiently."#;
