@@ -293,7 +293,7 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 		)
 		.await?
 	{
-		// Continuation was processed - skip ALL tool processing
+		// Continuation was processed - handle it immediately with the summary response
 		return process_continuation_message_immediately(params).await;
 	}
 
@@ -486,7 +486,7 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 
 /// Process continuation message immediately after session reset
 /// This makes the continuation completely invisible to the user
-async fn process_continuation_message_immediately(
+pub async fn process_continuation_message_immediately(
 	params: ResponseProcessingParams<'_>,
 ) -> Result<()> {
 	use crate::session::ChatCompletionWithValidationParams;

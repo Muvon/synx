@@ -894,14 +894,12 @@ To fix this issue
 					}
 				});
 
-				// Convert to legacy format for compatibility
-				let legacy_exchange = response.exchange;
-
+				// Process the response, handling tool calls recursively
 				let process_result = process_response(ResponseProcessingParams::new(
-					response.content,
-					legacy_exchange,
-					response.tool_calls,
-					response.finish_reason,
+					response.content.clone(), // Clone for potential continuation use
+					response.exchange,
+					response.tool_calls.clone(), // Clone for potential continuation use
+					response.finish_reason.clone(), // Clone for potential continuation use
 					&mut chat_session,
 					&current_config,
 					&role,
@@ -940,6 +938,10 @@ To fix this issue
 					use colored::*;
 					println!("\n{}: {}", "Error processing response".bright_red(), e);
 				}
+
+				// NOTE: Continuation check moved to AFTER potential summary response
+				// If continuation was triggered during tool processing, the main loop will
+				// make another API call to get the AI's summary, and THEN handle continuation
 			}
 			Err(e) => {
 				// CRITICAL FIX: Remove the user message that was added before the failed API call
