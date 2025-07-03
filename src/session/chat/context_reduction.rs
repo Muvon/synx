@@ -30,7 +30,7 @@ pub async fn perform_context_reduction(
 	role: &str,
 	operation_cancelled: Arc<AtomicBool>,
 ) -> Result<()> {
-	println!("{}", "Summarizing conversation context...".cyan());
+	println!("{}", "Finalizing current task...".cyan());
 
 	// Check if there's anything to summarize (exclude system message)
 	let conversation_messages = chat_session
