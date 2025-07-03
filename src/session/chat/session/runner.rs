@@ -36,14 +36,13 @@ type SessionParams = (
 	Option<String>, // resume
 	Option<String>, // model
 	Option<u32>,    // max_tokens
-	f32,            // temperature
+	Option<f32>,    // temperature (None = use role config)
 	String,         // role
-	u32,            // max_retries
+	Option<u32>,    // max_retries (None = use role config)
 );
 
-// Helper function to extract session parameters from Debug format
-// This allows both SessionArgs and RunArgs (after conversion) to work
-fn extract_session_params<T: std::fmt::Debug>(args: &T, config: &Config) -> SessionParams {
+// Extract session parameters from Debug format with proper fallbacks
+fn extract_session_params<T: std::fmt::Debug>(args: &T, _config: &Config) -> SessionParams {
 	let args_str = format!("{:?}", args);
 
 	// Get model
@@ -82,49 +81,31 @@ fn extract_session_params<T: std::fmt::Debug>(args: &T, config: &Config) -> Sess
 		"developer".to_string() // Default role
 	};
 
-	// Get temperature - this should come from role config in proper implementation
-	// The current parsing is a hack - temperature should be passed properly
-	let temperature = if args_str.contains("temperature: ") {
-		let start = args_str.find("temperature: ").unwrap() + 13;
-		let end = args_str[start..].find(',').unwrap_or(
-			args_str[start..]
-				.find('}')
-				.unwrap_or(args_str.len() - start),
-		) + start;
-		args_str[start..end]
-			.trim()
-			.parse::<f32>()
-			.expect("Invalid temperature format in session arguments")
+	// Get temperature - check if explicitly provided via CLI (now Optional)
+	let temperature = if args_str.contains("temperature: Some(") {
+		let start = args_str.find("temperature: Some(").unwrap() + 18;
+		let end = args_str[start..].find(')').unwrap() + start;
+		args_str[start..end].trim().parse::<f32>().ok()
 	} else {
-		// Get temperature from role config instead of hardcoding
-		let (role_config, _, _, _, _) = config.get_role_config(&role);
-		role_config.temperature
+		None // No temperature specified, use role config
 	};
 
 	// Get max_tokens
-	let max_tokens = if args_str.contains("max_tokens: ") {
-		let start = args_str.find("max_tokens: ").unwrap() + 12;
-		let end = args_str[start..].find(',').unwrap_or(
-			args_str[start..]
-				.find('}')
-				.unwrap_or(args_str.len() - start),
-		) + start;
+	let max_tokens = if args_str.contains("max_tokens: Some(") {
+		let start = args_str.find("max_tokens: Some(").unwrap() + 17;
+		let end = args_str[start..].find(')').unwrap() + start;
 		args_str[start..end].trim().parse::<u32>().ok()
 	} else {
 		None // No max_tokens specified
 	};
 
-	// Get max_retries
-	let max_retries = if args_str.contains("max_retries: ") {
-		let start = args_str.find("max_retries: ").unwrap() + 13;
-		let end = args_str[start..].find(',').unwrap_or(
-			args_str[start..]
-				.find('}')
-				.unwrap_or(args_str.len() - start),
-		) + start;
-		args_str[start..end].trim().parse::<u32>().unwrap_or(0)
+	// Get max_retries - check if explicitly provided via CLI (now Optional)
+	let max_retries = if args_str.contains("max_retries: Some(") {
+		let start = args_str.find("max_retries: Some(").unwrap() + 18;
+		let end = args_str[start..].find(')').unwrap() + start;
+		args_str[start..end].trim().parse::<u32>().ok()
 	} else {
-		0 // Default max_retries
+		None // No max_retries specified, use role config
 	};
 
 	(
@@ -143,6 +124,10 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	// Extract session parameters
 	let (name, resume, model, max_tokens, temperature, role, max_retries) =
 		extract_session_params(args, config);
+
+	// Get role config for defaults
+	let (role_config, _, _, _, _) = config.get_role_config(&role);
+
 	// For developer role, show MCP server status
 	let current_dir = std::env::current_dir()?;
 
@@ -161,13 +146,19 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	if let Some(model) = model.clone() {
 		session_params = session_params.with_model(model);
 	}
-	session_params = session_params.with_temperature(temperature);
-	if let Some(max_tokens) =
-		max_tokens.or_else(|| Some(config_for_role.get_effective_max_tokens()))
-	{
-		session_params = session_params.with_max_tokens(max_tokens);
-	}
-	session_params = session_params.with_max_retries(max_retries);
+
+	// Use CLI temperature if provided, otherwise use role config temperature
+	let effective_temperature = temperature.unwrap_or(role_config.temperature);
+	session_params = session_params.with_temperature(effective_temperature);
+
+	// Use CLI max_tokens if provided, otherwise use config default
+	let effective_max_tokens =
+		max_tokens.unwrap_or_else(|| config_for_role.get_effective_max_tokens());
+	session_params = session_params.with_max_tokens(effective_max_tokens);
+
+	// Use CLI max_retries if provided, otherwise use role config max_retries
+	let effective_max_retries = max_retries.unwrap_or(role_config.max_retries);
+	session_params = session_params.with_max_retries(effective_max_retries);
 
 	// Validate session token threshold if enabled (before initializing session)
 	if config_for_role.max_session_tokens_threshold > 0 {
@@ -188,14 +179,35 @@ To fix this issue
 
 	let mut chat_session = ChatSession::initialize(session_params).await?;
 
-	// If runtime model override is provided, update the session's model (runtime only)
+	// Apply runtime overrides (these override the session initialization values)
 	if let Some(runtime_model) = &model {
 		chat_session.model = runtime_model.clone();
 		log_info!("Using runtime model override: {}", runtime_model);
 	}
 
-	// Always set the temperature from the command line (runtime only)
-	chat_session.temperature = temperature;
+	// Apply runtime temperature override if provided via CLI
+	if let Some(runtime_temperature) = temperature {
+		chat_session.temperature = runtime_temperature;
+		log_info!(
+			"Using runtime temperature override: {}",
+			runtime_temperature
+		);
+	}
+
+	// Apply runtime max_tokens override if provided via CLI
+	if let Some(runtime_max_tokens) = max_tokens {
+		chat_session.max_tokens = runtime_max_tokens;
+		log_info!("Using runtime max_tokens override: {}", runtime_max_tokens);
+	}
+
+	// Apply runtime max_retries override if provided via CLI
+	if let Some(runtime_max_retries) = max_retries {
+		chat_session.max_retries = runtime_max_retries;
+		log_info!(
+			"Using runtime max_retries override: {}",
+			runtime_max_retries
+		);
+	}
 
 	// Track if the first message has been processed through layers
 	let mut first_message_processed = !chat_session.session.messages.is_empty();
@@ -558,7 +570,7 @@ To fix this issue
 					// Initialize the new session
 					let session_params = SessionInitParams::new(&current_config, &role)
 						.with_name(new_session_name)
-						.with_max_retries(max_retries);
+						.with_max_retries(effective_max_retries);
 					let new_chat_session = ChatSession::initialize(session_params).await?;
 
 					// Replace the current chat session
@@ -1073,6 +1085,9 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	let (name, resume, model, max_tokens, temperature, role, max_retries) =
 		extract_session_params(args, config);
 
+	// Get role config for defaults
+	let (role_config, _, _, _, _) = config.get_role_config(&role);
+
 	// Suppress MCP server status messages for non-interactive mode
 	let current_dir = std::env::current_dir()?;
 
@@ -1091,13 +1106,19 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	if let Some(model) = model.clone() {
 		session_params = session_params.with_model(model);
 	}
-	session_params = session_params.with_temperature(temperature);
-	if let Some(max_tokens) =
-		max_tokens.or_else(|| Some(config_for_role.get_effective_max_tokens()))
-	{
-		session_params = session_params.with_max_tokens(max_tokens);
-	}
-	session_params = session_params.with_max_retries(max_retries);
+
+	// Use CLI temperature if provided, otherwise use role config temperature
+	let effective_temperature = temperature.unwrap_or(role_config.temperature);
+	session_params = session_params.with_temperature(effective_temperature);
+
+	// Use CLI max_tokens if provided, otherwise use config default
+	let effective_max_tokens =
+		max_tokens.unwrap_or_else(|| config_for_role.get_effective_max_tokens());
+	session_params = session_params.with_max_tokens(effective_max_tokens);
+
+	// Use CLI max_retries if provided, otherwise use role config max_retries
+	let effective_max_retries = max_retries.unwrap_or(role_config.max_retries);
+	session_params = session_params.with_max_retries(effective_max_retries);
 
 	let mut chat_session = ChatSession::initialize(session_params).await?;
 
@@ -1106,7 +1127,30 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		chat_session.model = runtime_model.clone();
 		log_info!("Using runtime model override: {}", runtime_model);
 	}
-	chat_session.temperature = temperature;
+
+	// Apply runtime temperature override if provided via CLI
+	if let Some(runtime_temperature) = temperature {
+		chat_session.temperature = runtime_temperature;
+		log_info!(
+			"Using runtime temperature override: {}",
+			runtime_temperature
+		);
+	}
+
+	// Apply runtime max_tokens override if provided via CLI
+	if let Some(runtime_max_tokens) = max_tokens {
+		chat_session.max_tokens = runtime_max_tokens;
+		log_info!("Using runtime max_tokens override: {}", runtime_max_tokens);
+	}
+
+	// Apply runtime max_retries override if provided via CLI
+	if let Some(runtime_max_retries) = max_retries {
+		chat_session.max_retries = runtime_max_retries;
+		log_info!(
+			"Using runtime max_retries override: {}",
+			runtime_max_retries
+		);
+	}
 
 	// Track if the first message has been processed through layers
 	let first_message_processed = !chat_session.session.messages.is_empty();

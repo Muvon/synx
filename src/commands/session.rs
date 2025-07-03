@@ -33,16 +33,16 @@ pub struct SessionArgs {
 	pub max_tokens: Option<u32>,
 
 	/// Temperature for the AI response (0.0 to 1.0, runtime only, not saved)
-	#[arg(long, default_value = "0.7")]
-	pub temperature: f32,
+	#[arg(long)]
+	pub temperature: Option<f32>,
 
 	/// Session role: developer (default with layers and tools) or assistant (simple chat without tools)
 	#[arg(long, default_value = "developer")]
 	pub role: String,
 
 	/// Maximum number of retries for provider errors (runtime only, not saved)
-	#[arg(long, default_value = "0")]
-	pub max_retries: u32,
+	#[arg(long)]
+	pub max_retries: Option<u32>,
 }
 
 // No execute function here since it's handled directly by the session::chat module
