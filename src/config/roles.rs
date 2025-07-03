@@ -28,8 +28,6 @@ pub struct RoleConfig {
 	pub welcome: String,
 	// Temperature for AI responses (0.0 to 1.0) - STRICT: must be in config
 	pub temperature: f32,
-	// Maximum number of retries for API calls (can be overridden by --max-retries CLI flag)
-	pub max_retries: u32,
 }
 
 // REMOVED: Default implementations - all config must be explicit

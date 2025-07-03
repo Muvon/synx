@@ -156,8 +156,8 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		max_tokens.unwrap_or_else(|| config_for_role.get_effective_max_tokens());
 	session_params = session_params.with_max_tokens(effective_max_tokens);
 
-	// Use CLI max_retries if provided, otherwise use role config max_retries
-	let effective_max_retries = max_retries.unwrap_or(role_config.max_retries);
+	// Use CLI max_retries if provided, otherwise use root config max_retries
+	let effective_max_retries = max_retries.unwrap_or(config_for_role.max_retries);
 	session_params = session_params.with_max_retries(effective_max_retries);
 
 	// Validate session token threshold if enabled (before initializing session)
@@ -1116,8 +1116,8 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		max_tokens.unwrap_or_else(|| config_for_role.get_effective_max_tokens());
 	session_params = session_params.with_max_tokens(effective_max_tokens);
 
-	// Use CLI max_retries if provided, otherwise use role config max_retries
-	let effective_max_retries = max_retries.unwrap_or(role_config.max_retries);
+	// Use CLI max_retries if provided, otherwise use root config max_retries
+	let effective_max_retries = max_retries.unwrap_or(config_for_role.max_retries);
 	session_params = session_params.with_max_retries(effective_max_retries);
 
 	let mut chat_session = ChatSession::initialize(session_params).await?;
