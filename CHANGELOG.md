@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.8.1] - 2025-07-03
+
+### 📋 Release Summary
+
+This release enhances session management with improved task finalization, streamlined continuation handling, and more reliable command processing (5523f0d, cf96448, 6ac8362, bb2f57a). User experience is improved through clearer guidance on parallel tool usage and more intuitive command completion (b328fda, 02e2025). Several bug fixes address token handling, logging clarity, and error reporting to ensure smoother and more stable interactions (5fc894a, fac0836, 2e24515, 58da6f3, ef4eb89).
+
+
+### 🔧 Improvements & Optimizations
+
+- **session**: simplify continuation logic and unify triggers `feb822c0`
+- **session**: remove unused syntax highlighter methods and tests `93727213`
+
+### 🐛 Bug Fixes & Stability
+
+- **session**: update /done command message to "Finalizing current task `5523f0da`
+- **session**: remove duplicated token limit log message `5fc894ac`
+- **session**: use root max_retries instead of role config `fac08362`
+- **session**: respect CLI options over config defaults for runtime pa... `2e245158`
+- **session**: simplify continuation logic and avoid user prompt on to... `cf964480`
+- **session**: handle continuation immediately to fix tool bug `6ac8362e`
+- **session**: stop tool processing on continuation trigger `bb2f57a0`
+- **session**: return error on invalid session token threshold at launch `58da6f35`
+- **session**: run continuation check before tool calls evaluation `ef4eb893`
+- **session**: enable bash-like completion with partial matches and re... `02e20255`
+
+### 📚 Documentation & Examples
+
+- **session**: clarify guidance on parallel tool usage in continuation `b328fdad`
+
+### 📊 Release Summary
+
+**Total commits**: 13 across 3 categories
+
+🔧 **2** improvements - *Better performance & code quality*
+🐛 **10** bug fixes - *Improved stability*
+📚 **1** documentation update - *Better developer experience*
+
 ## [0.8.0] - 2025-07-02
 
 ### 📋 Release Summary
