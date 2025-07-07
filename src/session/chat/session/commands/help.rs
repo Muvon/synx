@@ -65,6 +65,10 @@ pub async fn handle_help(config: &Config, role: &str) -> Result<bool> {
 		MODEL_COMMAND.cyan()
 	);
 	println!(
+		"{} [role] - Show current role or switch to a different role (updates system prompt and tools)",
+		ROLE_COMMAND.cyan()
+	);
+	println!(
 		"{} [list|info|full] - Show MCP server status and tools (info is default)",
 		MCP_COMMAND.cyan()
 	);

@@ -240,20 +240,19 @@ pub fn ensure_tool_call_ids(calls: &mut [McpToolCall]) {
 
 // Initialize all servers for a specific mode/role ONCE at startup
 pub async fn initialize_servers_for_role(config: &crate::config::Config) -> Result<()> {
-	// Only initialize if MCP has any servers configured
+	// The config passed here should be the merged config for the role
+	// config.mcp.servers already contains only the role's enabled servers
 	if config.mcp.servers.is_empty() {
-		crate::log_debug!("No MCP servers configured for initialization");
+		crate::log_debug!("No MCP servers enabled for this role");
 		return Ok(());
 	}
 
-	let enabled_servers: Vec<crate::config::McpServerConfig> = config.mcp.servers.to_vec();
-
 	crate::log_debug!(
-		"Initializing {} MCP servers at startup",
-		enabled_servers.len()
+		"Initializing {} MCP servers for role",
+		config.mcp.servers.len()
 	);
 
-	for server in &enabled_servers {
+	for server in &config.mcp.servers {
 		// Only initialize external servers that need to be started
 		if let McpConnectionType::Http | McpConnectionType::Stdin = server.connection_type() {
 			crate::log_debug!("Initializing external server: {}", server.name());
@@ -306,6 +305,26 @@ pub async fn initialize_servers_for_role(config: &crate::config::Config) -> Resu
 	}
 
 	crate::log_debug!("MCP server initialization completed");
+	Ok(())
+}
+
+/// Initialize MCP servers and tool map for a role (used at startup and role switching)
+/// This is the complete initialization that should be used whenever switching roles
+pub async fn initialize_mcp_for_role(role: &str, config: &crate::config::Config) -> Result<()> {
+	let config_for_role = config.get_merged_config_for_role(role);
+
+	// Step 1: Initialize MCP servers first
+	if let Err(e) = initialize_servers_for_role(&config_for_role).await {
+		crate::log_debug!("Warning: Failed to initialize MCP servers: {}", e);
+		// Continue anyway - servers can be started on-demand if needed
+	}
+
+	// Step 2: Initialize tool map after servers are ready
+	if let Err(e) = tool_map::initialize_tool_map(&config_for_role).await {
+		crate::log_debug!("Warning: Failed to initialize tool map: {}", e);
+		// Continue anyway - will fall back to building tool map on each use
+	}
+
 	Ok(())
 }
 

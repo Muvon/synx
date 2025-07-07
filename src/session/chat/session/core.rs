@@ -335,6 +335,18 @@ impl ChatSession {
 					// Apply runtime state from session log
 					chat_session.cache_next_user_message = runtime_state.cache_next_message;
 
+					// Apply restored role if available
+					if let Some(restored_role) = runtime_state.role {
+						// Validate that the restored role still exists in config
+						if params.config.roles.iter().any(|r| r.name == restored_role) {
+							chat_session.role = restored_role;
+							// Update temperature from the restored role config
+							let (role_config, _, _, _, _) =
+								params.config.get_role_config(&chat_session.role);
+							chat_session.temperature = role_config.temperature;
+						}
+					}
+
 					// Get last assistant response if any
 					for msg in chat_session.session.messages.iter().rev() {
 						if msg.role == "assistant" {
@@ -563,5 +575,88 @@ impl ChatSession {
 	/// Check if continuation is currently disabled
 	pub fn is_continuation_disabled(&self) -> bool {
 		self.continuation_disabled
+	}
+
+	/// Reinitialize session for new role - updates system prompt and MCP servers
+	pub async fn reinitialize_for_role(
+		&mut self,
+		new_role: &str,
+		config: &crate::config::Config,
+	) -> anyhow::Result<()> {
+		use crate::session::create_system_prompt;
+		use colored::Colorize;
+
+		// Get current directory for system prompt processing
+		let current_dir = std::env::current_dir()?;
+
+		// Get merged configuration for the new role
+		let config_for_role = config.get_merged_config_for_role(new_role);
+
+		// Shutdown existing MCP servers first
+		if let Err(e) = crate::mcp::process::stop_all_servers() {
+			println!(
+				"{}: {}",
+				"Warning: Failed to stop existing MCP servers".bright_yellow(),
+				e
+			);
+		}
+
+		// SIMPLIFIED: Use the same initialization logic as startup
+		// This handles both server initialization AND tool map update
+		if let Err(e) = crate::mcp::initialize_mcp_for_role(new_role, config).await {
+			println!(
+				"{}: {}",
+				"Warning: Failed to initialize MCP for new role".bright_yellow(),
+				e
+			);
+			println!("{}", "Some tools may not be available".yellow());
+		} else {
+			println!(
+				"{}",
+				"✓ MCP servers and tools updated for new role".bright_green()
+			);
+		}
+
+		// Create new system prompt for the role (AFTER MCP servers are initialized)
+		// This ensures the tools definition reflects the new role's available tools
+		let new_system_prompt =
+			create_system_prompt(&current_dir, &config_for_role, new_role).await;
+
+		// Find and replace the first system message (should be index 0)
+		if let Some(first_msg) = self.session.messages.first_mut() {
+			if first_msg.role == "system" {
+				// Log the system message replacement
+				let _ = crate::session::logger::log_system_message(
+					&self.session.info.name,
+					&new_system_prompt,
+				);
+
+				// Replace the system message content
+				first_msg.content = new_system_prompt;
+
+				println!(
+					"{}",
+					"✓ System prompt updated with new role's tools".bright_green()
+				);
+			} else {
+				// This shouldn't happen in normal operation, but handle gracefully
+				return Err(anyhow::anyhow!(
+					"Expected first message to be system message, found: {}",
+					first_msg.role
+				));
+			}
+		} else {
+			// No messages yet - add system message (shouldn't happen for role switching)
+			self.add_system_message(&new_system_prompt)?;
+			println!(
+				"{}",
+				"✓ System prompt initialized for new role".bright_green()
+			);
+		}
+
+		// Save the session to persist the changes
+		self.save()?;
+
+		Ok(())
 	}
 }

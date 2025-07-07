@@ -403,6 +403,7 @@ During a session, use these commands:
 
 #### Configuration Commands
 - `/model [model]` - Show/change current model
+- `/role [role]` - Show/switch session role (runtime only, persisted across session resume)
 - `/image <path>` - Attach image to your next message (PNG, JPEG, GIF, WebP, BMP)
 - `/info` - Display token usage and costs
 - `/report` - Generate detailed usage report with cost breakdown per request

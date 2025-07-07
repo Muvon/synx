@@ -28,6 +28,7 @@ mod loglevel;
 mod mcp;
 mod model;
 mod report;
+mod role;
 mod run;
 mod save;
 mod session;
@@ -45,7 +46,7 @@ pub async fn process_command(
 	session: &mut ChatSession,
 	input: &str,
 	config: &mut Config,
-	role: &str,
+	_role: &str, // Original role - now unused, keeping for API compatibility
 ) -> Result<bool> {
 	// Extract command and potential parameters
 	let input_parts: Vec<&str> = input.split_whitespace().collect();
@@ -56,27 +57,31 @@ pub async fn process_command(
 		&[]
 	};
 
+	// Use current session role instead of original startup role
+	let current_role = session.role.clone();
+
 	match command {
 		EXIT_COMMAND | QUIT_COMMAND => exit::handle_exit(),
-		HELP_COMMAND => help::handle_help(config, role).await,
+		HELP_COMMAND => help::handle_help(config, &current_role).await,
 		COPY_COMMAND => copy::handle_copy(&session.last_response),
 		CLEAR_COMMAND => clear::handle_clear(),
 		SAVE_COMMAND => save::handle_save(session),
 		INFO_COMMAND => info::handle_info(session),
 		REPORT_COMMAND => report::handle_report(session, config),
 		CONTEXT_COMMAND => context::handle_context(session, config, params),
-		LAYERS_COMMAND => layers::handle_layers(session, config, role).await,
+		LAYERS_COMMAND => layers::handle_layers(session, config, &current_role).await,
 		LOGLEVEL_COMMAND => loglevel::handle_loglevel(config, params),
-		TRUNCATE_COMMAND => truncate::handle_truncate(session, config, role).await,
+		TRUNCATE_COMMAND => truncate::handle_truncate(session, config, &current_role).await,
 		SUMMARIZE_COMMAND => summarize::handle_summarize(session, config).await,
 		CACHE_COMMAND => cache::handle_cache(session, config, params).await,
 		LIST_COMMAND => list::handle_list(session, config, params),
 		MODEL_COMMAND => model::handle_model(session, config, params),
 		SESSION_COMMAND => session::handle_session(session, params),
-		MCP_COMMAND => mcp::handle_mcp(config, role, params).await,
-		RUN_COMMAND => run::handle_run(session, config, role, params).await,
+		MCP_COMMAND => mcp::handle_mcp(config, &current_role, params).await,
+		RUN_COMMAND => run::handle_run(session, config, &current_role, params).await,
 		IMAGE_COMMAND => image::handle_image(session, params).await,
-		_ => handle_unknown_command(command, config, role).await,
+		ROLE_COMMAND => role::handle_role(session, config, params).await,
+		_ => handle_unknown_command(command, config, &current_role).await,
 	}
 }
 
@@ -116,6 +121,7 @@ async fn handle_unknown_command(command: &str, config: &Config, role: &str) -> R
 	println!("{} - Show MCP server status", MCP_COMMAND.cyan());
 	println!("{} - Execute command layer", RUN_COMMAND.cyan());
 	println!("{} - Attach image to message", IMAGE_COMMAND.cyan());
+	println!("{} - Switch session role", ROLE_COMMAND.cyan());
 	println!(
 		"{}/{} - Exit the session",
 		EXIT_COMMAND.cyan(),

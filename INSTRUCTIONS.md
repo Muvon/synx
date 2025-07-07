@@ -221,6 +221,14 @@ crate::log_debug!("Something happened");
 2. **No code needed**: Uses generic layer implementation
 3. **Configure**: Set input_mode, output_mode, MCP access
 
+### Add New Session Command
+1. **Constant**: Add to `src/session/chat/commands.rs` and update COMMANDS array count
+2. **Handler**: Create `src/session/chat/session/commands/[name].rs` with handle_[name]() function
+3. **Module**: Add `mod [name];` to `src/session/chat/session/commands/mod.rs`
+4. **Routing**: Add command to process_command match statement
+5. **Help**: Update handle_unknown_command() help text
+6. **Persistence** (optional): Add to SessionRuntimeState and apply_command_to_runtime_state()
+
 ### Add New Custom Command
 1. **Config**: Add to template `[[commands]]` section (same as layer config)
 2. **Usage**: `/run <command_name>` executes the layer without storing in history

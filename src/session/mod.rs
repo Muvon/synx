@@ -874,6 +874,7 @@ pub struct SessionRuntimeState {
 	pub model: Option<String>,
 	pub layers_enabled: Option<bool>,
 	pub cache_next_message: bool,
+	pub role: Option<String>, // Track runtime role changes
 }
 
 /// Extract runtime state from session log file
@@ -918,6 +919,12 @@ fn apply_command_to_runtime_state(state: &mut SessionRuntimeState, command_line:
 			if parts.len() > 1 {
 				let new_model = parts[1..].join(" ");
 				state.model = Some(new_model);
+			}
+		}
+		"/role" => {
+			if parts.len() > 1 {
+				let new_role = parts[1].to_string();
+				state.role = Some(new_role);
 			}
 		}
 		"/layers" => {
