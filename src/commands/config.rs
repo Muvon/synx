@@ -725,7 +725,7 @@ fn show_env_api_key_status(provider: &str, env_var: &str) {
 }
 
 /// Display MCP server configurations
-fn show_mcp_servers(servers: &Vec<McpServerConfig>) {
+fn show_mcp_servers(servers: &[McpServerConfig]) {
 	if servers.is_empty() {
 		println!("    Servers:         None configured");
 		return;
