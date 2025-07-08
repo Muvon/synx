@@ -117,6 +117,7 @@ pub fn get_text_editor_function() -> McpFunction {
 			- ALWAYS use 'view' command first to get current line numbers before line_replace
 			- PREFER line_replace when you know exact lines (fastest), str_replace when you know content
 			- new_str contains RAW FILE CONTENT - use actual whitespace characters, not escape sequences (tabs=actual tabs, NOT \\t)!
+			- FOR MULTIPLE EDITS: Use batch_edit tool instead if file hasn't been modified yet
 
 			Available commands:
 
@@ -183,11 +184,18 @@ pub fn get_text_editor_function() -> McpFunction {
 			- You know exact line numbers and need to change one or more lines with new
 			- Want 3x faster performance (no content searching needed)
 			- ONLY ONE line_replace per file before re-viewing
+			- File has already been modified (line numbers changed)
 
 			CHOOSE str_replace when:
 			- Modifying existing code/content (not building new)
 			- You know exact text content but not line numbers
 			- Changing existing function implementations or config values
+			- File has been modified and you can't trust line numbers
+
+			CHOOSE batch_edit when:
+			- Multiple edits needed on UNMODIFIED file (2+ operations)
+			- File hasn't been edited yet in this session
+			- Need atomic operations (all succeed or all fail)
 
 			CHOOSE insert when:
 			- Building new documents or adding new sections
@@ -328,41 +336,35 @@ pub fn get_batch_edit_function() -> McpFunction {
 			This tool performs multiple insert and replace operations on a single file in one atomic operation.
 			All operations use the ORIGINAL file line numbers before any modifications, ensuring line stability.
 
-			**REVOLUTIONARY FEATURES:**
-			- Single file, multiple operations in one call
-			- ALL line numbers reference ORIGINAL file content (before ANY modifications)
-			- Conflict detection prevents overlapping operations
-			- Atomic operation - all changes applied in single write
-			- Operations: 'insert' (after line) and 'replace' (line range)
+			**WHEN TO USE:**
+			- Multiple edits in single file (2+ changes)
+			- When you need to edit a file that hasn't been modified yet in this session
+			- For atomic operations that must all succeed or all fail
+
+			**WHEN NOT TO USE:**
+			- After ANY other file edit (text_editor, str_replace, etc.) - line numbers will be wrong
+			- For single operations - use text_editor instead
+			- On files that have been modified - get fresh line numbers first
+
+			**CRITICAL RULES:**
+			- ALL line numbers must reference the ORIGINAL file content (before ANY modifications)
+			- After ANY edit operation, line numbers change - don't use batch_edit on modified files
+			- Operations applied atomically in reverse order to maintain line stability
+			- Conflicts between operations are detected and rejected
 
 			**Parameters:**
-			- `path` (string, required): Path to the file to edit
-			- `operations` (array, required): Array of operations to perform
+			- `path` (string): Path to the file to edit
+			- `operations` (array): Array of operations to perform
 
 			**Operation Structure:**
-			- `operation` (string): 'insert' or 'replace'
-			- `line_range`: Single number for insert (after which line), [start, end] array for replace (1-indexed, inclusive)
-			- `content` (string): Raw text content (no escaping needed)
+			- `operation`: 'insert' (after line) or 'replace' (line range)
+			- `line_range`: Single number for insert, [start, end] array for replace (1-indexed)
+			- `content`: Raw text content (no escaping needed)
 
 			**Examples:**
-			- Single insert: `{\"path\": \"src/main.rs\", \"operations\": [{\"operation\": \"insert\", \"line_range\": 5, \"content\": \"new line\"}]}`
-			- Multiple ops: `{\"path\": \"src/main.rs\", \"operations\": [{\"operation\": \"insert\", \"line_range\": 1, \"content\": \"header\"}, {\"operation\": \"replace\", \"line_range\": [3, 3], \"content\": \"replaced\"}]}`
+			- Multiple ops: `{\"path\": \"file.rs\", \"operations\": [{\"operation\": \"insert\", \"line_range\": 1, \"content\": \"header\"}, {\"operation\": \"replace\", \"line_range\": [3, 3], \"content\": \"replaced\"}]}`
 
-			**Conflict Detection:**
-			- Prevents overlapping line ranges
-			- Insert after line N conflicts with replace of line N
-			- Clear error messages for conflicting operations
-
-			**Use Cases:**
-			- Multiple edits in single file (3+ changes)
-			- Refactoring with multiple line modifications
-			- Template processing with multiple substitutions
-			- Code generation with multiple insertions
-
-			**CRITICAL:**
-			- All line numbers reference ORIGINAL file content before ANY modifications
-			- Operations applied in reverse order to maintain line stability
-			- Maximum 50 operations per call for performance".to_string(),
+			**Maximum 50 operations per call for performance**".to_string(),
 		parameters: json!({
 			"type": "object",
 			"properties": {
@@ -395,7 +397,7 @@ pub fn get_batch_edit_function() -> McpFunction {
 										"description": "Line range [start] or [start, end] (1-indexed, inclusive)"
 									}
 								],
-								"description": "CRITICAL: Line numbers from ORIGINAL file content (before any modifications). Insert: single number (after which line). Replace: [start, end] range (inclusive, 1-indexed)"
+								"description": "CRITICAL: Line numbers from ORIGINAL file content (before any modifications). Insert: single number (after which line). Replace: [start, end] range (inclusive, 1-indexed). DO NOT USE if file was modified - line numbers will be wrong!"
 							},
 							"content": {
 								"type": "string",
@@ -405,7 +407,7 @@ pub fn get_batch_edit_function() -> McpFunction {
 						"required": ["operation", "line_range", "content"]
 					},
 					"maxItems": 50,
-					"description": "Array of operations for batch_edit on SINGLE file. All line_range values reference ORIGINAL file content."
+					"description": "Array of operations for batch_edit on SINGLE file. All line_range values reference ORIGINAL file content. DO NOT USE after any file modifications!"
 				}
 			},
 			"required": ["path", "operations"]
