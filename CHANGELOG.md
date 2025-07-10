@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.9.0] - 2025-07-10
+
+### 📋 Release Summary
+
+This release introduces enhanced session management with dynamic role switching and customizable prompts and temperature settings for improved AI interactions (38ee56f2, 0bdaed2b, 5be4bbc5). Several bug fixes improve configuration stability and reliability, while additional tests ensure robust handling of batch edits (3111ac2f, 20301e74).
+
+
+### ✨ New Features & Enhancements
+
+- **config**: add top_k and top_p defaults and tune temperatures `38ee56f2`
+- **config,ask,shell**: add configurable prompts and temperatures for... `0bdaed2b`
+- **session**: add /role command to switch session role at runtime `5be4bbc5`
+
+### 🐛 Bug Fixes & Stability
+
+- **config**: use slice instead of Vec reference in show_mcp_servers `3111ac2f`
+
+### 🔄 Other Changes
+
+- **fs**: add critical batch_edit tests for line number handling `20301e74`
+
+### 📊 Release Summary
+
+**Total commits**: 5 across 3 categories
+
+✨ **3** new features - *Enhanced functionality*
+🐛 **1** bug fix - *Improved stability*
+🔄 **1** other change - *Maintenance & tooling*
+
 ## [0.8.1] - 2025-07-03
 
 ### 📋 Release Summary
