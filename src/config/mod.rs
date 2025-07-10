@@ -91,6 +91,10 @@ pub struct AskConfig {
 	pub system: String,
 	/// Default temperature for ask command (0.0 to 1.0)
 	pub temperature: f32,
+	/// Default top_p for ask command (0.0 to 1.0)
+	pub top_p: f32,
+	/// Default top_k for ask command (1 to infinity)
+	pub top_k: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -99,6 +103,10 @@ pub struct ShellConfig {
 	pub system: String,
 	/// Default temperature for shell command (0.0 to 1.0)
 	pub temperature: f32,
+	/// Default top_p for shell command (0.0 to 1.0)
+	pub top_p: f32,
+	/// Default top_k for shell command (1 to infinity)
+	pub top_k: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

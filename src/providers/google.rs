@@ -190,6 +190,8 @@ impl AiProvider for GoogleVertexProvider {
 				"contents": vertex_messages,
 				"generationConfig": {
 				"temperature": params.temperature,
+				"topP": params.top_p,
+				"topK": params.top_k,
 				"candidateCount": 1
 			}
 		});

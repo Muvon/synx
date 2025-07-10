@@ -253,6 +253,8 @@ impl AiProvider for AnthropicProvider {
 			"model": params.model,
 			"messages": anthropic_messages,
 			"temperature": params.temperature,
+			"top_p": params.top_p,
+			"top_k": params.top_k,
 		});
 
 		// Add max_tokens if specified (0 means don't include it in request)

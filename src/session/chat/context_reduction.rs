@@ -63,12 +63,16 @@ pub async fn perform_context_reduction(
 
 	// Use the same API flow as the normal session
 	let api_result = crate::session::chat_completion_with_provider(
-		&chat_session.session.messages,
-		&chat_session.model,
-		chat_session.temperature,
-		chat_session.max_tokens,
-		config,
-		chat_session.max_retries, // Use max_retries from chat session
+		crate::session::ChatCompletionProviderParams {
+			messages: &chat_session.session.messages,
+			model: &chat_session.model,
+			temperature: chat_session.temperature,
+			top_p: chat_session.top_p,
+			top_k: chat_session.top_k,
+			max_tokens: chat_session.max_tokens,
+			config,
+			max_retries: chat_session.max_retries, // Use max_retries from chat session
+		},
 	)
 	.await;
 

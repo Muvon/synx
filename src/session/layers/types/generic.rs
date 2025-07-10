@@ -350,6 +350,8 @@ impl GenericLayer {
 			model: model.to_string(),
 			role: "layer".to_string(), // Default role for layers
 			temperature: self.config.temperature,
+			top_p: self.config.top_p,
+			top_k: self.config.top_k,
 			max_tokens: self.config.max_tokens,
 			last_response: String::new(),
 			estimated_cost: 0.0,
@@ -415,6 +417,8 @@ impl GenericLayer {
 			&layer_session.session.messages,
 			model,
 			self.config.temperature,
+			self.config.top_p,
+			self.config.top_k,
 			self.config.max_tokens,
 			layer_config,
 		)
@@ -511,6 +515,8 @@ impl Layer for GenericLayer {
 			&messages,
 			&effective_model,
 			self.config.temperature,
+			self.config.top_p,
+			self.config.top_k,
 			self.config.max_tokens,
 			&layer_config,
 		)

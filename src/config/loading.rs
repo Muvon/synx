@@ -340,6 +340,8 @@ mod tests {
 name = "tester"
 enable_layers = false
 temperature = 0.7
+top_p = 0.9
+top_k = 50
 layer_refs = []
 system = "You are a test assistant."
 welcome = "Hello! Test tester role."

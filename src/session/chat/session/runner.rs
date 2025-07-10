@@ -881,6 +881,8 @@ To fix this issue
 			&messages,
 			&model,
 			temperature,
+			chat_session.top_p,
+			chat_session.top_k,
 			chat_session.max_tokens,
 			&config_clone,
 		)
@@ -1418,6 +1420,8 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		&messages,
 		&model,
 		temperature,
+		chat_session.top_p,
+		chat_session.top_k,
 		chat_session.max_tokens,
 		&config_clone,
 	)

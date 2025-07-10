@@ -15,7 +15,7 @@
 use anyhow::Result;
 use clap::Args;
 use octomind::config::Config;
-use octomind::session::{chat_completion_with_provider, Message};
+use octomind::session::{chat_completion_with_provider, ChatCompletionProviderParams, Message};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
@@ -190,15 +190,18 @@ pub async fn execute(args: &ShellArgs, config: &Config) -> Result<()> {
 	];
 
 	// Call the AI provider
-	let response = chat_completion_with_provider(
-		&messages,
-		&model,
+	let response = chat_completion_with_provider(ChatCompletionProviderParams {
+		messages: &messages,
+		model: &model,
 		temperature,
-		args.max_tokens
+		top_p: clean_config.shell.top_p,
+		top_k: clean_config.shell.top_k,
+		max_tokens: args
+			.max_tokens
 			.unwrap_or_else(|| clean_config.get_effective_max_tokens()),
-		&clean_config,
-		0, // Default max_retries for shell command
-	)
+		config: &clean_config,
+		max_retries: 0, // Default max_retries for shell command
+	})
 	.await?;
 
 	// Parse the JSON response

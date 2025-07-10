@@ -33,6 +33,10 @@ pub struct ChatCompletionParams<'a> {
 	pub model: &'a str,
 	/// Sampling temperature (0.0 to 2.0)
 	pub temperature: f32,
+	/// Top-p nucleus sampling (0.0 to 1.0)
+	pub top_p: f32,
+	/// Top-k sampling (1 to infinity)
+	pub top_k: u32,
 	/// Maximum tokens to generate (0 = no limit)
 	pub max_tokens: u32,
 	/// Maximum retry attempts on failure
@@ -51,6 +55,8 @@ impl<'a> ChatCompletionParams<'a> {
 		messages: &'a [Message],
 		model: &'a str,
 		temperature: f32,
+		top_p: f32,
+		top_k: u32,
 		max_tokens: u32,
 		config: &'a Config,
 	) -> Self {
@@ -58,6 +64,8 @@ impl<'a> ChatCompletionParams<'a> {
 			messages,
 			model,
 			temperature,
+			top_p,
+			top_k,
 			max_tokens,
 			max_retries: config.max_retries,
 			retry_timeout: std::time::Duration::from_secs(config.retry_timeout as u64),

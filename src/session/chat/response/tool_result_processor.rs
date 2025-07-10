@@ -340,6 +340,8 @@ async fn make_follow_up_api_call(
 		&chat_session.session.messages,
 		&model,
 		temperature,
+		chat_session.top_p,
+		chat_session.top_k,
 		chat_session.max_tokens,
 		config,
 	)

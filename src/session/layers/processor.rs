@@ -117,12 +117,16 @@ impl Layer for LayerProcessor {
 
 		// Call the model directly with session messages
 		let response = crate::session::chat_completion_with_provider(
-			&messages,
-			&effective_model,
-			self.config.temperature,
-			self.config.max_tokens,
-			config,
-			0, // Default max_retries for layer processor
+			crate::session::ChatCompletionProviderParams {
+				messages: &messages,
+				model: &effective_model,
+				temperature: self.config.temperature,
+				top_p: self.config.top_p,
+				top_k: self.config.top_k,
+				max_tokens: self.config.max_tokens,
+				config,
+				max_retries: 0, // Default max_retries for layer processor
+			},
 		)
 		.await?;
 
@@ -240,12 +244,16 @@ impl Layer for LayerProcessor {
 					let api_start_tool_processing = std::time::Instant::now();
 
 					match crate::session::chat_completion_with_provider(
-						&layer_session,
-						&effective_model,
-						self.config.temperature,
-						self.config.max_tokens,
-						config,
-						0, // Default max_retries for layer processor
+						crate::session::ChatCompletionProviderParams {
+							messages: &layer_session,
+							model: &effective_model,
+							temperature: self.config.temperature,
+							top_p: self.config.top_p,
+							top_k: self.config.top_k,
+							max_tokens: self.config.max_tokens,
+							config,
+							max_retries: 0, // Default max_retries for layer processor
+						},
 					)
 					.await
 					{

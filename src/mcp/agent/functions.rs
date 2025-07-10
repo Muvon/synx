@@ -275,6 +275,20 @@ async fn execute_call_llm(
 		.map(|t| t as f32)
 		.unwrap_or(default_role_config.temperature);
 
+	let top_p = call
+		.parameters
+		.get("top_p")
+		.and_then(|v| v.as_f64())
+		.map(|t| t as f32)
+		.unwrap_or(default_role_config.top_p);
+
+	let top_k = call
+		.parameters
+		.get("top_k")
+		.and_then(|v| v.as_u64())
+		.map(|t| t as u32)
+		.unwrap_or(default_role_config.top_k);
+
 	let max_tokens = call
 		.parameters
 		.get("max_tokens")
@@ -294,6 +308,8 @@ async fn execute_call_llm(
 		system_prompt: Some(system_prompt.to_string()),
 		description: "Direct LLM call with runtime parameters".to_string(),
 		temperature,
+		top_p,
+		top_k,
 		max_tokens,
 		input_mode: crate::session::layers::layer_trait::InputMode::Last, // Doesn't matter as input is provided
 		output_mode: crate::session::layers::layer_trait::OutputMode::Last, // Return only the last output

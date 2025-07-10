@@ -266,6 +266,10 @@ impl AiProvider for OpenAiProvider {
 		// O1/O2 series models don't support temperature parameter
 		if supports_temperature(params.model) {
 			request_body["temperature"] = serde_json::json!(params.temperature);
+			// OpenAI supports top_p and top_k for most models
+			request_body["top_p"] = serde_json::json!(params.top_p);
+			// Note: OpenAI doesn't have top_k parameter, but has similar "top_logprobs"
+			// We'll skip top_k for OpenAI as it's not directly supported
 		}
 
 		// Add max_tokens if specified (0 means don't include it in request)

@@ -70,6 +70,10 @@ pub struct ChatCompletionWithValidationParams<'a> {
 	pub model: &'a str,
 	/// Sampling temperature (0.0 to 2.0)
 	pub temperature: f32,
+	/// Top-p nucleus sampling (0.0 to 1.0)
+	pub top_p: f32,
+	/// Top-k sampling (1 to infinity)
+	pub top_k: u32,
 	/// Maximum tokens to generate (0 = no limit)
 	pub max_tokens: u32,
 	/// Maximum retry attempts on failure
@@ -88,6 +92,8 @@ impl<'a> ChatCompletionWithValidationParams<'a> {
 		messages: &'a [Message],
 		model: &'a str,
 		temperature: f32,
+		top_p: f32,
+		top_k: u32,
 		max_tokens: u32,
 		config: &'a Config,
 	) -> Self {
@@ -95,6 +101,8 @@ impl<'a> ChatCompletionWithValidationParams<'a> {
 			messages,
 			model,
 			temperature,
+			top_p,
+			top_k,
 			max_tokens,
 			max_retries: 0,
 			config,
@@ -1049,6 +1057,8 @@ pub async fn chat_completion_with_validation(
 					&messages,
 					params.model,
 					params.temperature,
+					params.top_p,
+					params.top_k,
 					params.max_tokens,
 					params.config,
 				)
@@ -1096,6 +1106,8 @@ pub async fn chat_completion_with_validation(
 		params.messages,
 		&actual_model,
 		params.temperature,
+		params.top_p,
+		params.top_k,
 		params.max_tokens,
 		params.config,
 	)
@@ -1110,21 +1122,35 @@ pub async fn chat_completion_with_validation(
 	provider.chat_completion(chat_params).await
 }
 
+/// Parameters for chat completion with provider
+pub struct ChatCompletionProviderParams<'a> {
+	pub messages: &'a [Message],
+	pub model: &'a str,
+	pub temperature: f32,
+	pub top_p: f32,
+	pub top_k: u32,
+	pub max_tokens: u32,
+	pub config: &'a Config,
+	pub max_retries: u32,
+}
+
 /// High-level function to send a chat completion using the provider abstraction
 /// This function handles model parsing and provider selection automatically
 pub async fn chat_completion_with_provider(
-	messages: &[Message],
-	model: &str,
-	temperature: f32,
-	max_tokens: u32,
-	config: &Config,
-	max_retries: u32,
+	params: ChatCompletionProviderParams<'_>,
 ) -> Result<ProviderResponse> {
 	// Parse the model string and get the appropriate provider
-	let (provider, actual_model) = ProviderFactory::get_provider_for_model(model)?;
+	let (provider, actual_model) = ProviderFactory::get_provider_for_model(params.model)?;
 	// Call the provider's chat completion method
-	let chat_params =
-		ChatCompletionParams::new(messages, &actual_model, temperature, max_tokens, config)
-			.with_max_retries(max_retries);
+	let chat_params = ChatCompletionParams::new(
+		params.messages,
+		&actual_model,
+		params.temperature,
+		params.top_p,
+		params.top_k,
+		params.max_tokens,
+		params.config,
+	)
+	.with_max_retries(params.max_retries);
 	provider.chat_completion(chat_params).await
 }

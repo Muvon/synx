@@ -244,6 +244,8 @@ impl AiProvider for AmazonBedrockProvider {
 			let mut body = serde_json::json!({
 				"anthropic_version": "bedrock-2023-05-31",
 				"temperature": params.temperature,
+				"top_p": params.top_p,
+				"top_k": params.top_k,
 				"messages": bedrock_messages,
 			});
 			// Add max_tokens if specified (0 means don't include it in request)

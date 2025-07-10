@@ -515,6 +515,8 @@ pub async fn process_continuation_message_immediately(
 		&messages,
 		&params.chat_session.model,
 		params.chat_session.temperature,
+		params.chat_session.top_p,
+		params.chat_session.top_k,
 		params.chat_session.max_tokens,
 		params.config,
 	)

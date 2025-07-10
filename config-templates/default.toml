@@ -84,8 +84,13 @@ max_session_spending_threshold = 0.0
 [ask]
 # System prompt for ask command (supports %{SYSTEM} placeholder)
 system = "You are a helpful assistant.\n\n%{SYSTEM}"
-# Default temperature for ask command (0.0 to 1.0, can be overridden by --temperature CLI flag)
-temperature = 0.7
+# Default temperature for ask command (0.0 to 2.0, can be overridden by --temperature CLI flag)
+temperature = 0.6
+# Default top_p for ask command (0.0 to 1.0, nucleus sampling)
+# Default top_p for ask command (0.0 to 1.0, nucleus sampling)
+top_p = 0.8
+# Default top_k for ask command (1 to 200, limits token choices)
+top_k = 40
 
 # Shell command configuration
 [shell]
@@ -111,8 +116,13 @@ Always respond with a JSON object containing exactly these fields:
 - "command": string with the exact shell command
 - "explanation": string explaining what the command does
 - "safety_notes": optional string with warnings (null if no warnings needed)"""
-# Default temperature for shell command (0.0 to 1.0, can be overridden by --temperature CLI flag)
+# Default temperature for shell command (0.0 to 2.0, can be overridden by --temperature CLI flag)
 temperature = 0.3
+# Default top_p for shell command (0.0 to 1.0, nucleus sampling)
+# Default top_p for shell command (0.0 to 1.0, nucleus sampling)
+top_p = 0.7
+# Default top_k for shell command (1 to 200, limits token choices)
+top_k = 20
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # API KEYS AND AUTHENTICATION
@@ -137,7 +147,11 @@ temperature = 0.3
 [[roles]]
 name = "developer"
 enable_layers = false
-temperature = 0.2
+temperature = 0.3
+# Default top_p for developer role (0.0 to 1.0, nucleus sampling)
+top_p = 0.7
+# Default top_k for developer role (1 to 200, limits token choices)
+top_k = 20
 system = """
 You are Octomind - ELITE AUTONOMOUS AI DEVELOPER
 
@@ -317,7 +331,11 @@ allowed_tools = ["developer:*", "filesystem:*", "web_search", "read_html", "octo
 [[roles]]
 name = "assistant"
 enable_layers = false
-temperature = 0.7
+temperature = 0.6
+# Default top_p for assistant role (0.0 to 1.0, nucleus sampling)
+top_p = 0.8
+# Default top_k for assistant role (1 to 200, limits token choices)
+top_k = 40
 layer_refs = []
 system = "You are a helpful assistant."
 
@@ -430,7 +448,11 @@ If you DO NOT UNDERSTAND or LACK INFORMATION → respond with the ORIGINAL task 
 
 CRITICAL: RESPOND WITHOUT ANY QUESTIONS IN THE WAY YOU JUST GET USER REQUEST AND PROPERLY REFINED IT AND RESPODED ONLY WITH REFINED TASK
 """
-temperature = 0.2
+temperature = 0.3
+# Default top_p for task_refiner layer (0.0 to 1.0, nucleus sampling)
+top_p = 0.7
+# Default top_k for task_refiner layer (1 to 200, limits token choices)
+top_k = 20
 input_mode = "last"
 output_mode = "none"
 
@@ -486,7 +508,11 @@ IMPORTANT:
 %{SYSTEM}
 
 %{CONTEXT}"""
-temperature = 0.2
+temperature = 0.3
+# Default top_p for task_researcher layer (0.0 to 1.0, nucleus sampling)
+top_p = 0.7
+# Default top_k for task_researcher layer (1 to 200, limits token choices)
+top_k = 20
 input_mode = "last"
 output_mode = "append"
 
@@ -569,7 +595,11 @@ This architectural history will be essential for future development sessions.
 %{CONTEXT}"""
 model = "openrouter:openai/o4-mini"  # Use cheaper model for cost optimization
 max_tokens = 0
-temperature = 0.2
+temperature = 0.3
+# Default top_p for reduce command (0.0 to 1.0, nucleus sampling)
+top_p = 0.7
+# Default top_k for reduce command (1 to 200, limits token choices)
+top_k = 20
 input_mode = "all"
 output_mode = "replace"  # Replace session content with compressed history
 
@@ -759,7 +789,11 @@ Always provide comprehensive, detailed analysis that helps developers understand
 %{SYSTEM}
 
 %{CONTEXT}"""
-temperature = 0.2
+temperature = 0.3
+# Default top_p for context_gatherer agent (0.0 to 1.0, nucleus sampling)
+top_p = 0.7
+# Default top_k for context_gatherer agent (1 to 200, limits token choices)
+top_k = 20
 input_mode = "last"
 output_mode = "none"  # Return only the gathered context (cleanest for tool use)
 

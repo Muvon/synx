@@ -28,6 +28,10 @@ pub struct RoleConfig {
 	pub welcome: String,
 	// Temperature for AI responses (0.0 to 1.0) - STRICT: must be in config
 	pub temperature: f32,
+	// Top_p for AI responses (0.0 to 1.0) - nucleus sampling
+	pub top_p: f32,
+	// Top_k for AI responses (1 to infinity) - limits token choices
+	pub top_k: u32,
 }
 
 // REMOVED: Default implementations - all config must be explicit

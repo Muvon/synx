@@ -183,7 +183,8 @@ impl AiProvider for OpenRouterProvider {
 			"model": params.model,
 			"messages": openrouter_messages,
 			"temperature": params.temperature,
-			"top_p": 0.3,
+			"top_p": params.top_p,
+			"top_k": params.top_k,
 			"repetition_penalty": 1.1,
 			"usage": {
 				"include": true  // Always enable usage tracking for all requests

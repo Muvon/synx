@@ -18,7 +18,9 @@ use colored::Colorize;
 use glob::glob;
 use octomind::config::Config;
 use octomind::session::chat::markdown::{is_markdown_content, MarkdownRenderer};
-use octomind::session::{chat_completion_with_provider, Message, ProviderResponse};
+use octomind::session::{
+	chat_completion_with_provider, ChatCompletionProviderParams, Message, ProviderResponse,
+};
 use rustyline::error::ReadlineError;
 use rustyline::{
 	Cmd, CompletionType, ConditionalEventHandler, Config as RustylineConfig, EditMode, Editor,
@@ -427,6 +429,8 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 
 	// Determine temperature to use: either from --temperature flag or config default
 	let temperature = args.temperature.unwrap_or(config.ask.temperature);
+	let top_p = config.ask.top_p;
+	let top_k = config.ask.top_k;
 
 	// Simple system prompt for ask command with placeholder processing
 	let base_system_prompt = &config.ask.system;
@@ -455,15 +459,18 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 		};
 
 		// Execute once and return
-		let response = execute_single_query(
-			&full_input,
-			&model,
+		let response = execute_single_query(SingleQueryParams {
+			input: &full_input,
+			model: &model,
 			temperature,
-			args.max_tokens
+			top_p,
+			top_k,
+			max_tokens: args
+				.max_tokens
 				.unwrap_or_else(|| clean_config.get_effective_max_tokens()),
-			&system_prompt,
-			&clean_config,
-		)
+			system_prompt: &system_prompt,
+			config: &clean_config,
+		})
 		.await?;
 		print_response(&response.content, args.raw, config);
 		Ok(())
@@ -485,15 +492,18 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 		};
 
 		// Execute once and return
-		let response = execute_single_query(
-			&full_input,
-			&model,
+		let response = execute_single_query(SingleQueryParams {
+			input: &full_input,
+			model: &model,
 			temperature,
-			args.max_tokens
+			top_p,
+			top_k,
+			max_tokens: args
+				.max_tokens
 				.unwrap_or_else(|| clean_config.get_effective_max_tokens()),
-			&system_prompt,
-			&clean_config,
-		)
+			system_prompt: &system_prompt,
+			config: &clean_config,
+		})
 		.await?;
 		print_response(&response.content, args.raw, config);
 		return Ok(());
@@ -531,15 +541,18 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 					});
 
 					// Execute the query
-					let query_result = execute_single_query(
-						&full_input,
-						&model,
+					let query_result = execute_single_query(SingleQueryParams {
+						input: &full_input,
+						model: &model,
 						temperature,
-						args.max_tokens
+						top_p,
+						top_k,
+						max_tokens: args
+							.max_tokens
 							.unwrap_or_else(|| clean_config.get_effective_max_tokens()),
-						&system_prompt,
-						&clean_config,
-					)
+						system_prompt: &system_prompt,
+						config: &clean_config,
+					})
 					.await;
 
 					// Cancel animation
@@ -572,20 +585,25 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 	}
 }
 
-// Helper function to execute a single query
-async fn execute_single_query(
-	input: &str,
-	model: &str,
+/// Parameters for executing a single query
+struct SingleQueryParams<'a> {
+	input: &'a str,
+	model: &'a str,
 	temperature: f32,
+	top_p: f32,
+	top_k: u32,
 	max_tokens: u32,
-	system_prompt: &str,
-	config: &Config,
-) -> Result<ProviderResponse> {
+	system_prompt: &'a str,
+	config: &'a Config,
+}
+
+// Helper function to execute a single query
+async fn execute_single_query(params: SingleQueryParams<'_>) -> Result<ProviderResponse> {
 	// Create messages
 	let messages = vec![
 		Message {
 			role: "system".to_string(),
-			content: system_prompt.to_string(),
+			content: params.system_prompt.to_string(),
 			timestamp: std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
@@ -598,7 +616,7 @@ async fn execute_single_query(
 		},
 		Message {
 			role: "user".to_string(),
-			content: input.to_string(),
+			content: params.input.to_string(),
 			timestamp: std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
@@ -612,5 +630,15 @@ async fn execute_single_query(
 	];
 
 	// Call the AI provider
-	chat_completion_with_provider(&messages, model, temperature, max_tokens, config, 0).await
+	chat_completion_with_provider(ChatCompletionProviderParams {
+		messages: &messages,
+		model: params.model,
+		temperature: params.temperature,
+		top_p: params.top_p,
+		top_k: params.top_k,
+		max_tokens: params.max_tokens,
+		config: params.config,
+		max_retries: 0,
+	})
+	.await
 }

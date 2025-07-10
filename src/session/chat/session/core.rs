@@ -127,6 +127,8 @@ pub struct ChatSession {
 	pub model: String,
 	pub role: String, // Role for the session
 	pub temperature: f32,
+	pub top_p: f32, // Top-p nucleus sampling parameter
+	pub top_k: u32, // Top-k sampling parameter
 	pub max_tokens: u32,
 	pub estimated_cost: f64,
 	pub cache_next_user_message: bool, // Flag to cache the next user message
@@ -137,28 +139,47 @@ pub struct ChatSession {
 	pub continuation_disabled: bool,   // Flag to temporarily disable continuation triggers
 }
 
+/// Parameters for creating a new ChatSession
+pub struct ChatSessionParams<'a> {
+	pub name: String,
+	pub model: Option<String>,
+	pub temperature: Option<f32>,
+	pub top_p: Option<f32>,
+	pub top_k: Option<u32>,
+	pub max_tokens: Option<u32>,
+	pub max_retries: Option<u32>,
+	pub config: &'a Config,
+	pub role: &'a str,
+}
+
 impl ChatSession {
 	// Create a new chat session
-	pub fn new(
-		name: String,
-		model: Option<String>,
-		temperature: Option<f32>,
-		max_tokens: Option<u32>,
-		max_retries: Option<u32>,
-		config: &Config,
-		role: &str,
-	) -> Self {
-		let model_name = model.unwrap_or_else(|| config.get_effective_model());
+	pub fn new(params: ChatSessionParams<'_>) -> Self {
+		let model_name = params
+			.model
+			.unwrap_or_else(|| params.config.get_effective_model());
 		// STRICT: temperature should always be provided from role config, no fallbacks
-		let temperature_value = temperature.expect("Temperature must be provided from role config");
+		let temperature_value = params
+			.temperature
+			.expect("Temperature must be provided from role config");
+		// STRICT: top_p should always be provided from role config, no fallbacks
+		let top_p_value = params
+			.top_p
+			.expect("Top_p must be provided from role config");
+		// STRICT: top_k should always be provided from role config, no fallbacks
+		let top_k_value = params
+			.top_k
+			.expect("Top_k must be provided from role config");
 		// STRICT: max_tokens should always be provided from role config, no fallbacks
-		let max_tokens_value = max_tokens.expect("Max tokens must be provided from role config");
+		let max_tokens_value = params
+			.max_tokens
+			.expect("Max tokens must be provided from role config");
 		// max_retries defaults to 0 if not provided (runtime-only parameter)
-		let max_retries_value = max_retries.unwrap_or(0);
+		let max_retries_value = params.max_retries.unwrap_or(0);
 
 		// Create a new session with initial info
 		let session_info = crate::session::SessionInfo {
-			name: name.clone(),
+			name: params.name.clone(),
 			created_at: SystemTime::now()
 				.duration_since(UNIX_EPOCH)
 				.unwrap_or_default()
@@ -192,8 +213,10 @@ impl ChatSession {
 			},
 			last_response: String::new(),
 			model: model_name,
-			role: role.to_string(),             // Store the role in ChatSession
+			role: params.role.to_string(),      // Store the role in ChatSession
 			temperature: temperature_value,     // Use the provided temperature
+			top_p: top_p_value,                 // Use the provided top_p
+			top_k: top_k_value,                 // Use the provided top_k
 			max_tokens: max_tokens_value,       // Use the provided max_tokens
 			estimated_cost: 0.0,                // Initialize estimated cost as zero
 			cache_next_user_message: false,     // Initialize cache flag
@@ -229,6 +252,11 @@ impl ChatSession {
 			let (role_config, _, _, _, _) = params.config.get_role_config(params.role);
 			role_config.temperature
 		};
+
+		// Get top_p and top_k from role config - STRICT: always from config, no command line override
+		let (role_config, _, _, _, _) = params.config.get_role_config(params.role);
+		let effective_top_p = role_config.top_p;
+		let effective_top_k = role_config.top_k;
 
 		// Get max_tokens from root config if not provided via command line
 		let effective_max_tokens = if let Some(tokens) = params.max_tokens {
@@ -317,6 +345,8 @@ impl ChatSession {
 						model: restored_model,              // Use restored model from session
 						role: params.role.to_string(),      // Add role from params
 						temperature: effective_temperature, // Use config-based temperature
+						top_p: effective_top_p,             // Use config-based top_p
+						top_k: effective_top_k,             // Use config-based top_k
 						max_tokens: effective_max_tokens,   // Use config-based max_tokens
 						estimated_cost: 0.0,
 						cache_next_user_message: false,     // Initialize cache flag
@@ -390,15 +420,17 @@ impl ChatSession {
 						drop(file);
 					}
 
-					let mut chat_session = ChatSession::new(
-						new_session_name.clone(),
-						params.model.clone(),
-						Some(effective_temperature), // Use config-based temperature
-						Some(effective_max_tokens),  // Use config-based max_tokens
-						params.max_retries,          // Pass max_retries through
-						params.config,
-						params.role, // Add role parameter
-					);
+					let mut chat_session = ChatSession::new(ChatSessionParams {
+						name: new_session_name.clone(),
+						model: params.model.clone(),
+						temperature: Some(effective_temperature), // Use config-based temperature
+						top_p: Some(effective_top_p),             // Use config-based top_p
+						top_k: Some(effective_top_k),             // Use config-based top_k
+						max_tokens: Some(effective_max_tokens),   // Use config-based max_tokens
+						max_retries: params.max_retries,          // Pass max_retries through
+						config: params.config,
+						role: params.role, // Add role parameter
+					});
 					chat_session.session.session_file = Some(new_session_file);
 
 					// Immediately save the session info in new JSON format
@@ -432,15 +464,17 @@ impl ChatSession {
 				drop(file);
 			}
 
-			let mut chat_session = ChatSession::new(
-				session_name.clone(),
-				params.model,
-				Some(effective_temperature),
-				Some(effective_max_tokens),
-				params.max_retries,
-				params.config,
-				params.role,
-			);
+			let mut chat_session = ChatSession::new(ChatSessionParams {
+				name: session_name.clone(),
+				model: params.model,
+				temperature: Some(effective_temperature),
+				top_p: Some(effective_top_p),
+				top_k: Some(effective_top_k),
+				max_tokens: Some(effective_max_tokens),
+				max_retries: params.max_retries,
+				config: params.config,
+				role: params.role,
+			});
 			chat_session.session.session_file = Some(session_file);
 
 			// Immediately save the session info in new JSON format
