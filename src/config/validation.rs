@@ -47,6 +47,33 @@ impl Config {
 			return Err(anyhow!("Markdown theme field cannot be empty"));
 		}
 
+		// Validate ask configuration - STRICT MODE: system field is required
+		if self.ask.system.is_empty() {
+			return Err(anyhow!("Ask configuration 'system' field cannot be empty"));
+		}
+
+		// Validate shell configuration - STRICT MODE: system field is required
+		if self.shell.system.is_empty() {
+			return Err(anyhow!(
+				"Shell configuration 'system' field cannot be empty"
+			));
+		}
+
+		// Validate temperature ranges for ask and shell
+		if self.ask.temperature < 0.0 || self.ask.temperature > 1.0 {
+			return Err(anyhow!(
+				"Ask configuration temperature must be between 0.0 and 1.0, got: {}",
+				self.ask.temperature
+			));
+		}
+
+		if self.shell.temperature < 0.0 || self.shell.temperature > 1.0 {
+			return Err(anyhow!(
+				"Shell configuration temperature must be between 0.0 and 1.0, got: {}",
+				self.shell.temperature
+			));
+		}
+
 		// Role configurations no longer have models - using system-wide model
 
 		Ok(())

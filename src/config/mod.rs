@@ -86,6 +86,22 @@ impl LogLevel {
 // REMOVED: All default functions - config must be complete and explicit
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AskConfig {
+	/// System prompt for ask command
+	pub system: String,
+	/// Default temperature for ask command (0.0 to 1.0)
+	pub temperature: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ShellConfig {
+	/// System prompt for shell command
+	pub system: String,
+	/// Default temperature for shell command (0.0 to 1.0)
+	pub temperature: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
 	// Config version for future migrations (always first field)
 	pub version: u32,
@@ -144,6 +160,12 @@ pub struct Config {
 
 	// Global layer configurations - array of layer definitions
 	pub layers: Option<Vec<crate::session::layers::LayerConfig>>,
+
+	// Ask command configuration
+	pub ask: AskConfig,
+
+	// Shell command configuration
+	pub shell: ShellConfig,
 
 	// Legacy system prompt field for backward compatibility
 	pub system: Option<String>,

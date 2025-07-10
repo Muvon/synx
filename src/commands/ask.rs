@@ -50,8 +50,8 @@ pub struct AskArgs {
 	pub max_tokens: Option<u32>,
 
 	/// Temperature for the AI response (0.0 to 1.0, runtime only, not saved)
-	#[arg(long, default_value = "0.7")]
-	pub temperature: f32,
+	#[arg(long)]
+	pub temperature: Option<f32>,
 
 	/// Output raw text without markdown rendering
 	#[arg(long)]
@@ -425,8 +425,11 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 		.clone()
 		.unwrap_or_else(|| config.get_effective_model());
 
+	// Determine temperature to use: either from --temperature flag or config default
+	let temperature = args.temperature.unwrap_or(config.ask.temperature);
+
 	// Simple system prompt for ask command with placeholder processing
-	let base_system_prompt = "You are a helpful assistant.\n\n%{SYSTEM}";
+	let base_system_prompt = &config.ask.system;
 	let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 	let system_prompt = crate::session::helper_functions::process_placeholders_async(
 		base_system_prompt,
@@ -455,7 +458,7 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 		let response = execute_single_query(
 			&full_input,
 			&model,
-			args.temperature,
+			temperature,
 			args.max_tokens
 				.unwrap_or_else(|| clean_config.get_effective_max_tokens()),
 			&system_prompt,
@@ -485,7 +488,7 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 		let response = execute_single_query(
 			&full_input,
 			&model,
-			args.temperature,
+			temperature,
 			args.max_tokens
 				.unwrap_or_else(|| clean_config.get_effective_max_tokens()),
 			&system_prompt,
@@ -531,7 +534,7 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 					let query_result = execute_single_query(
 						&full_input,
 						&model,
-						args.temperature,
+						temperature,
 						args.max_tokens
 							.unwrap_or_else(|| clean_config.get_effective_max_tokens()),
 						&system_prompt,

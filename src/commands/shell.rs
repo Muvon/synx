@@ -96,8 +96,8 @@ pub struct ShellArgs {
 	pub yes: bool,
 
 	/// Temperature for the AI response (0.0 to 1.0, runtime only, not saved)
-	#[arg(long, default_value = "0.3")]
-	pub temperature: f32,
+	#[arg(long)]
+	pub temperature: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -131,16 +131,19 @@ pub async fn execute(args: &ShellArgs, config: &Config) -> Result<()> {
 		.clone()
 		.unwrap_or_else(|| config.get_effective_model());
 
+	// Determine temperature to use: either from --temperature flag or config default
+	let temperature = args.temperature.unwrap_or(config.shell.temperature);
+
 	// Create a clean config with no MCP servers for shell command
 	// This ensures no tools are sent to the API
 	let mut clean_config = config.clone();
 	clean_config.mcp.servers.clear();
 
 	// Create specialized system prompt for shell commands with placeholder processing
-	let base_system_prompt = create_shell_system_prompt();
+	let base_system_prompt = &config.shell.system;
 	let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 	let system_prompt = crate::session::helper_functions::process_placeholders_async(
-		&base_system_prompt,
+		base_system_prompt,
 		&current_dir,
 	)
 	.await;
@@ -190,7 +193,7 @@ pub async fn execute(args: &ShellArgs, config: &Config) -> Result<()> {
 	let response = chat_completion_with_provider(
 		&messages,
 		&model,
-		args.temperature,
+		temperature,
 		args.max_tokens
 			.unwrap_or_else(|| clean_config.get_effective_max_tokens()),
 		&clean_config,
@@ -278,30 +281,4 @@ pub async fn execute(args: &ShellArgs, config: &Config) -> Result<()> {
 	}
 
 	Ok(())
-}
-
-fn create_shell_system_prompt() -> String {
-	format!(
-		"You are a shell command generator. Your task is to convert natural language descriptions into appropriate shell commands.\n\n\
-			INSTRUCTIONS:\n\
-			1. Generate safe, correct shell commands for the given description\n\
-			2. Prefer commonly available tools and standard Unix commands\n\
-			3. Always respond with properly formatted JSON\n\
-			4. Include safety warnings for potentially dangerous commands\n\
-			5. Make commands as specific as possible while being safe\n\
-			6. Consider the current working directory: {}\n\n\
-			SAFETY GUIDELINES:\n\
-			- Avoid destructive operations without explicit user request\n\
-			- Warn about commands that modify system files\n\
-			- Prefer read-only operations when possible\n\
-			- Include safety flags where appropriate (e.g., -i for interactive)\n\n\
-			RESPONSE FORMAT:\n\
-			Always respond with a JSON object containing exactly these fields:\n\
-			- \"command\": string with the exact shell command\n\
-			- \"explanation\": string explaining what the command does\n\
-			- \"safety_notes\": optional string with warnings (null if no warnings needed)",
-		std::env::current_dir()
-			.map(|p| p.display().to_string())
-			.unwrap_or_else(|_| "unknown".to_string())
-	)
 }
