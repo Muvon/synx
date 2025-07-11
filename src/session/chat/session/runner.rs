@@ -119,8 +119,11 @@ fn extract_session_params<T: std::fmt::Debug>(args: &T, _config: &Config) -> Ses
 	)
 }
 
-// Run an interactive session
-pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Config) -> Result<()> {
+// Helper function to setup session parameters and initialize chat session
+async fn setup_and_initialize_session<T: std::fmt::Debug>(
+	args: &T,
+	config: &Config,
+) -> Result<(ChatSession, Config, String, bool)> {
 	// Extract session parameters
 	let (name, resume, model, max_tokens, temperature, role, max_retries) =
 		extract_session_params(args, config);
@@ -128,11 +131,28 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	// Get role config for defaults
 	let (role_config, _, _, _, _) = config.get_role_config(&role);
 
-	// For developer role, show MCP server status
+	// Get current directory
 	let current_dir = std::env::current_dir()?;
 
 	// Get the merged configuration for the specified role
 	let config_for_role = config.get_merged_config_for_role(&role);
+
+	// Validate session token threshold if enabled (before initializing session)
+	if config_for_role.max_session_tokens_threshold > 0 {
+		if let Err(e) =
+			crate::session::validate_session_token_threshold(&config_for_role, &role, &current_dir)
+				.await
+		{
+			return Err(anyhow::anyhow!(
+				"Session initialization failed: {}
+To fix this issue
+1. Increase max_session_tokens_threshold in your config
+2. Or disable session continuation by setting max_session_tokens_threshold = 0
+3. Or reduce the number of MCP servers to lower tool overhead",
+				e
+			));
+		}
+	}
 
 	// Create or load session
 	let mut session_params = SessionInitParams::new(&config_for_role, &role);
@@ -159,23 +179,6 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	// Use CLI max_retries if provided, otherwise use root config max_retries
 	let effective_max_retries = max_retries.unwrap_or(config_for_role.max_retries);
 	session_params = session_params.with_max_retries(effective_max_retries);
-
-	// Validate session token threshold if enabled (before initializing session)
-	if config_for_role.max_session_tokens_threshold > 0 {
-		if let Err(e) =
-			crate::session::validate_session_token_threshold(&config_for_role, &role, &current_dir)
-				.await
-		{
-			return Err(anyhow::anyhow!(
-				"Session initialization failed: {}
-To fix this issue
-1. Increase max_session_tokens_threshold in your config
-2. Or disable session continuation by setting max_session_tokens_threshold = 0
-3. Or reduce the number of MCP servers to lower tool overhead",
-				e
-			));
-		}
-	}
 
 	let mut chat_session = ChatSession::initialize(session_params).await?;
 
@@ -210,34 +213,35 @@ To fix this issue
 	}
 
 	// Track if the first message has been processed through layers
-	let mut first_message_processed = !chat_session.session.messages.is_empty();
-	println!("Interactive coding session started. Type your questions/requests.");
-	println!("Type /help for available commands.");
+	let first_message_processed = !chat_session.session.messages.is_empty();
 
-	// Show history usage info for new sessions
-	if chat_session.session.messages.is_empty() {
-		use colored::*;
-		println!(
-			"{}",
-			"💡 Tip: Use ↑/↓ arrows or Ctrl+R for command history search".bright_yellow()
-		);
-	}
+	Ok((chat_session, config_for_role, role, first_message_processed))
+}
+
+// Helper function to setup system prompt and cache
+async fn setup_system_prompt_and_cache(
+	chat_session: &mut ChatSession,
+	config_for_role: &Config,
+	role: &str,
+	is_interactive: bool,
+) -> Result<()> {
+	let current_dir = std::env::current_dir()?;
 
 	// Initialize with system prompt if new session
 	if chat_session.session.messages.is_empty() {
 		// Create system prompt based on role - use merged config for role
-		let system_prompt = create_system_prompt(&current_dir, &config_for_role, &role).await;
+		let system_prompt = create_system_prompt(&current_dir, config_for_role, role).await;
 		chat_session.add_system_message(&system_prompt)?;
 
 		// Process layer system prompts during session initialization
 		// This ensures layer system prompts are processed once and cached for the entire session
-		let (role_config, _, _, _, _) = config_for_role.get_role_config(&role);
+		let (role_config, _, _, _, _) = config_for_role.get_role_config(role);
 		if role_config.enable_layers {
 			use crate::session::layers::LayeredOrchestrator;
 			// Create orchestrator with processed system prompts - use original config for layers
 			let _orchestrator = LayeredOrchestrator::from_config_with_processed_prompts(
-				config,
-				&role,
+				config_for_role,
+				role,
 				&current_dir,
 			)
 			.await;
@@ -267,37 +271,395 @@ To fix this issue
 			);
 		}
 
-		// Add initial messages (welcome + instructions) using centralized function
-		let initial_messages =
-			super::utils::get_initial_messages(config, &role, &current_dir).await?;
-		for msg in initial_messages {
-			match msg.role.as_str() {
-				"assistant" => {
-					chat_session.add_assistant_message(
-						&msg.content,
-						None,
-						&config_for_role,
-						&role,
-					)?;
+		if is_interactive {
+			// Add initial messages (welcome + instructions) using centralized function
+			let initial_messages =
+				super::utils::get_initial_messages(config_for_role, role, &current_dir).await?;
+			for msg in initial_messages {
+				match msg.role.as_str() {
+					"assistant" => {
+						chat_session.add_assistant_message(
+							&msg.content,
+							None,
+							config_for_role,
+							role,
+						)?;
+					}
+					"user" => {
+						chat_session.add_user_message(&msg.content)?;
+					}
+					_ => {} // Should not happen
 				}
-				"user" => {
-					chat_session.add_user_message(&msg.content)?;
+			}
+
+			// Apply cache markers to initial messages if caching is supported
+			if supports_caching {
+				let cache_manager = crate::session::cache::CacheManager::new();
+				cache_manager.add_automatic_cache_markers(
+					&mut chat_session.session.messages,
+					has_tools,
+					supports_caching,
+				);
+			}
+		} else {
+			// Non-interactive mode: Add assistant welcome message
+			let role_config = config_for_role.get_role_config_struct(role);
+			let welcome_message =
+				crate::session::helper_functions::process_placeholders_async_with_role(
+					&role_config.welcome,
+					&current_dir,
+					Some(role),
+				)
+				.await;
+
+			chat_session.add_assistant_message(&welcome_message, None, config_for_role, role)?;
+
+			// Apply cache marker to welcome message
+			if supports_caching {
+				let cache_manager = crate::session::cache::CacheManager::new();
+				cache_manager.add_automatic_cache_markers(
+					&mut chat_session.session.messages,
+					has_tools,
+					supports_caching,
+				);
+			}
+
+			// Check for custom instructions file
+			let instructions_filename = &config_for_role.custom_instructions_file_name;
+			if !instructions_filename.is_empty() {
+				let instructions_path = current_dir.join(instructions_filename);
+				if instructions_path.exists() {
+					match std::fs::read_to_string(&instructions_path) {
+						Ok(instructions_content) => {
+							let processed_instructions =
+								crate::session::helper_functions::process_placeholders_async_with_role(
+									&instructions_content,
+									&current_dir,
+									Some(role),
+								)
+								.await;
+
+							chat_session.add_user_message(&processed_instructions)?;
+
+							if supports_caching {
+								let cache_manager = crate::session::cache::CacheManager::new();
+								cache_manager.add_automatic_cache_markers(
+									&mut chat_session.session.messages,
+									has_tools,
+									supports_caching,
+								);
+							}
+
+							log_info!(
+								"Added {} content as user message with variable processing",
+								instructions_filename
+							);
+						}
+						Err(e) => {
+							log_debug!("Failed to read {}: {}", instructions_filename, e);
+						}
+					}
 				}
-				_ => {} // Should not happen
 			}
 		}
+	}
 
-		// Apply cache markers to initial messages if caching is supported
-		if supports_caching {
-			let cache_manager = crate::session::cache::CacheManager::new();
-			cache_manager.add_automatic_cache_markers(
-				&mut chat_session.session.messages,
-				has_tools,
-				supports_caching,
-			);
+	Ok(())
+}
+
+// Helper function to process layers if enabled
+async fn process_layers_if_enabled(
+	input: &str,
+	chat_session: &mut ChatSession,
+	config: &Config,
+	role: &str,
+	first_message_processed: bool,
+	operation_cancelled: Arc<AtomicBool>,
+) -> Result<(String, bool)> {
+	let layers_enabled = config.get_enable_layers(role);
+	if layers_enabled && !first_message_processed {
+		// Track session message count before layer processing
+		let messages_before_layers = chat_session.session.messages.len();
+
+		// Process using layered architecture to get improved input
+		let layered_result = super::super::layered_response::process_layered_response(
+			input,
+			chat_session,
+			config,
+			role,
+			operation_cancelled,
+		)
+		.await;
+
+		match layered_result {
+			Ok(processed_input) => {
+				// Check if layers modified the session
+				let messages_after_layers = chat_session.session.messages.len();
+				let layers_modified_session = messages_after_layers > messages_before_layers;
+
+				if layers_modified_session {
+					// Layers used output_mode append/replace and added messages to session
+					log_info!(
+						"Layers modified session ({} messages added).",
+						messages_after_layers - messages_before_layers
+					);
+					// Return indication that layers modified session
+					Ok((processed_input, true))
+				} else {
+					// Layers didn't modify session (all had output_mode = none)
+					// Use the processed input from layers instead of the original input
+					log_info!("Layers processing complete. Using enhanced input for main model.");
+					Ok((processed_input, false))
+				}
+			}
+			Err(e) => {
+				// Print colorful error message and continue with original input
+				use colored::*;
+				println!(
+					"\n{}: {}",
+					"Error processing through layers".bright_red(),
+					e
+				);
+				println!("{}", "Continuing with original input.".yellow());
+				// Return original input
+				Ok((input.to_string(), false))
+			}
 		}
 	} else {
-		// Print the last few messages for context with colors if terminal supports them
+		// Layers not enabled or already processed
+		Ok((input.to_string(), false))
+	}
+}
+
+// Helper function to prepare for API call (context truncation and caching)
+async fn prepare_for_api_call(
+	chat_session: &mut ChatSession,
+	config: &Config,
+	operation_cancelled: Arc<AtomicBool>,
+) -> Result<()> {
+	// Check if we need to truncate the context to stay within token limits
+	check_and_truncate_context_with_cancellation(
+		chat_session,
+		config,
+		TruncationOptions::default(), // Normal truncation, no defer
+		Some(operation_cancelled),
+	)
+	.await?;
+
+	// Ensure system message is cached before making API calls
+	let mut system_message_cached = false;
+
+	// Check if system message is already cached
+	for msg in &chat_session.session.messages {
+		if msg.role == "system" && msg.cached {
+			system_message_cached = true;
+			break;
+		}
+	}
+
+	// If system message not already cached, add a cache checkpoint
+	if !system_message_cached {
+		if let Ok(cached) = chat_session.session.add_cache_checkpoint(true) {
+			if cached && crate::session::model_supports_caching(&chat_session.model) {
+				log_info!(
+					"System message has been automatically marked for caching to save tokens."
+				);
+				// Save the session to ensure the cached status is persisted
+				let _ = chat_session.save();
+			}
+		}
+	}
+
+	Ok(())
+}
+
+// Helper function to execute API call and process response
+async fn execute_api_call_and_process_response(
+	chat_session: &mut ChatSession,
+	config: &Config,
+	role: &str,
+	operation_cancelled: Arc<AtomicBool>,
+	is_interactive: bool,
+) -> Result<()> {
+	let model = chat_session.model.clone();
+	let temperature = chat_session.temperature;
+	let config_clone = config.clone();
+
+	// Create animation task
+	let animation_cancel = Arc::new(AtomicBool::new(false));
+	let animation_cancel_clone = animation_cancel.clone();
+	let current_cost = chat_session.session.info.total_cost;
+	let animation_task = tokio::spawn(async move {
+		if is_interactive {
+			let _ = show_loading_animation(animation_cancel_clone, current_cost).await;
+		} else {
+			let _ = show_no_animation(animation_cancel_clone, current_cost).await;
+		}
+	});
+
+	// Check spending threshold for interactive mode
+	if is_interactive {
+		match chat_session.check_spending_threshold(config) {
+			Ok(should_continue) => {
+				if !should_continue {
+					// User chose not to continue due to spending threshold
+					operation_cancelled.store(true, Ordering::SeqCst);
+					let _ = animation_task.await;
+					return Ok(());
+				}
+			}
+			Err(e) => {
+				// Error checking threshold, log and continue
+				use colored::*;
+				println!(
+					"{}: {}",
+					"Warning: Error checking spending threshold".bright_yellow(),
+					e
+				);
+			}
+		}
+	}
+
+	// Make API call
+	let messages = chat_session.session.messages.clone();
+	let max_retries = chat_session.max_retries;
+	let validation_params = ChatCompletionWithValidationParams::new(
+		&messages,
+		&model,
+		temperature,
+		chat_session.top_p,
+		chat_session.top_k,
+		chat_session.max_tokens,
+		&config_clone,
+	)
+	.with_max_retries(max_retries)
+	.with_chat_session(chat_session)
+	.with_cancellation_token(operation_cancelled.clone());
+	let api_result = crate::session::chat_completion_with_validation(validation_params).await;
+
+	// Stop animation
+	animation_cancel.store(true, Ordering::SeqCst);
+	let _ = animation_task.await;
+
+	// Process response
+	match api_result {
+		Ok(response) => {
+			// Process the response with tool calls
+			let tool_process_cancelled = Arc::new(AtomicBool::new(false));
+
+			let process_result = process_response(ResponseProcessingParams::new(
+				response.content,
+				response.exchange,
+				response.tool_calls,
+				response.finish_reason,
+				chat_session,
+				config,
+				role,
+				tool_process_cancelled,
+			))
+			.await;
+
+			if let Err(e) = process_result {
+				use colored::*;
+				println!("\n{}: {}", "Error processing response".bright_red(), e);
+			}
+		}
+		Err(e) => {
+			return Err(e);
+		}
+	}
+
+	Ok(())
+}
+
+// Helper function to handle API errors with provider-specific messages
+fn handle_api_error(
+	chat_session: &mut ChatSession,
+	user_message_index: usize,
+	model: &str,
+	error: &anyhow::Error,
+) {
+	// Remove user message on API failure
+	if user_message_index < chat_session.session.messages.len() {
+		chat_session.session.messages.truncate(user_message_index);
+		log_debug!("Removed user message due to API call failure");
+	}
+
+	// Print error with provider context
+	use colored::*;
+
+	// Extract provider name from the model string
+	let provider_name =
+		if let Ok((provider, _)) = crate::providers::ProviderFactory::parse_model(model) {
+			provider
+		} else {
+			"unknown provider".to_string()
+		};
+
+	println!(
+		"\n{}: {}",
+		format!("Error calling {}", provider_name).bright_red(),
+		error
+	);
+
+	// Provider-specific help message
+	match provider_name.to_lowercase().as_str() {
+		"openrouter" => {
+			println!("{}", "Make sure OpenRouter API key is set in the config or as OPENROUTER_API_KEY environment variable.".yellow());
+		}
+		"anthropic" => {
+			println!("{}", "Make sure Anthropic API key is set in the config or as ANTHROPIC_API_KEY environment variable.".yellow());
+		}
+		"openai" => {
+			println!("{}", "Make sure OpenAI API key is set in the config or as OPENAI_API_KEY environment variable.".yellow());
+		}
+		"google" => {
+			println!("{}", "Make sure Google credentials are set in the config or as GOOGLE_APPLICATION_CREDENTIALS environment variable.".yellow());
+		}
+		"amazon" => {
+			println!(
+				"{}",
+				"Make sure AWS credentials are configured properly for Amazon Bedrock access."
+					.yellow()
+			);
+		}
+		"cloudflare" => {
+			println!("{}", "Make sure Cloudflare API key is set in the config or as CLOUDFLARE_API_KEY environment variable.".yellow());
+		}
+		_ => {
+			println!(
+				"{}",
+				"Make sure the API key for this provider is properly configured.".yellow()
+			);
+		}
+	}
+}
+
+// Run an interactive session
+pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Config) -> Result<()> {
+	// Setup and initialize session using helper function
+	let (mut chat_session, config_for_role, role, mut first_message_processed) =
+		setup_and_initialize_session(args, config).await?;
+
+	// Setup system prompt and cache using helper function (BEFORE showing interactive prompts)
+	setup_system_prompt_and_cache(&mut chat_session, &config_for_role, &role, true).await?;
+
+	println!("Interactive coding session started. Type your questions/requests.");
+	println!("Type /help for available commands.");
+
+	// Show history usage info for new sessions
+	if chat_session.session.messages.len() <= 2 {
+		// System + welcome messages
+		use colored::*;
+		println!(
+			"{}",
+			"💡 Tip: Use ↑/↓ arrows or Ctrl+R for command history search".bright_yellow()
+		);
+	}
+
+	// Print the last few messages for context with colors if terminal supports them (for resumed sessions)
+	// Only show context for truly resumed sessions, not new sessions
+	if chat_session.was_resumed {
 		let last_messages = chat_session
 			.session
 			.messages
@@ -324,6 +686,7 @@ To fix this issue
 
 	// Enhanced processing state tracking for smart cancellation
 	#[derive(Debug, Clone, PartialEq)]
+	#[allow(dead_code)] // Some variants may not be used after refactoring
 	enum ProcessingState {
 		Idle,                 // No operation in progress
 		ReadingInput,         // Reading user input
@@ -339,6 +702,7 @@ To fix this issue
 
 	// Smart operation tracking for surgical cleanup
 	#[derive(Debug, Clone)]
+	#[allow(dead_code)] // Some fields may not be used after refactoring
 	struct OperationContext {
 		user_message_index: Option<usize>,
 		assistant_message_index: Option<usize>,
@@ -570,7 +934,7 @@ To fix this issue
 					// Initialize the new session
 					let session_params = SessionInitParams::new(&current_config, &role)
 						.with_name(new_session_name)
-						.with_max_retries(effective_max_retries);
+						.with_max_retries(current_config.max_retries);
 					let new_chat_session = ChatSession::initialize(session_params).await?;
 
 					// Replace the current chat session
@@ -635,92 +999,32 @@ To fix this issue
 		// 1. Process through layers if needed (first message with layers enabled)
 		// 2. Use the processed input for the main model chat
 
-		// If layers are enabled and this is the first message, process it through layers first
-		let layers_enabled = current_config.get_enable_layers(&role);
-		if layers_enabled && !first_message_processed {
-			// Set processing state to layers
-			*processing_state.lock().unwrap() = ProcessingState::ProcessingLayers;
+		// Process layers if enabled using helper function
+		let (processed_input, layers_modified_session) = process_layers_if_enabled(
+			&input,
+			&mut chat_session,
+			&current_config,
+			&role,
+			first_message_processed,
+			operation_cancelled.clone(),
+		)
+		.await?;
 
-			// This is the first message with layered architecture enabled
-			// We will process it through layers to get improved input for the main model
+		// Check for cancellation after layer processing
+		if ctrl_c_pressed.load(Ordering::SeqCst) {
+			continue;
+		}
 
-			// Check for Ctrl+C before starting layered processing
-			if ctrl_c_pressed.load(Ordering::SeqCst) {
-				continue;
-			}
-
-			// Track session message count before layer processing
-
-			let messages_before_layers = chat_session.session.messages.len();
-
-			// Process using layered architecture to get improved input
-			// Each layer processes function calls with its own model internally,
-			// so the final output already incorporates all function call results
-			let layered_result = super::super::layered_response::process_layered_response(
-				&input,
-				&mut chat_session,
-				&current_config,
-				&role,
-				operation_cancelled.clone(),
-			)
-			.await;
-
-			match layered_result {
-				Ok(processed_input) => {
-					// Check for cancellation after layer processing
-					if ctrl_c_pressed.load(Ordering::SeqCst) {
-						continue;
-					}
-
-					// Check if layers modified the session (added messages via output_mode)
-					let messages_after_layers = chat_session.session.messages.len();
-					let layers_modified_session = messages_after_layers > messages_before_layers;
-
-					if layers_modified_session {
-						// Layers used output_mode append/replace and added messages to session
-						// Skip adding user message to avoid duplicates
-						log_info!(
-							"Layers modified session ({} messages added).",
-							messages_after_layers - messages_before_layers
-						);
-
-						// Mark that we've processed the first message through layers
-						// We will continue here with the user message
-						// to guarantee that the otput from layer next
-						// processed with the main loop
-						first_message_processed = true;
-					} else {
-						// Layers didn't modify session (all had output_mode = none)
-						// Use the processed input from layers instead of the original input
-						input = processed_input;
-
-						// Mark that we've processed the first message through layers
-						first_message_processed = true;
-
-						log_info!(
-							"{}",
-							"Layers processing complete. Using enhanced input for main model."
-						);
-					}
-				}
-				Err(e) => {
-					// Check for cancellation in error case
-					if ctrl_c_pressed.load(Ordering::SeqCst) {
-						continue;
-					}
-
-					// Print colorful error message and continue with original input
-					use colored::*;
-					println!(
-						"\n{}: {}",
-						"Error processing through layers".bright_red(),
-						e
-					);
-					println!("{}", "Continuing with original input.".yellow());
-					// Still mark as processed to avoid infinite retry loops
-					first_message_processed = true;
-				}
-			}
+		if layers_modified_session {
+			// Layers used output_mode append/replace and added messages to session
+			// Skip adding user message to avoid duplicates and continue with the user message
+			// to guarantee that the output from layer next processed with the main loop
+			first_message_processed = true;
+		} else {
+			// Use the processed input from layers (or original if layers not enabled)
+			input = processed_input;
+			// Mark that we've processed the first message through layers
+			first_message_processed = true;
 		}
 
 		// Initialize operation context for smart tracking
@@ -758,6 +1062,7 @@ To fix this issue
 
 		// Add user message for standard processing flow
 		// CRITICAL FIX: Skip adding if continuation_pending since the message is already added
+		let layers_enabled = current_config.get_enable_layers(&role);
 		if !chat_session.continuation_pending && !layers_enabled {
 			chat_session.add_user_message(&input)?;
 		}
@@ -777,56 +1082,16 @@ To fix this issue
 			user_message_index
 		);
 
-		// Check if we need to truncate the context to stay within token limits
-		check_and_truncate_context_with_cancellation(
+		// Prepare for API call using helper function
+		prepare_for_api_call(
 			&mut chat_session,
 			&current_config,
-			TruncationOptions::default(), // Normal truncation, no defer
-			Some(operation_cancelled.clone()),
+			operation_cancelled.clone(),
 		)
 		.await?;
 
-		// Ensure system message is cached before making API calls
-		let mut system_message_cached = false;
-
-		// Check if system message is already cached
-		for msg in &chat_session.session.messages {
-			if msg.role == "system" && msg.cached {
-				system_message_cached = true;
-				break;
-			}
-		}
-
-		// If system message not already cached, add a cache checkpoint
-		if !system_message_cached {
-			if let Ok(cached) = chat_session.session.add_cache_checkpoint(true) {
-				if cached && crate::session::model_supports_caching(&chat_session.model) {
-					log_info!(
-						"{}",
-						"System message has been automatically marked for caching to save tokens."
-					);
-					// Save the session to ensure the cached status is persisted
-					let _ = chat_session.save();
-				}
-			}
-		}
-
 		// Set processing state to calling API
 		*processing_state.lock().unwrap() = ProcessingState::CallingAPI;
-
-		// Call OpenRouter in a separate task
-		let model = chat_session.model.clone();
-		let temperature = chat_session.temperature;
-		let config_clone = current_config.clone();
-
-		// Create a task to show loading animation with current cost
-		// Use a separate flag for animation to avoid conflicts with user cancellation detection
-		let animation_cancel = Arc::new(AtomicBool::new(false));
-		let animation_cancel_clone = animation_cancel.clone();
-		let current_cost = chat_session.session.info.total_cost;
-		let animation_task = tokio::spawn(async move {
-			let _ = show_loading_animation(animation_cancel_clone, current_cost).await;
-		});
 
 		// Start a separate task to monitor for Ctrl+C and propagate to operation_cancelled flag
 		let op_cancelled = operation_cancelled.clone();
@@ -848,150 +1113,24 @@ To fix this issue
 		if ctrl_c_pressed.load(Ordering::SeqCst) {
 			// Immediately stop and return to main loop
 			operation_cancelled.store(true, Ordering::SeqCst);
-			let _ = animation_task.await;
 			continue;
 		}
 
-		// Check spending threshold before making API call
-		match chat_session.check_spending_threshold(&current_config) {
-			Ok(should_continue) => {
-				if !should_continue {
-					// User chose not to continue due to spending threshold
-					operation_cancelled.store(true, Ordering::SeqCst);
-					let _ = animation_task.await;
-					continue;
-				}
-			}
-			Err(e) => {
-				// Error checking threshold, log and continue
-				use colored::*;
-				println!(
-					"{}: {}",
-					"Warning: Error checking spending threshold".bright_yellow(),
-					e
-				);
-			}
-		}
-
-		// Now perform the API call with input validation and context management
-		// This will check input size and prompt user for action if limits are exceeded
-		// Clone messages to avoid borrowing conflicts
-		let messages = chat_session.session.messages.clone();
-		let max_retries = chat_session.max_retries; // Extract before mutable borrow
-		let validation_params = ChatCompletionWithValidationParams::new(
-			&messages,
-			&model,
-			temperature,
-			chat_session.top_p,
-			chat_session.top_k,
-			chat_session.max_tokens,
-			&config_clone,
+		// Execute API call and process response using helper function
+		let user_message_index_for_error = user_message_index;
+		let model_for_error = chat_session.model.clone();
+		match execute_api_call_and_process_response(
+			&mut chat_session,
+			&current_config,
+			&role,
+			operation_cancelled.clone(),
+			true, // is_interactive
 		)
-		.with_max_retries(max_retries)
-		.with_chat_session(&mut chat_session)
-		.with_cancellation_token(operation_cancelled.clone());
-		let api_result = crate::session::chat_completion_with_validation(validation_params).await;
-
-		// Stop the animation using the separate animation flag (not the operation_cancelled flag)
-		animation_cancel.store(true, Ordering::SeqCst);
-		let _ = animation_task.await;
-
-		// Check for Ctrl+C again before processing response
-		if ctrl_c_pressed.load(Ordering::SeqCst) {
-			// Skip processing response if Ctrl+C was pressed during API call
-			continue;
-		}
-
-		// Process the response
-		match api_result {
-			Ok(response) => {
-				// Update operation context with assistant message info
-				if let Some(ref mut op) = *current_operation.lock().unwrap() {
-					op.assistant_message_index = Some(chat_session.session.messages.len());
-					op.has_tool_calls = response
-						.tool_calls
-						.as_ref()
-						.is_some_and(|calls| !calls.is_empty());
-					log_debug!(
-						"Updated operation {} with assistant message at index {}",
-						op.operation_id,
-						chat_session.session.messages.len()
-					);
-				}
-
-				// Set processing state based on whether we have tool calls
-				if response
-					.tool_calls
-					.as_ref()
-					.is_some_and(|calls| !calls.is_empty())
-				{
-					*processing_state.lock().unwrap() = ProcessingState::ExecutingTools;
-				} else {
-					*processing_state.lock().unwrap() = ProcessingState::ProcessingResponse;
-				}
-
-				// Process the response, handling tool calls recursively
-				// Create a fresh cancellation flag to avoid any "Operation cancelled" messages when not requested
-				let tool_process_cancelled = Arc::new(AtomicBool::new(false));
-
-				// Connect global cancellation to tool processing cancellation
-				let tool_cancelled_clone = tool_process_cancelled.clone();
-				let ctrl_c_clone = ctrl_c_pressed.clone();
-				let _tool_cancel_monitor = tokio::spawn(async move {
-					while !tool_cancelled_clone.load(Ordering::SeqCst) {
-						if ctrl_c_clone.load(Ordering::SeqCst) {
-							tool_cancelled_clone.store(true, Ordering::SeqCst);
-							break;
-						}
-						// Very fast polling for immediate tool cancellation
-						tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-					}
-				});
-
-				// Process the response, handling tool calls recursively
-				let process_result = process_response(ResponseProcessingParams::new(
-					response.content.clone(), // Clone for potential continuation use
-					response.exchange,
-					response.tool_calls.clone(), // Clone for potential continuation use
-					response.finish_reason.clone(), // Clone for potential continuation use
-					&mut chat_session,
-					&current_config,
-					&role,
-					tool_process_cancelled.clone(),
-				))
-				.await;
-
-				// After processing, update operation context with completed tool IDs
-				if let Some(ref mut op) = *current_operation.lock().unwrap() {
-					// Find all tool result messages that were added during this operation
-					let mut completed_tools = Vec::new();
-					for msg in &chat_session.session.messages {
-						if msg.role == "tool" {
-							if let Some(tool_id) = &msg.tool_call_id {
-								if !op.completed_tool_ids.contains(tool_id) {
-									completed_tools.push(tool_id.clone());
-								}
-							}
-						}
-					}
-					op.completed_tool_ids.extend(completed_tools.clone());
-					if !completed_tools.is_empty() {
-						log_debug!(
-							"Operation {} completed tools: {:?}",
-							op.operation_id,
-							completed_tools
-						);
-					}
-				}
-
+		.await
+		{
+			Ok(_) => {
 				// Update processing state to completed when done
 				*processing_state.lock().unwrap() = ProcessingState::CompletedWithResults;
-
-				if let Err(e) = process_result {
-					// Print colorful error message
-					use colored::*;
-					println!("\n{}: {}", "Error processing response".bright_red(), e);
-				}
 
 				// CRITICAL FIX: Check if continuation was triggered during tool processing
 				// If continuation_pending is true, it means a summary request was injected
@@ -1008,63 +1147,13 @@ To fix this issue
 				// make another API call to get the AI's summary, and THEN handle continuation
 			}
 			Err(e) => {
-				// CRITICAL FIX: Remove the user message that was added before the failed API call
-				// This prevents the failed message from polluting the conversation context
-				if let Some(ref op) = *current_operation.lock().unwrap() {
-					if let Some(user_idx) = op.user_message_index {
-						if user_idx < chat_session.session.messages.len() {
-							chat_session.session.messages.truncate(user_idx);
-							log_debug!("Removed user message due to API call failure");
-						}
-					}
-				}
-
-				// Print colorful error message with provider-aware context
-				use colored::*;
-
-				// Extract provider name from the model string
-				let provider_name = if let Ok((provider, _)) =
-					crate::providers::ProviderFactory::parse_model(&model)
-				{
-					provider
-				} else {
-					"unknown provider".to_string()
-				};
-
-				println!(
-					"\n{}: {}",
-					format!("Error calling {}", provider_name).bright_red(),
-					e
+				// Handle API error using helper function
+				handle_api_error(
+					&mut chat_session,
+					user_message_index_for_error,
+					&model_for_error,
+					&e,
 				);
-
-				// Provider-specific help message
-				match provider_name.to_lowercase().as_str() {
-					"openrouter" => {
-						println!("{}", "Make sure OpenRouter API key is set in the config or as OPENROUTER_API_KEY environment variable.".yellow());
-					}
-					"anthropic" => {
-						println!("{}", "Make sure Anthropic API key is set in the config or as ANTHROPIC_API_KEY environment variable.".yellow());
-					}
-					"openai" => {
-						println!("{}", "Make sure OpenAI API key is set in the config or as OPENAI_API_KEY environment variable.".yellow());
-					}
-					"google" => {
-						println!("{}", "Make sure Google credentials are set in the config or as GOOGLE_APPLICATION_CREDENTIALS environment variable.".yellow());
-					}
-					"amazon" => {
-						println!("{}", "Make sure AWS credentials are configured properly for Amazon Bedrock access.".yellow());
-					}
-					"cloudflare" => {
-						println!("{}", "Make sure Cloudflare API key is set in the config or as CLOUDFLARE_API_KEY environment variable.".yellow());
-					}
-					_ => {
-						println!(
-							"{}",
-							"Make sure the API key for this provider is properly configured."
-								.yellow()
-						);
-					}
-				}
 			}
 		}
 
@@ -1084,177 +1173,12 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	config: &Config,
 	initial_input: &str,
 ) -> Result<()> {
-	// Extract session parameters
-	let (name, resume, model, max_tokens, temperature, role, max_retries) =
-		extract_session_params(args, config);
+	// Setup and initialize session using helper function
+	let (mut chat_session, config_for_role, role, first_message_processed) =
+		setup_and_initialize_session(args, config).await?;
 
-	// Get role config for defaults
-	let (role_config, _, _, _, _) = config.get_role_config(&role);
-
-	// Suppress MCP server status messages for non-interactive mode
-	let current_dir = std::env::current_dir()?;
-
-	// Get the merged configuration for the specified role
-	let config_for_role = config.get_merged_config_for_role(&role);
-
-	// Create or load session - same as interactive
-	let mut session_params = SessionInitParams::new(&config_for_role, &role);
-
-	if let Some(name) = name {
-		session_params = session_params.with_name(name);
-	}
-	if let Some(resume) = resume {
-		session_params = session_params.with_resume(resume);
-	}
-	if let Some(model) = model.clone() {
-		session_params = session_params.with_model(model);
-	}
-
-	// Use CLI temperature if provided, otherwise use role config temperature
-	let effective_temperature = temperature.unwrap_or(role_config.temperature);
-	session_params = session_params.with_temperature(effective_temperature);
-
-	// Use CLI max_tokens if provided, otherwise use config default
-	let effective_max_tokens =
-		max_tokens.unwrap_or_else(|| config_for_role.get_effective_max_tokens());
-	session_params = session_params.with_max_tokens(effective_max_tokens);
-
-	// Use CLI max_retries if provided, otherwise use root config max_retries
-	let effective_max_retries = max_retries.unwrap_or(config_for_role.max_retries);
-	session_params = session_params.with_max_retries(effective_max_retries);
-
-	let mut chat_session = ChatSession::initialize(session_params).await?;
-
-	// Apply runtime overrides - same as interactive
-	if let Some(runtime_model) = &model {
-		chat_session.model = runtime_model.clone();
-		log_info!("Using runtime model override: {}", runtime_model);
-	}
-
-	// Apply runtime temperature override if provided via CLI
-	if let Some(runtime_temperature) = temperature {
-		chat_session.temperature = runtime_temperature;
-		log_info!(
-			"Using runtime temperature override: {}",
-			runtime_temperature
-		);
-	}
-
-	// Apply runtime max_tokens override if provided via CLI
-	if let Some(runtime_max_tokens) = max_tokens {
-		chat_session.max_tokens = runtime_max_tokens;
-		log_info!("Using runtime max_tokens override: {}", runtime_max_tokens);
-	}
-
-	// Apply runtime max_retries override if provided via CLI
-	if let Some(runtime_max_retries) = max_retries {
-		chat_session.max_retries = runtime_max_retries;
-		log_info!(
-			"Using runtime max_retries override: {}",
-			runtime_max_retries
-		);
-	}
-
-	// Track if the first message has been processed through layers
-	let first_message_processed = !chat_session.session.messages.is_empty();
-
-	// Initialize with system prompt if new session - same as interactive
-	if chat_session.session.messages.is_empty() {
-		let system_prompt = create_system_prompt(&current_dir, &config_for_role, &role).await;
-		chat_session.add_system_message(&system_prompt)?;
-
-		// Process layer system prompts - same as interactive
-		let (role_config, _, _, _, _) = config.get_role_config(&role);
-		if role_config.enable_layers {
-			use crate::session::layers::LayeredOrchestrator;
-			let _orchestrator = LayeredOrchestrator::from_config_with_processed_prompts(
-				config,
-				&role,
-				&current_dir,
-			)
-			.await;
-			log_info!("Layer system prompts processed and cached for session");
-		}
-
-		// Apply automatic cache markers - same as interactive
-		let supports_caching = crate::session::model_supports_caching(&chat_session.model);
-		let has_tools = !config_for_role.mcp.servers.is_empty();
-
-		if supports_caching {
-			let cache_manager = crate::session::cache::CacheManager::new();
-			cache_manager.add_automatic_cache_markers(
-				&mut chat_session.session.messages,
-				has_tools,
-				supports_caching,
-			);
-			log_info!("System prompt has been automatically marked for caching to save tokens in future interactions.");
-			let _ = chat_session.save();
-		} else {
-			log_info!(
-				"Note: This model doesn't support caching, but system prompt is still optimized."
-			);
-		}
-
-		// Add assistant welcome message - same as interactive
-		let role_config = config.get_role_config_struct(&role);
-		let welcome_message =
-			crate::session::helper_functions::process_placeholders_async_with_role(
-				&role_config.welcome,
-				&current_dir,
-				Some(&role),
-			)
-			.await;
-
-		chat_session.add_assistant_message(&welcome_message, None, &config_for_role, &role)?;
-
-		// Apply cache marker to welcome message - same as interactive
-		if supports_caching {
-			let cache_manager = crate::session::cache::CacheManager::new();
-			cache_manager.add_automatic_cache_markers(
-				&mut chat_session.session.messages,
-				has_tools,
-				supports_caching,
-			);
-		}
-
-		// Check for custom instructions file - same as interactive
-		let instructions_filename = &config.custom_instructions_file_name;
-		if !instructions_filename.is_empty() {
-			let instructions_path = current_dir.join(instructions_filename);
-			if instructions_path.exists() {
-				match std::fs::read_to_string(&instructions_path) {
-					Ok(instructions_content) => {
-						let processed_instructions =
-							crate::session::helper_functions::process_placeholders_async_with_role(
-								&instructions_content,
-								&current_dir,
-								Some(&role),
-							)
-							.await;
-
-						chat_session.add_user_message(&processed_instructions)?;
-
-						if supports_caching {
-							let cache_manager = crate::session::cache::CacheManager::new();
-							cache_manager.add_automatic_cache_markers(
-								&mut chat_session.session.messages,
-								has_tools,
-								supports_caching,
-							);
-						}
-
-						log_info!(
-							"Added {} content as user message with variable processing",
-							instructions_filename
-						);
-					}
-					Err(e) => {
-						log_debug!("Failed to read {}: {}", instructions_filename, e);
-					}
-				}
-			}
-		}
-	}
+	// Setup system prompt and cache using helper function (non-interactive mode)
+	setup_system_prompt_and_cache(&mut chat_session, &config_for_role, &role, false).await?;
 
 	// Set up cancellation handling for non-interactive mode (simplified)
 	let ctrl_c_pressed = Arc::new(AtomicBool::new(false));
@@ -1318,199 +1242,67 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		return Ok(());
 	}
 
-	// Layer processing if enabled and first message - same as interactive
-	let layers_enabled = current_config.get_enable_layers(&role);
-	if layers_enabled && !first_message_processed {
-		// Track session message count before layer processing
-		let messages_before_layers = chat_session.session.messages.len();
+	// Layer processing if enabled and first message using helper function
+	let (processed_input, layers_modified_session) = process_layers_if_enabled(
+		&input,
+		&mut chat_session,
+		&current_config,
+		&role,
+		first_message_processed,
+		operation_cancelled.clone(),
+	)
+	.await?;
 
-		// Process using layered architecture - same as interactive
-		let layered_result = super::super::layered_response::process_layered_response(
-			&input,
-			&mut chat_session,
-			&current_config,
-			&role,
-			operation_cancelled.clone(),
-		)
-		.await;
-
-		match layered_result {
-			Ok(processed_input) => {
-				// Check if layers modified the session
-				let messages_after_layers = chat_session.session.messages.len();
-				let layers_modified_session = messages_after_layers > messages_before_layers;
-
-				if layers_modified_session {
-					// Layers used output_mode append/replace - session already has the messages
-					log_info!(
-						"Layers modified session ({} messages added). Skipping user message addition.",
-						messages_after_layers - messages_before_layers
-					);
-					// Save session and exit - processing is complete
-					let _ = chat_session.save();
-					return Ok(());
-				} else {
-					// Use processed input from layers
-					input = processed_input;
-					log_info!("Layers processing complete. Using enhanced input for main model.");
-				}
-			}
-			Err(e) => {
-				use colored::*;
-				println!(
-					"\n{}: {}",
-					"Error processing through layers".bright_red(),
-					e
-				);
-				println!("{}", "Continuing with original input.".yellow());
-			}
-		}
+	if layers_modified_session {
+		// Layers used output_mode append/replace and added messages to session
+		// Continue processing to ensure main model gets called (same as interactive mode)
+		log_info!("Layers modified session. Continuing with main model processing.");
+		// Use processed input from layers for main model
+		input = processed_input;
+	} else {
+		// Use processed input from layers (or original if layers not enabled)
+		input = processed_input;
+		log_info!("Layers processing complete. Using enhanced input for main model.");
 	}
 
 	// Add user message - same as interactive
 	let user_message_index = chat_session.session.messages.len();
+	let layers_enabled = current_config.get_enable_layers(&role);
 	if !layers_enabled {
 		chat_session.add_user_message(&input)?;
 	}
 
-	// Check and truncate context - same as interactive
-	check_and_truncate_context_with_cancellation(
+	// Prepare for API call using helper function
+	prepare_for_api_call(
 		&mut chat_session,
 		&current_config,
-		TruncationOptions::default(), // Normal truncation, no defer
-		Some(operation_cancelled.clone()),
+		operation_cancelled.clone(),
 	)
 	.await?;
 
-	// Ensure system message is cached - same as interactive
-	let mut system_message_cached = false;
-	for msg in &chat_session.session.messages {
-		if msg.role == "system" && msg.cached {
-			system_message_cached = true;
-			break;
-		}
-	}
-
-	if !system_message_cached {
-		if let Ok(cached) = chat_session.session.add_cache_checkpoint(true) {
-			if cached && crate::session::model_supports_caching(&chat_session.model) {
-				log_info!(
-					"System message has been automatically marked for caching to save tokens."
-				);
-				let _ = chat_session.save();
-			}
-		}
-	}
-
-	// Show no animation for non-interactive mode
-	let animation_cancel = Arc::new(AtomicBool::new(false));
-	let animation_cancel_clone = animation_cancel.clone();
-	let current_cost = chat_session.session.info.total_cost;
-	let animation_task = tokio::spawn(async move {
-		let _ = show_no_animation(animation_cancel_clone, current_cost).await;
-	});
-
-	// Auto-accept spending threshold for non-interactive mode
-	// Skip the spending threshold check - auto-proceed in non-interactive mode
-
-	// Make API call - same as interactive
-	let model = chat_session.model.clone();
-	let temperature = chat_session.temperature;
-	let config_clone = current_config.clone();
-
-	let messages = chat_session.session.messages.clone();
-	let max_retries = chat_session.max_retries; // Extract before mutable borrow
-	let validation_params = ChatCompletionWithValidationParams::new(
-		&messages,
-		&model,
-		temperature,
-		chat_session.top_p,
-		chat_session.top_k,
-		chat_session.max_tokens,
-		&config_clone,
+	// Execute API call and process response using helper function (non-interactive mode)
+	let user_message_index_for_error = user_message_index;
+	let model_for_error = chat_session.model.clone();
+	match execute_api_call_and_process_response(
+		&mut chat_session,
+		&current_config,
+		&role,
+		operation_cancelled.clone(),
+		false, // is_interactive = false
 	)
-	.with_max_retries(max_retries)
-	.with_chat_session(&mut chat_session)
-	.with_cancellation_token(operation_cancelled.clone());
-	let api_result = crate::session::chat_completion_with_validation(validation_params).await;
-
-	// Stop animation
-	animation_cancel.store(true, Ordering::SeqCst);
-	let _ = animation_task.await;
-
-	// Process response - same as interactive
-	match api_result {
-		Ok(response) => {
-			// Process the response with tool calls - same as interactive
-			let tool_process_cancelled = Arc::new(AtomicBool::new(false));
-			let legacy_exchange = response.exchange;
-
-			let process_result = process_response(ResponseProcessingParams::new(
-				response.content,
-				legacy_exchange,
-				response.tool_calls,
-				response.finish_reason,
-				&mut chat_session,
-				&current_config,
-				&role,
-				tool_process_cancelled.clone(),
-			))
-			.await;
-
-			if let Err(e) = process_result {
-				use colored::*;
-				println!("\n{}: {}", "Error processing response".bright_red(), e);
-			}
+	.await
+	{
+		Ok(_) => {
+			// Success - session will be saved below
 		}
 		Err(e) => {
-			// Remove user message on API failure - same as interactive
-			if user_message_index < chat_session.session.messages.len() {
-				chat_session.session.messages.truncate(user_message_index);
-				log_debug!("Removed user message due to API call failure");
-			}
-
-			// Print error with provider context - same as interactive
-			use colored::*;
-			let provider_name =
-				if let Ok((provider, _)) = crate::providers::ProviderFactory::parse_model(&model) {
-					provider
-				} else {
-					"unknown provider".to_string()
-				};
-
-			println!(
-				"\n{}: {}",
-				format!("Error calling {}", provider_name).bright_red(),
-				e
+			// Handle API error using helper function
+			handle_api_error(
+				&mut chat_session,
+				user_message_index_for_error,
+				&model_for_error,
+				&e,
 			);
-
-			// Provider-specific help - same as interactive
-			match provider_name.to_lowercase().as_str() {
-				"openrouter" => {
-					println!("{}", "Make sure OpenRouter API key is set in the config or as OPENROUTER_API_KEY environment variable.".yellow());
-				}
-				"anthropic" => {
-					println!("{}", "Make sure Anthropic API key is set in the config or as ANTHROPIC_API_KEY environment variable.".yellow());
-				}
-				"openai" => {
-					println!("{}", "Make sure OpenAI API key is set in the config or as OPENAI_API_KEY environment variable.".yellow());
-				}
-				"google" => {
-					println!("{}", "Make sure Google credentials are set in the config or as GOOGLE_APPLICATION_CREDENTIALS environment variable.".yellow());
-				}
-				"amazon" => {
-					println!("{}", "Make sure AWS credentials are configured properly for Amazon Bedrock access.".yellow());
-				}
-				"cloudflare" => {
-					println!("{}", "Make sure Cloudflare API key is set in the config or as CLOUDFLARE_API_KEY environment variable.".yellow());
-				}
-				_ => {
-					println!(
-						"{}",
-						"Make sure the API key for this provider is properly configured.".yellow()
-					);
-				}
-			}
 		}
 	}
 

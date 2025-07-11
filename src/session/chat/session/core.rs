@@ -137,6 +137,7 @@ pub struct ChatSession {
 	pub max_retries: u32,              // Maximum number of retries for provider errors
 	pub continuation_pending: bool,    // Flag for session continuation state
 	pub continuation_disabled: bool,   // Flag to temporarily disable continuation triggers
+	pub was_resumed: bool, // Flag indicating if this session was resumed from an existing file
 }
 
 /// Parameters for creating a new ChatSession
@@ -225,6 +226,7 @@ impl ChatSession {
 			max_retries: max_retries_value,     // Set max retries value
 			continuation_pending: false,        // Initialize continuation state
 			continuation_disabled: false,       // Initialize continuation control flag
+			was_resumed: false,                 // This is a new session
 		}
 	}
 
@@ -355,6 +357,7 @@ impl ChatSession {
 						max_retries: params.max_retries.unwrap_or(0), // Use provided max_retries or default to 0
 						continuation_pending: false,        // Initialize continuation state
 						continuation_disabled: false,       // Initialize continuation control flag
+						was_resumed: true,                  // This session was resumed from file
 					};
 
 					// Update the estimated cost from the loaded session

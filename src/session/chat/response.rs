@@ -87,6 +87,10 @@ fn handle_final_response(
 	config: &Config,
 	role: &str,
 ) -> Result<()> {
+	// CRITICAL: Add the assistant message to the session for continuation logic to work
+	// This was removed in the recent commit but is needed for proper session state
+	chat_session.add_assistant_message(content, None, config, role)?;
+
 	// Print assistant response with color
 	print_assistant_response(content, config, role);
 

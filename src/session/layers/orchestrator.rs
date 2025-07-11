@@ -217,6 +217,10 @@ impl LayeredOrchestrator {
 						.bright_magenta()
 					);
 
+					// Ensure output is flushed in non-interactive mode
+					use std::io::Write;
+					std::io::stdout().flush().ok();
+
 					// Add the stats to the session with time tracking
 					session.add_layer_stats_with_time(
 						layer_name,
@@ -423,6 +427,10 @@ impl LayeredOrchestrator {
 			format!("✓ Layer '{}' output {} completed", layer_name, output_index).bright_green()
 		);
 		println!("──────────────────");
+
+		// Ensure output is flushed in non-interactive mode
+		use std::io::Write;
+		std::io::stdout().flush().ok();
 	}
 
 	/// Display assistant content with smart formatting (similar to tool output formatting)
