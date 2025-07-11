@@ -63,11 +63,12 @@ impl ToolExecutionContext<'_> {
 		match self {
 			ToolExecutionContext::MainSession { .. } => true, // Main session allows all tools
 			ToolExecutionContext::Layer { layer_config, .. } => {
-				layer_config.mcp.allowed_tools.is_empty()
-					|| layer_config
-						.mcp
-						.allowed_tools
-						.contains(&tool_name.to_string())
+				// Get the server name for this tool to support server patterns
+				let server_name = crate::mcp::tool_map::get_tool_server_name(tool_name)
+					.unwrap_or_else(|| "unknown".to_string());
+
+				// Use the sophisticated pattern-based validation from LayerMcpConfig
+				layer_config.mcp.is_tool_allowed(tool_name, &server_name)
 			}
 		}
 	}

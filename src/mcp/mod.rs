@@ -1027,9 +1027,13 @@ pub async fn execute_layer_tool_call(
 		return Err(anyhow::anyhow!("Tool execution is disabled for this layer"));
 	}
 
-	// Check if specific tool is allowed for this layer
-	if !layer_config.mcp.allowed_tools.is_empty()
-		&& !layer_config.mcp.allowed_tools.contains(&call.tool_name)
+	// Check if specific tool is allowed for this layer using pattern-based validation
+	let server_name = crate::mcp::tool_map::get_tool_server_name(&call.tool_name)
+		.unwrap_or_else(|| "unknown".to_string());
+
+	if !layer_config
+		.mcp
+		.is_tool_allowed(&call.tool_name, &server_name)
 	{
 		return Err(anyhow::anyhow!(
 			"Tool '{}' is not allowed for this layer",

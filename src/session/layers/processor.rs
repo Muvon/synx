@@ -160,9 +160,15 @@ impl Layer for LayerProcessor {
 				for tool_call in tool_calls {
 					println!("{} {}", "Tool call:".yellow(), tool_call.tool_name);
 
-					// Check if tool is allowed for this layer
-					if !self.config.mcp.allowed_tools.is_empty()
-						&& !self.config.mcp.allowed_tools.contains(&tool_call.tool_name)
+					// Check if tool is allowed for this layer using pattern-based validation
+					let server_name =
+						crate::mcp::tool_map::get_tool_server_name(&tool_call.tool_name)
+							.unwrap_or_else(|| "unknown".to_string());
+
+					if !self
+						.config
+						.mcp
+						.is_tool_allowed(&tool_call.tool_name, &server_name)
 					{
 						println!(
 							"{} {} {}",
