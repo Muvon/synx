@@ -41,12 +41,6 @@ pub enum InputMode {
 	Summary, // A summarized version of all data from the previous layer
 }
 
-impl Default for InputMode {
-	fn default() -> Self {
-		Self::Last
-	}
-}
-
 impl InputMode {
 	pub fn as_str(&self) -> &'static str {
 		match self {
@@ -93,12 +87,6 @@ pub enum OutputMode {
 	Restart, // Replace session with only the last response (fresh start with last message)
 }
 
-impl Default for OutputMode {
-	fn default() -> Self {
-		Self::None
-	}
-}
-
 impl OutputMode {
 	pub fn as_str(&self) -> &'static str {
 		match self {
@@ -134,12 +122,6 @@ impl FromStr for OutputMode {
 pub enum OutputRole {
 	Assistant, // Add output as assistant message (default)
 	User,      // Add output as user message
-}
-
-impl Default for OutputRole {
-	fn default() -> Self {
-		Self::Assistant
-	}
 }
 
 impl OutputRole {
@@ -253,19 +235,15 @@ pub struct LayerConfig {
 	pub system_prompt: Option<String>,
 	// Description for this layer (required - used for agents, commands, and documentation)
 	pub description: String,
-	#[serde(default = "default_temperature")]
 	pub temperature: f32,
-	#[serde(default = "default_top_p")]
 	pub top_p: f32,
-	#[serde(default = "default_top_k")]
 	pub top_k: u32,
-	#[serde(default = "default_max_tokens")]
 	pub max_tokens: u32,
-	#[serde(default, deserialize_with = "deserialize_input_mode")]
+	#[serde(deserialize_with = "deserialize_input_mode")]
 	pub input_mode: InputMode,
-	#[serde(default, deserialize_with = "deserialize_output_mode")]
+	#[serde(deserialize_with = "deserialize_output_mode")]
 	pub output_mode: OutputMode,
-	#[serde(default, deserialize_with = "deserialize_output_role")]
+	#[serde(deserialize_with = "deserialize_output_role")]
 	pub output_role: OutputRole,
 	// MCP configuration for this layer
 	#[serde(default)]
@@ -276,22 +254,6 @@ pub struct LayerConfig {
 	// Cached processed system prompt (not serialized - computed at session initialization)
 	#[serde(skip)]
 	pub processed_system_prompt: Option<String>,
-}
-
-fn default_temperature() -> f32 {
-	0.3
-}
-
-fn default_top_p() -> f32 {
-	0.7
-}
-
-fn default_top_k() -> u32 {
-	20
-}
-
-fn default_max_tokens() -> u32 {
-	16384
 }
 
 impl LayerConfig {
