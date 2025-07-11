@@ -201,9 +201,11 @@ pub async fn execute_command_layer(
 				"{}",
 				"Output mode: append (adding to session)".bright_cyan()
 			);
-			// Add all command outputs as assistant messages to session
+			// Add all command outputs as messages with configured role
 			for output_text in &result.outputs {
-				chat_session.session.add_message("assistant", output_text);
+				chat_session
+					.session
+					.add_message(command_config.output_role.as_str(), output_text);
 			}
 
 			// Log the append operation for session restoration
@@ -254,7 +256,9 @@ pub async fn execute_command_layer(
 			// Clear existing messages and replace with all command outputs
 			chat_session.session.messages.clear();
 			for output_text in &result.outputs {
-				chat_session.session.add_message("assistant", output_text);
+				chat_session
+					.session
+					.add_message(command_config.output_role.as_str(), output_text);
 			}
 
 			// Save session to persist the replacement
@@ -267,9 +271,11 @@ pub async fn execute_command_layer(
 				"Output mode: last (adding last response only to session)".bright_cyan()
 			);
 
-			// Add only the last output as assistant message to session
+			// Add only the last output as message with configured role to session
 			if let Some(last_output) = result.outputs.last() {
-				chat_session.session.add_message("assistant", last_output);
+				chat_session
+					.session
+					.add_message(command_config.output_role.as_str(), last_output);
 			}
 
 			// Log the last append operation for session restoration
@@ -322,7 +328,9 @@ pub async fn execute_command_layer(
 			// Clear existing messages and replace with only the last command output
 			chat_session.session.messages.clear();
 			if let Some(last_output) = result.outputs.last() {
-				chat_session.session.add_message("assistant", last_output);
+				chat_session
+					.session
+					.add_message(command_config.output_role.as_str(), last_output);
 			}
 
 			// Save session to persist the replacement

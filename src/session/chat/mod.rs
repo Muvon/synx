@@ -52,7 +52,7 @@ pub use context_truncation::{
 	perform_simple_boundary_truncation, perform_smart_full_summarization, TruncationOptions,
 };
 pub use cost_tracker::CostTracker;
-pub use formatting::{format_duration, remove_function_calls};
+pub use formatting::format_duration;
 pub use input::read_user_input;
 pub use layered_response::process_layered_response;
 pub use markdown::{is_markdown_content, MarkdownRenderer, MarkdownTheme};

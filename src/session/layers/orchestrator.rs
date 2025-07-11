@@ -314,9 +314,9 @@ impl LayeredOrchestrator {
 						"{}",
 						"Output mode: append (adding all layer outputs)".bright_cyan()
 					);
-					// Add each output as a separate assistant message
+					// Add each output as a message with the configured role
 					for output_text in &result.outputs {
-						session.add_message("assistant", output_text);
+						session.add_message(layer.config().output_role.as_str(), output_text);
 					}
 				}
 				OutputMode::Replace => {
@@ -325,10 +325,10 @@ impl LayeredOrchestrator {
 						"{}",
 						"Output mode: replace (replacing with all layer outputs)".bright_cyan()
 					);
-					// Clear existing messages and add all layer outputs
+					// Clear existing messages and add all layer outputs with configured role
 					session.messages.clear();
 					for output_text in &result.outputs {
-						session.add_message("assistant", output_text);
+						session.add_message(layer.config().output_role.as_str(), output_text);
 					}
 				}
 				OutputMode::Last => {
@@ -336,19 +336,19 @@ impl LayeredOrchestrator {
 						"{}",
 						"Output mode: last (adding last layer output)".bright_cyan()
 					);
-					// Clear existing messages and add all layer outputs
+					// Add last message with configured role
 					let last_message = result.outputs.last().unwrap_or(&String::new()).clone();
-					session.add_message("assistant", &last_message);
+					session.add_message(layer.config().output_role.as_str(), &last_message);
 				}
 				OutputMode::Restart => {
 					println!(
 						"{}",
 						"Output mode: last (replacing with last layer output)".bright_cyan()
 					);
-					// Clear existing messages and add all layer outputs
+					// Clear existing messages and add last message with configured role
 					session.messages.clear();
 					let last_message = result.outputs.last().unwrap_or(&String::new()).clone();
-					session.add_message("assistant", &last_message);
+					session.add_message(layer.config().output_role.as_str(), &last_message);
 				}
 			};
 

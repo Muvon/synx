@@ -515,6 +515,7 @@ top_p = 0.7
 top_k = 20
 input_mode = "last"
 output_mode = "append"
+output_role = "assistant"  # Default role for session messages
 
 [layers.mcp]
 server_refs = ["filesystem", "octocode"]
@@ -625,6 +626,7 @@ allowed_tools = []
 # temperature = 0.3
 # input_mode = "Last"
 # output_mode = "append"  # Options: "none", "append", "replace"
+# output_role = "assistant"  # Options: "assistant", "user" (default: "assistant")
 #
 # [layers.mcp]
 # server_refs = ["developer", "filesystem"]
@@ -643,6 +645,7 @@ allowed_tools = []
 # temperature = 0.1
 # input_mode = "Last"
 # output_mode = "append"  # Add review results to session
+# output_role = "assistant"  # Role for session messages: "assistant" or "user"
 #
 # [layers.mcp]
 # server_refs = ["developer", "filesystem"]
@@ -657,6 +660,7 @@ allowed_tools = []
 # temperature = 0.1
 # input_mode = "Last"
 # output_mode = "append"  # Add debug findings to session
+# output_role = "assistant"  # Role for session messages: "assistant" or "user"
 #
 # [layers.mcp]
 # server_refs = ["developer", "filesystem"]
@@ -671,6 +675,7 @@ allowed_tools = []
 # temperature = 0.2
 # input_mode = "Last"
 # output_mode = "append"  # Add architectural guidance to session
+# output_role = "assistant"  # Role for session messages: "assistant" or "user"
 #
 # [layers.mcp]
 # server_refs = ["developer", "filesystem"]
@@ -723,6 +728,7 @@ allowed_tools = []
 # temperature = 0.1
 # input_mode = "last"
 # output_mode = "none"  # Return only the review results (cleanest for tool use)
+# output_role = "assistant" # Current ignored, but probably will be used to replace CURRENT session in future
 #
 # [agents.mcp]
 # server_refs = ["developer", "filesystem"]

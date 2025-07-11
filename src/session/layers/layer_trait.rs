@@ -129,6 +129,43 @@ impl FromStr for OutputMode {
 	}
 }
 
+// Output role determines the role used when adding messages to the session
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OutputRole {
+	Assistant, // Add output as assistant message (default)
+	User,      // Add output as user message
+}
+
+impl Default for OutputRole {
+	fn default() -> Self {
+		Self::Assistant
+	}
+}
+
+impl OutputRole {
+	pub fn as_str(&self) -> &'static str {
+		match self {
+			OutputRole::Assistant => "assistant",
+			OutputRole::User => "user",
+		}
+	}
+}
+
+impl FromStr for OutputRole {
+	type Err = String;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		match s.to_lowercase().as_str() {
+			"assistant" => Ok(OutputRole::Assistant),
+			"user" => Ok(OutputRole::User),
+			_ => Err(format!(
+				"Unknown output role: '{}'. Valid options: assistant, user",
+				s
+			)),
+		}
+	}
+}
+
 // Custom deserializer for OutputMode to handle string values from config
 fn deserialize_output_mode<'de, D>(deserializer: D) -> Result<OutputMode, D::Error>
 where
@@ -137,6 +174,16 @@ where
 	use serde::de::Error;
 	let s = String::deserialize(deserializer)?;
 	OutputMode::from_str(&s).map_err(D::Error::custom)
+}
+
+// Custom deserializer for OutputRole to handle string values from config
+fn deserialize_output_role<'de, D>(deserializer: D) -> Result<OutputRole, D::Error>
+where
+	D: serde::Deserializer<'de>,
+{
+	use serde::de::Error;
+	let s = String::deserialize(deserializer)?;
+	OutputRole::from_str(&s).map_err(D::Error::custom)
 }
 
 // Configuration for layer-specific MCP settings
@@ -218,6 +265,8 @@ pub struct LayerConfig {
 	pub input_mode: InputMode,
 	#[serde(default, deserialize_with = "deserialize_output_mode")]
 	pub output_mode: OutputMode,
+	#[serde(default, deserialize_with = "deserialize_output_role")]
+	pub output_role: OutputRole,
 	// MCP configuration for this layer
 	#[serde(default)]
 	pub mcp: LayerMcpConfig,

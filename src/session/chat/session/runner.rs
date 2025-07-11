@@ -636,7 +636,8 @@ To fix this issue
 		// 2. Use the processed input for the main model chat
 
 		// If layers are enabled and this is the first message, process it through layers first
-		if current_config.get_enable_layers(&role) && !first_message_processed {
+		let layers_enabled = current_config.get_enable_layers(&role);
+		if layers_enabled && !first_message_processed {
 			// Set processing state to layers
 			*processing_state.lock().unwrap() = ProcessingState::ProcessingLayers;
 
@@ -757,7 +758,7 @@ To fix this issue
 
 		// Add user message for standard processing flow
 		// CRITICAL FIX: Skip adding if continuation_pending since the message is already added
-		if !chat_session.continuation_pending {
+		if !chat_session.continuation_pending && !layers_enabled {
 			chat_session.add_user_message(&input)?;
 		}
 
@@ -1318,7 +1319,8 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	}
 
 	// Layer processing if enabled and first message - same as interactive
-	if current_config.get_enable_layers(&role) && !first_message_processed {
+	let layers_enabled = current_config.get_enable_layers(&role);
+	if layers_enabled && !first_message_processed {
 		// Track session message count before layer processing
 		let messages_before_layers = chat_session.session.messages.len();
 
@@ -1367,7 +1369,9 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 
 	// Add user message - same as interactive
 	let user_message_index = chat_session.session.messages.len();
-	chat_session.add_user_message(&input)?;
+	if !layers_enabled {
+		chat_session.add_user_message(&input)?;
+	}
 
 	// Check and truncate context - same as interactive
 	check_and_truncate_context_with_cancellation(

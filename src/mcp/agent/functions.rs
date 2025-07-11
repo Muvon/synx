@@ -313,6 +313,7 @@ async fn execute_call_llm(
 		max_tokens,
 		input_mode: crate::session::layers::layer_trait::InputMode::Last, // Doesn't matter as input is provided
 		output_mode: crate::session::layers::layer_trait::OutputMode::Last, // Return only the last output
+		output_role: crate::session::layers::layer_trait::OutputRole::Assistant, // Default role
 		mcp: crate::session::layers::layer_trait::LayerMcpConfig {
 			server_refs: vec![], // No MCP tools
 			allowed_tools: vec![],

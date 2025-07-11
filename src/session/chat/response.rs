@@ -21,7 +21,6 @@ use super::{CostTracker, MessageHandler, ToolProcessor};
 use crate::config::Config;
 use crate::log_debug;
 use crate::session::chat::assistant_output::print_assistant_response;
-use crate::session::chat::formatting::remove_function_calls;
 use crate::session::chat::session::ChatSession;
 use crate::session::chat::session_continuation;
 use crate::session::ProviderExchange;
@@ -84,32 +83,12 @@ fn log_response_debug(
 // Helper function to handle final response when no tool calls are present
 fn handle_final_response(
 	content: &str,
-	current_content: &str,
-	current_exchange: ProviderExchange,
 	chat_session: &mut ChatSession,
 	config: &Config,
 	role: &str,
 ) -> Result<()> {
-	// Remove any function_calls blocks if they exist but weren't processed earlier
-	let clean_content = remove_function_calls(current_content);
-
-	// When adding the final assistant message for a response that involved tool calls,
-	// we've already tracked the cost and tokens in the loop above, so we pass None for exchange
-	// to avoid double-counting. If this is a direct response with no tool calls, we pass the
-	// original exchange to ensure costs are tracked.
-	let exchange_for_final = if content == current_content {
-		// This is the original content, so use the original exchange for cost tracking
-		Some(current_exchange)
-	} else {
-		// This is a modified content after tool calls, so costs were already tracked
-		// in the tool response handling code, so pass None to avoid double counting
-		None
-	};
-
-	chat_session.add_assistant_message(&clean_content, exchange_for_final, config, role)?;
-
 	// Print assistant response with color
-	print_assistant_response(&clean_content, config, role);
+	print_assistant_response(content, config, role);
 
 	// Display cost line only for non-interactive mode or specific scenarios
 	// Skip for interactive mode to avoid duplication before user input prompt
@@ -336,9 +315,8 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 					params.role,
 				)?;
 
-				// Display the clean content (without function calls) to the user FIRST
-				let clean_content = remove_function_calls(&current_content);
-				print_assistant_response(&clean_content, params.config, params.role);
+				// Display the content to the user FIRST
+				print_assistant_response(&current_content, params.config, params.role);
 
 				// Display tool parameters upfront (headers will be shown per-tool during execution)
 				display_tool_parameters_only(params.config, &current_tool_calls).await;
@@ -471,9 +449,7 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 
 	// Handle final response using helper function (only when no continuation is pending)
 	handle_final_response(
-		&params.content,
 		&current_content,
-		current_exchange.clone(), // Clone to avoid move
 		params.chat_session,
 		params.config,
 		params.role,
