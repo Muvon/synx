@@ -1107,9 +1107,12 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		}
 
 		// Add user message for standard processing flow
-		// CRITICAL FIX: Skip adding if continuation_pending since the message is already added
-		let layers_enabled = current_config.get_enable_layers(&role);
-		if !chat_session.continuation_pending && !layers_enabled {
+		// CRITICAL FIX: Add user message unless continuation is pending or layers modified session
+		// Logic:
+		// - continuation_pending = true: Continuation message already added → Skip (avoid duplicates)
+		// - layers_modified_session = true: Layers added messages to session → Skip (avoid duplicates)
+		// - layers_modified_session = false: Layers didn't add messages → Add user message (needed for conversation)
+		if !chat_session.continuation_pending && !layers_modified_session {
 			chat_session.add_user_message(&input)?;
 		}
 
