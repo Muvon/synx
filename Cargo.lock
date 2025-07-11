@@ -532,16 +532,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctrlc"
-version = "3.4.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46f93780a459b7d656ef7f071fe699c4d3d2cb201c4b24d085b6ddc505276e73"
-dependencies = [
- "nix",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "deranged"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1626,7 +1616,6 @@ dependencies = [
  "clap_complete",
  "colored",
  "crossterm 0.29.0",
- "ctrlc",
  "dirs",
  "dotenvy",
  "futures",
@@ -1650,6 +1639,7 @@ dependencies = [
  "termimad",
  "tiktoken-rs",
  "tokio",
+ "tokio-util",
  "toml",
  "url",
  "urlencoding",
@@ -2716,6 +2706,8 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
+ "hashbrown",
  "pin-project-lite",
  "tokio",
 ]

@@ -30,7 +30,7 @@ panic = "abort"  # Abort on panic for smaller binary size
 strip = true      # Strip symbols from binary
 
 [dependencies]
-tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "time", "process", "fs", "sync"] }
+tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "time", "process", "fs", "sync", "signal"] }
 crossterm = "0.29.0"
 indicatif = "0.17.11"
 parking_lot = "0.12.4"
@@ -45,7 +45,7 @@ clap = { version = "4.5.39", features = ["derive"] }
 clap_complete = "4.5.39"
 toml = "0.8.22"
 lazy_static = "1.5.0"
-ctrlc = "3.4.7"
+tokio-util = { version = "0.7", features = ["rt"] }
 rustyline = { version = "16.0.0", features = ["custom-bindings"] }
 regex = "1.11.1"
 colored = "3.0.0"

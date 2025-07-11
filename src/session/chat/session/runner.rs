@@ -682,7 +682,12 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 	// Set up advanced cancellation system for proper CTRL+C handling
 	let ctrl_c_pressed = Arc::new(AtomicBool::new(false));
-	let ctrl_c_pressed_clone = ctrl_c_pressed.clone();
+	let ctrl_c_count = Arc::new(AtomicBool::new(false)); // For double Ctrl+C detection
+	let _ctrl_c_pressed_clone = ctrl_c_pressed.clone();
+
+	// Create tokio-native cancellation token for immediate async cancellation (commented out for now)
+	// let cancellation_token = CancellationToken::new();
+	// let cancellation_token_clone = cancellation_token.clone();
 
 	// Enhanced processing state tracking for smart cancellation
 	#[derive(Debug, Clone, PartialEq)]
@@ -698,7 +703,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	}
 
 	let processing_state = Arc::new(std::sync::Mutex::new(ProcessingState::Idle));
-	let processing_state_clone = processing_state.clone();
+	let _processing_state_clone = processing_state.clone();
 
 	// Smart operation tracking for surgical cleanup
 	#[derive(Debug, Clone)]
@@ -713,48 +718,71 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 	let current_operation = Arc::new(std::sync::Mutex::new(None::<OperationContext>));
 
-	// Set up sophisticated Ctrl+C handler with immediate feedback
-	ctrlc::set_handler(move || {
-		// Double Ctrl+C forces immediate exit
-		if ctrl_c_pressed_clone.load(Ordering::SeqCst) {
-			println!("\n🛑 Forcing exit due to repeated Ctrl+C...");
-			std::process::exit(130); // 130 is standard exit code for SIGINT
+	// Set up tokio-native signal handling for immediate cancellation response
+	let ctrl_c_signal = ctrl_c_pressed.clone();
+	let ctrl_c_counter = ctrl_c_count.clone();
+	tokio::spawn(async move {
+		// Create signal handlers ONCE outside the loop
+		#[cfg(unix)]
+		let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+			.expect("Failed to register SIGINT handler");
+		#[cfg(unix)]
+		let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+			.expect("Failed to register SIGTERM handler");
+
+		loop {
+			// Cross-platform signal handling with persistent handlers
+			#[cfg(unix)]
+			{
+				tokio::select! {
+					_ = sigint.recv() => {
+						// Immediate user feedback - CRITICAL for user experience
+						println!("\n🛑 Ctrl+C pressed - interrupting...");
+						std::io::stdout().flush().unwrap_or(());
+						log_debug!("SIGINT received - checking if this is first or second Ctrl+C");
+					}
+					_ = sigterm.recv() => {
+						println!("\n🛑 Termination signal received - exiting...");
+						std::io::stdout().flush().unwrap_or(());
+						log_debug!("SIGTERM received - triggering immediate cancellation");
+						ctrl_c_signal.store(true, Ordering::SeqCst);
+						std::process::exit(130);
+					}
+				}
+			}
+			#[cfg(windows)]
+			{
+				let _ = tokio::signal::ctrl_c().await;
+				// Immediate user feedback - CRITICAL for user experience
+				println!("\n🛑 Ctrl+C pressed - interrupting...");
+				std::io::stdout().flush().unwrap_or(());
+				log_debug!("Ctrl+C received - checking if this is first or second Ctrl+C");
+			}
+
+			// Check if this is the first or second Ctrl+C
+			if ctrl_c_counter.load(Ordering::SeqCst) {
+				// Second Ctrl+C - force exit immediately
+				println!("🛑 Forcing exit due to repeated Ctrl+C...");
+				std::io::stdout().flush().unwrap_or(());
+				std::process::exit(130);
+			} else {
+				// First Ctrl+C - set flag for graceful cancellation
+				ctrl_c_counter.store(true, Ordering::SeqCst);
+				ctrl_c_signal.store(true, Ordering::SeqCst);
+
+				// Provide context-aware feedback
+				println!("💡 Press Ctrl+C again within 2 seconds to force exit");
+				std::io::stdout().flush().unwrap_or(());
+
+				// Start a timer to reset the double-Ctrl+C detection after 2 seconds
+				let counter_reset = ctrl_c_counter.clone();
+				tokio::spawn(async move {
+					tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+					counter_reset.store(false, Ordering::SeqCst);
+				});
+			}
 		}
-
-		// Set the flag immediately
-		ctrl_c_pressed_clone.store(true, Ordering::SeqCst);
-
-		// Get current processing state to provide appropriate feedback
-		let state = processing_state_clone.lock().unwrap().clone();
-
-		// Provide immediate feedback based on current state
-		match state {
-			ProcessingState::Idle | ProcessingState::ReadingInput => {
-				println!("\n🛑 Interrupting... Ready for new input");
-			}
-			ProcessingState::ProcessingLayers => {
-				println!("\n🛑 Interrupting layer processing... Ready for new input");
-			}
-			ProcessingState::CallingAPI => {
-				println!("\n🛑 Interrupting API request... Cleaning up... Ready for new input");
-			}
-			ProcessingState::ExecutingTools => {
-				println!(
-					"\n🛑 Interrupting tool execution... Killing processes... Ready for new input"
-				);
-			}
-			ProcessingState::ProcessingResponse => {
-				println!("\n🛑 Interrupting response processing... Preserving work... Ready for new input");
-			}
-			ProcessingState::CompletedWithResults => {
-				println!("\n🛑 Operation completed... All work preserved... Ready for new input");
-			}
-		}
-
-		println!("💡 Press Ctrl+C again to force exit");
-		std::io::stdout().flush().unwrap();
-	})
-	.expect("Error setting Ctrl+C handler");
+	});
 
 	// We need to handle configuration reloading, so keep our own copy that we can update
 	let mut current_config = config_for_role.clone();
@@ -841,6 +869,23 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		// Create a fresh cancellation flag for this iteration
 		let operation_cancelled = Arc::new(AtomicBool::new(false));
 
+		// CRITICAL FIX: Connect operation_cancelled to global ctrl_c_pressed signal
+		// This ensures Ctrl+C cancels the current operation immediately
+		let global_signal = ctrl_c_pressed.clone();
+		let operation_signal = operation_cancelled.clone();
+		let sync_handle = tokio::spawn(async move {
+			while !operation_signal.load(Ordering::SeqCst) {
+				if global_signal.load(Ordering::SeqCst) {
+					operation_signal.store(true, Ordering::SeqCst);
+					break;
+				}
+				tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+			}
+		});
+
+		// Create a child cancellation token for this operation (commented out for now)
+		// let operation_cancellation_token = cancellation_token.child_token();
+
 		// CRITICAL FIX: Check if continuation is pending from previous iteration
 		// If so, skip reading user input and process the injected summary request immediately
 		let mut input = if chat_session.continuation_pending {
@@ -869,6 +914,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 		// Skip if input is empty (could be from Ctrl+C)
 		if input.trim().is_empty() {
+			sync_handle.abort();
 			continue;
 		}
 
@@ -1113,6 +1159,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		if ctrl_c_pressed.load(Ordering::SeqCst) {
 			// Immediately stop and return to main loop
 			operation_cancelled.store(true, Ordering::SeqCst);
+			sync_handle.abort();
 			continue;
 		}
 
@@ -1139,6 +1186,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					log_debug!("Continuation triggered during tool processing - skipping to next iteration to process summary request automatically");
 					// The summary request message has already been injected by check_and_handle_continuation
 					// Just continue the loop to process it immediately without waiting for user input
+					sync_handle.abort();
 					continue;
 				}
 
@@ -1159,6 +1207,9 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 		// Clear operation context at the end of each successful iteration
 		*current_operation.lock().unwrap() = None;
+
+		// Clean up the cancellation sync task
+		sync_handle.abort();
 	}
 
 	Ok(())
@@ -1182,15 +1233,34 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 
 	// Set up cancellation handling for non-interactive mode (simplified)
 	let ctrl_c_pressed = Arc::new(AtomicBool::new(false));
-	let ctrl_c_pressed_clone = ctrl_c_pressed.clone();
 
-	// Simplified Ctrl+C handler for non-interactive mode
-	ctrlc::set_handler(move || {
-		ctrl_c_pressed_clone.store(true, Ordering::SeqCst);
-		println!("\n🛑 Operation cancelled by user");
+	// Simplified tokio-based Ctrl+C handler for non-interactive mode
+	let ctrl_c_signal = ctrl_c_pressed.clone();
+	tokio::spawn(async move {
+		// Cross-platform signal handling with immediate feedback
+		#[cfg(unix)]
+		{
+			let mut sigint =
+				tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+					.expect("Failed to register SIGINT handler");
+			let _ = sigint.recv().await;
+			// Immediate user feedback
+			println!("\n🛑 Ctrl+C pressed - cancelling operation...");
+			std::io::stdout().flush().unwrap_or(());
+		}
+		#[cfg(windows)]
+		{
+			let _ = tokio::signal::ctrl_c().await;
+			// Immediate user feedback
+			println!("\n🛑 Ctrl+C pressed - cancelling operation...");
+			std::io::stdout().flush().unwrap_or(());
+		}
+
+		ctrl_c_signal.store(true, Ordering::SeqCst);
+		println!("🛑 Operation cancelled by user");
+		std::io::stdout().flush().unwrap_or(());
 		std::process::exit(130); // Exit immediately in non-interactive mode
-	})
-	.expect("Error setting Ctrl+C handler");
+	});
 
 	// Set the thread-local config for logging macros
 	let mut current_config = config_for_role.clone();
@@ -1199,6 +1269,20 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	// Process the single input (same logic as interactive session)
 	let mut input = initial_input.to_string();
 	let operation_cancelled = Arc::new(AtomicBool::new(false));
+
+	// CRITICAL FIX: Connect operation_cancelled to global ctrl_c_pressed signal
+	// This ensures Ctrl+C cancels the current operation immediately
+	let global_signal = ctrl_c_pressed.clone();
+	let operation_signal = operation_cancelled.clone();
+	let _sync_handle = tokio::spawn(async move {
+		while !operation_signal.load(Ordering::SeqCst) {
+			if global_signal.load(Ordering::SeqCst) {
+				operation_signal.store(true, Ordering::SeqCst);
+				break;
+			}
+			tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+		}
+	});
 
 	// Check if this is a command (same logic as interactive session)
 	if input.starts_with('/') {
