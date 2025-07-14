@@ -17,9 +17,32 @@
 use super::super::{McpToolCall, McpToolResult};
 use super::core::save_file_history;
 use anyhow::{anyhow, Result};
+use lazy_static::lazy_static;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use tokio::fs as tokio_fs;
+use tokio::sync::Mutex;
+
+// Thread-safe file locking infrastructure for concurrent write protection
+lazy_static! {
+	static ref FILE_LOCKS: Mutex<HashMap<String, Arc<Mutex<()>>>> = Mutex::new(HashMap::new());
+}
+
+// Acquire a file-specific lock to prevent concurrent writes to the same file
+async fn acquire_file_lock(path: &Path) -> Result<Arc<Mutex<()>>> {
+	let path_str = path.to_string_lossy().to_string();
+
+	let mut locks = FILE_LOCKS.lock().await;
+
+	let file_lock = locks
+		.entry(path_str)
+		.or_insert_with(|| Arc::new(Mutex::new(())))
+		.clone();
+
+	Ok(file_lock)
+}
 
 // Helper function to resolve line indices, supporting negative indexing
 // Negative indices count from the end: -1 = last line, -2 = second-to-last, etc.
@@ -138,6 +161,10 @@ pub async fn str_replace_spec(
 		));
 	}
 
+	// Acquire file lock to prevent concurrent writes
+	let file_lock = acquire_file_lock(path).await?;
+	let _lock_guard = file_lock.lock().await;
+
 	// Read the file content
 	let content = tokio_fs::read_to_string(path)
 		.await
@@ -147,17 +174,17 @@ pub async fn str_replace_spec(
 	let occurrences = content.matches(old_str).count();
 	if occurrences == 0 {
 		return Ok(McpToolResult::error(
-		call.tool_name.clone(),
-		call.tool_id.clone(),
-		"No match found for replacement. Please check your text and try again. Make sure you are not escaping \\t, \\n or similiar and pass raw content.".to_string(),
-	));
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			"No match found for replacement. Please check your text and try again. Make sure you are not escaping \\\\t, \\\\n or similiar and pass raw content.".to_string(),
+		));
 	}
 	if occurrences > 1 {
 		return Ok(McpToolResult::error(
-		call.tool_name.clone(),
-		call.tool_id.clone(),
-		format!("Found {} matches for replacement text. Please provide more context to make a unique match.", occurrences),
-	));
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!("Found {} matches for replacement text. Please provide more context to make a unique match.", occurrences),
+		));
 	}
 
 	// Save the current content for undo
@@ -195,6 +222,10 @@ pub async fn insert_text_spec(
 			"File not found".to_string(),
 		));
 	}
+
+	// Acquire file lock to prevent concurrent writes
+	let file_lock = acquire_file_lock(path).await?;
+	let _lock_guard = file_lock.lock().await;
 
 	// Read the file content
 	let content = tokio_fs::read_to_string(path)
@@ -304,6 +335,10 @@ pub async fn line_replace_spec(
 			),
 		));
 	}
+
+	// Acquire file lock to prevent concurrent writes
+	let file_lock = acquire_file_lock(path).await?;
+	let _lock_guard = file_lock.lock().await;
 
 	// Read the file content
 	let file_content = tokio_fs::read_to_string(path)
@@ -665,6 +700,10 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 			format!("File not found: {}", path_str),
 		));
 	}
+
+	// Acquire file lock to prevent concurrent writes
+	let file_lock = acquire_file_lock(path).await?;
+	let _lock_guard = file_lock.lock().await;
 
 	// Read original file content
 	let original_content = match tokio_fs::read_to_string(path).await {

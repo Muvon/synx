@@ -467,7 +467,7 @@ async fn execute_async_operation(call: &McpToolCall) -> Result<McpToolResult> {
     let result = tokio::time::timeout(
         Duration::from_secs(30),
         perform_operation()
-    ).await??;
+    ).await?;
 
     Ok(McpToolResult::success(
         call.tool_name.clone(),
