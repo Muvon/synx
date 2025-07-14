@@ -455,6 +455,7 @@ top_p = 0.7
 top_k = 20
 input_mode = "last"
 output_mode = "none"
+output_role = "assistant"
 
 [layers.mcp]
 server_refs = []
@@ -603,6 +604,7 @@ top_p = 0.7
 top_k = 20
 input_mode = "all"
 output_mode = "replace"  # Replace session content with compressed history
+output_role = "assistant"
 
 [commands.mcp]
 server_refs = []
@@ -802,6 +804,7 @@ top_p = 0.7
 top_k = 20
 input_mode = "last"
 output_mode = "none"  # Return only the gathered context (cleanest for tool use)
+output_role = "assistant"
 
 [agents.mcp]
 server_refs = ["filesystem", "octocode"]
