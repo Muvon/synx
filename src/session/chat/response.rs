@@ -354,12 +354,15 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 
 					// BOSS FIX: Remove the assistant message with tool_calls when cancelled
 					// The problem: we added assistant message with tool_calls but cancellation prevents proper tool_result processing
-					if let Some(last_msg) = params.chat_session.session.messages.last() {
-						if last_msg.role == "assistant" && last_msg.tool_calls.is_some() {
-							// Last message is broken assistant with tool_calls - remove it on cancellation
-							params.chat_session.session.messages.pop();
-							log_debug!("Removed last assistant message with tool_calls due to cancellation");
-						}
+					// Use shared cleanup logic for consistency
+					if crate::session::clean_interrupted_tool_calls(
+						&mut params.chat_session.session.messages,
+						&params.chat_session.session.info.name,
+						"Tool execution interrupted by Ctrl+C",
+					) {
+						log_debug!(
+							"Removed last assistant message with tool_calls due to cancellation"
+						);
 					}
 
 					// DO NOT process tool results when cancelled - this prevents conversation corruption

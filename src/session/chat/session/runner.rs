@@ -377,7 +377,7 @@ async fn process_layers_if_enabled(
 	role: &str,
 	first_message_processed: bool,
 	operation_rx: watch::Receiver<bool>,
-) -> Result<(String, bool)> {
+) -> Result<(String, bool, bool)> {
 	let layers_enabled = config.get_enable_layers(role);
 	if layers_enabled && !first_message_processed {
 		// Track session message count before layer processing
@@ -406,12 +406,12 @@ async fn process_layers_if_enabled(
 						messages_after_layers - messages_before_layers
 					);
 					// Return indication that layers modified session
-					Ok((processed_input, true))
+					Ok((processed_input, true, false))
 				} else {
 					// Layers didn't modify session (all had output_mode = none)
 					// Use the processed input from layers instead of the original input
 					log_info!("Layers processing complete. Using enhanced input for main model.");
-					Ok((processed_input, false))
+					Ok((processed_input, false, false))
 				}
 			}
 			Err(e) => {
@@ -424,8 +424,30 @@ async fn process_layers_if_enabled(
 					use colored::*;
 					println!("{}", "\nOperation cancelled by user.".bright_yellow());
 					println!("{}", "Continuing with original input.".yellow());
+
+					// CRITICAL FIX: Clean up any partial layer modifications to session
+					// When layers are cancelled, they might have partially modified the session
+					// We need to restore the session to its state before layer processing
+					let messages_after_cancellation = chat_session.session.messages.len();
+					if messages_after_cancellation > messages_before_layers {
+						// Remove messages added by layers before cancellation
+						let messages_to_remove =
+							messages_after_cancellation - messages_before_layers;
+						for _ in 0..messages_to_remove {
+							chat_session.session.messages.pop();
+						}
+						println!(
+							"{}",
+							format!(
+								"Cleaned up {} messages added by cancelled layers",
+								messages_to_remove
+							)
+							.yellow()
+						);
+					}
+
 					// Return original input and continue session normally
-					return Ok((input.to_string(), false));
+					return Ok((input.to_string(), false, true));
 				}
 
 				// Regular layer processing error - print message and continue with original input
@@ -437,12 +459,12 @@ async fn process_layers_if_enabled(
 				);
 				println!("{}", "Continuing with original input.".yellow());
 				// Return original input
-				Ok((input.to_string(), false))
+				Ok((input.to_string(), false, false))
 			}
 		}
 	} else {
 		// Layers not enabled or already processed
-		Ok((input.to_string(), false))
+		Ok((input.to_string(), false, false))
 	}
 }
 
@@ -1036,15 +1058,16 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		// 2. Use the processed input for the main model chat
 
 		// Process layers if enabled using helper function
-		let (processed_input, layers_modified_session) = process_layers_if_enabled(
-			&input,
-			&mut chat_session,
-			&current_config,
-			&role,
-			first_message_processed,
-			operation_rx.clone(),
-		)
-		.await?;
+		let (processed_input, layers_modified_session, _layer_cancelled) =
+			process_layers_if_enabled(
+				&input,
+				&mut chat_session,
+				&current_config,
+				&role,
+				first_message_processed,
+				operation_rx.clone(),
+			)
+			.await?;
 
 		// Check for cancellation after layer processing
 		if cancellation.is_cancelled() {
@@ -1215,7 +1238,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 
 	// Process the single input (same logic as interactive session)
 	let mut input = initial_input.to_string();
-	let operation_rx = cancellation.new_operation();
+	let mut operation_rx = cancellation.new_operation();
 
 	// Check if this is a command (same logic as interactive session)
 	if input.starts_with('/') {
@@ -1260,7 +1283,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	}
 
 	// Layer processing if enabled and first message using helper function
-	let (processed_input, layers_modified_session) = process_layers_if_enabled(
+	let (processed_input, layers_modified_session, layer_cancelled) = process_layers_if_enabled(
 		&input,
 		&mut chat_session,
 		&current_config,
@@ -1269,6 +1292,22 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		operation_rx.clone(),
 	)
 	.await?;
+
+	// CRITICAL FIX: Reset cancellation state after layer cancellation
+	// This prevents subsequent operations from failing due to stale cancellation signal
+	if layer_cancelled {
+		cancellation.reset();
+		log_info!(
+			"Cancellation state reset after layer cancellation - ready for main model processing"
+		);
+
+		// Save session after layer cancellation cleanup to persist the cleaned state
+		let _ = chat_session.save();
+		log_info!("Session saved after layer cancellation cleanup");
+
+		// Create new operation receiver with reset cancellation state
+		operation_rx = cancellation.new_operation();
+	}
 
 	if layers_modified_session {
 		// Layers used output_mode append/replace and added messages to session

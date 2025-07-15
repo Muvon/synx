@@ -490,6 +490,49 @@ pub fn list_available_sessions() -> Result<Vec<(String, SessionInfo)>, anyhow::E
 	Ok(sessions)
 }
 
+/// Check if there are incomplete tool calls that need cleanup
+fn has_incomplete_tool_calls(messages: &[Message]) -> bool {
+	// Only check if the last message is an assistant with tool_calls
+	// This is the only case that indicates an actual interruption
+	if let Some(last_msg) = messages.last() {
+		return last_msg.role == "assistant" && last_msg.tool_calls.is_some();
+	}
+	false
+}
+
+/// Clean up interrupted tool calls - shared logic for both interactive sessions and restoration
+/// Removes assistant messages with tool_calls that have no corresponding tool results
+pub fn clean_interrupted_tool_calls(
+	messages: &mut Vec<Message>,
+	session_name: &str,
+	context: &str,
+) -> bool {
+	// Apply the same simple logic: check if last message is assistant with tool_calls
+	// This matches exactly what interactive sessions do during Ctrl+C cancellation
+
+	if let Some(last_msg) = messages.last() {
+		if last_msg.role == "assistant" && last_msg.tool_calls.is_some() {
+			// Last message is broken assistant with tool_calls - remove it
+			messages.pop();
+
+			eprintln!(
+				"🔧 {}: Removed incomplete tool call sequence (same as Ctrl+C cleanup)",
+				context
+			);
+
+			// Log the cleanup for debugging
+			let _ = crate::session::logger::log_system_message(
+				session_name,
+				&format!("{}: Cleaned up incomplete tool call sequence", context),
+			);
+
+			return true;
+		}
+	}
+
+	false
+}
+
 // Helper function to load a session from file - optimized to use streams
 pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 	// Ensure the file exists
@@ -709,9 +752,15 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 			info.model = model;
 		}
 
+		// Clean up interrupted tool calls only if there are actually incomplete tool calls
+		let mut cleaned_messages = final_messages;
+		if has_incomplete_tool_calls(&cleaned_messages) {
+			clean_interrupted_tool_calls(&mut cleaned_messages, &info.name, "Session restoration");
+		}
+
 		let session = Session {
 			info,
-			messages: final_messages,
+			messages: cleaned_messages,
 			session_file: Some(session_file.clone()),
 			current_non_cached_tokens: 0,
 			current_total_tokens: 0,
