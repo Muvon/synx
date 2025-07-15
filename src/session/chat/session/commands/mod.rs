@@ -47,6 +47,7 @@ pub async fn process_command(
 	input: &str,
 	config: &mut Config,
 	_role: &str, // Original role - now unused, keeping for API compatibility
+	operation_cancelled: tokio::sync::watch::Receiver<bool>,
 ) -> Result<bool> {
 	// Extract command and potential parameters
 	let input_parts: Vec<&str> = input.split_whitespace().collect();
@@ -78,7 +79,9 @@ pub async fn process_command(
 		MODEL_COMMAND => model::handle_model(session, config, params),
 		SESSION_COMMAND => session::handle_session(session, params),
 		MCP_COMMAND => mcp::handle_mcp(config, &current_role, params).await,
-		RUN_COMMAND => run::handle_run(session, config, &current_role, params).await,
+		RUN_COMMAND => {
+			run::handle_run(session, config, &current_role, params, operation_cancelled).await
+		}
 		IMAGE_COMMAND => image::handle_image(session, params).await,
 		ROLE_COMMAND => role::handle_role(session, config, params).await,
 		_ => handle_unknown_command(command, config, &current_role).await,

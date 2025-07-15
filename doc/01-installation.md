@@ -325,8 +325,8 @@ rm -rf ~/.cargo/registry/cache
 
 After installation:
 
-1. **[Configuration Guide](./02-configuration.md)** - Set up providers and roles
-2. **[Provider Setup](./03-providers.md)** - Configure AI models
+1. **[Configuration Guide](./03-configuration.md)** - Set up providers and roles
+2. **[Provider Setup](./04-providers.md)** - Configure AI models
 3. **[Session Guide](./05-sessions.md)** - Start using interactive sessions
 
 ## Getting Help

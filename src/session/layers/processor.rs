@@ -184,6 +184,7 @@ impl Layer for LayerProcessor {
 						tool_call,
 						&layer_config,
 						&self.config,
+						Some(operation_cancelled.clone()), // FIXED: Pass cancellation token
 					)
 					.await
 					{

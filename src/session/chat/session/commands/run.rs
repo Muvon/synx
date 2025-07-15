@@ -26,6 +26,7 @@ pub async fn handle_run(
 	config: &Config,
 	role: &str,
 	params: &[&str],
+	operation_cancelled: tokio::sync::watch::Receiver<bool>,
 ) -> Result<bool> {
 	// Handle /run command for executing command layers
 	if params.is_empty() {
@@ -128,7 +129,6 @@ allowed_tools = []"#
 
 	// Execute the command layer
 	println!();
-	let operation_cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 	match command_executor::execute_command_layer(
 		command_name,
 		&command_input,

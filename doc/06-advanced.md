@@ -322,7 +322,7 @@ allowed_tools = ["text_editor", "list_files", "semantic_search", "view_signature
 [[agents]]
 name = "code_reviewer"
 description = "Review code for performance, security, and best practices issues. Analyzes code quality and suggests improvements."
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 max_tokens = 8192
 system_prompt = "You are a senior code reviewer. Analyze code for quality, performance, security, and best practices. Provide detailed feedback with specific suggestions for improvement."
 temperature = 0.1
@@ -695,7 +695,7 @@ You can create custom layers with any combination of settings:
 ```toml
 [[layers]]
 name = "code_reviewer"
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 system_prompt = "You are a senior code reviewer..."
 temperature = 0.1
 input_mode = "Last"
@@ -839,7 +839,7 @@ model = "openrouter:anthropic/claude-3.5-haiku"  # Lightweight chat
 ```toml
 # Security-focused role
 [security-reviewer]
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 enable_layers = true
 
 [security-reviewer.mcp]
@@ -1051,12 +1051,12 @@ allowed_tools = []
 ### Provider Migration
 **Old format:**
 ```toml
-model = "anthropic/claude-3.5-sonnet"
+model = "anthropic/claude-sonnet-4"
 ```
 
 **New format:**
 ```toml
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 ```
 
 Octomind automatically migrates legacy configurations, but manual updates provide better control and understanding of the new simplified structure.

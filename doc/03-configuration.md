@@ -241,7 +241,7 @@ model = "openrouter:anthropic/claude-sonnet-4"
 model = "openai:gpt-4o-mini"
 
 [my-custom-role.config]
-model = "amazon:claude-3-5-sonnet"  # Using Amazon Bedrock
+model = "amazon:claude-sonnet-4"  # Using Amazon Bedrock
 # or
 model = "cloudflare:llama-3.1-8b-instruct"  # Using Cloudflare Workers AI
 ```
@@ -282,7 +282,7 @@ Environment variables are the PRIMARY method of configuration:
 ```bash
 # 🔧 Global Configuration Overrides
 export OCTOMIND_LOG_LEVEL="debug"
-export OCTOMIND_MODEL="openrouter:anthropic/claude-3.5-sonnet"
+export OCTOMIND_MODEL="openrouter:anthropic/claude-sonnet-4"
 export OCTOMIND_CUSTOM_INSTRUCTIONS_FILE_NAME="PROJECT_GUIDE.md"
 export OCTOMIND_EMBEDDING_PROVIDER="jina"
 
@@ -369,7 +369,7 @@ Create specialized roles for specific use cases. Custom roles inherit from assis
 
 ```toml
 [code-reviewer]
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 enable_layers = true
 system = "You are a code review expert focused on security and best practices."
 
@@ -443,7 +443,7 @@ allowed_tools = ["text_editor", "list_files"]
 [[layers]]
 name = "code_optimizer"
 description = "Optimizes code for performance and maintainability"
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 temperature = 0.2
 input_mode = "all"
 output_mode = "append"
@@ -475,7 +475,7 @@ allowed_tools = ["text_editor", "list_files", "semantic_search", "view_signature
 [[agents]]
 name = "code_reviewer"
 description = "Review code for performance, security, and best practices issues. Analyzes code quality and suggests improvements."
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 max_tokens = 8192
 system_prompt = "You are a senior code reviewer..."
 temperature = 0.1

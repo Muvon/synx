@@ -978,7 +978,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			}
 
 			let exit = chat_session
-				.process_command(&input, &mut current_config, &role)
+				.process_command(&input, &mut current_config, &role, operation_rx.clone())
 				.await?;
 			if exit {
 				// First check if it's a session switch command
@@ -1267,7 +1267,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 
 		// Process the command
 		let exit = chat_session
-			.process_command(&input, &mut current_config, &role)
+			.process_command(&input, &mut current_config, &role, operation_rx.clone())
 			.await?;
 
 		if exit {

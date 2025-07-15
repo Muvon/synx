@@ -152,12 +152,13 @@ Default values
 
 | Provider | Format | Features |
 |----------|--------|----------|
-| OpenRouter | `openrouter:provider/model` | Multi-provider access, caching |
-| OpenAI | `openai:model-name` | Direct API, cost calculation |
-| Anthropic | `anthropic:model-name` | Claude models, caching |
-| Google | `google:model-name` | Vertex AI, multimodal |
-| Amazon | `amazon:model-name` | Bedrock models, AWS integration |
-| Cloudflare | `cloudflare:model-name` | Edge AI, fast inference |
+| OpenRouter | `openrouter:provider/model` | Multi-provider access, caching, vision models |
+| OpenAI | `openai:model-name` | Direct API, cost calculation, GPT-4o vision |
+| Anthropic | `anthropic:model-name` | Claude models, caching, Claude 3+ vision |
+| Google | `google:model-name` | Vertex AI, Gemini 1.5+ vision support |
+| Amazon | `amazon:model-name` | Bedrock models, AWS integration, Claude vision |
+| Cloudflare | `cloudflare:model-name` | Edge AI, fast inference, Llama 3.2 vision |
+| DeepSeek | `deepseek:model-name` | Cost-effective models, competitive performance |
 
 ### File Structure
 
@@ -183,9 +184,14 @@ Default values
 # In any session
 > /help              # Show available commands
 > /info              # Token and cost breakdown
+> /report            # Detailed usage report with cost breakdown
+> /context [filter]  # Display session context (all, assistant, user, tool, large)
 > /layers            # Toggle layered processing
 > /cache             # Mark cache checkpoint
-> /done              # Optimize context
+> /done              # Finalize task with memorization and auto-commit
+> /mcp info          # Show MCP server status and tools
+> /run <command>     # Execute configured custom commands
+> /image <path>      # Attach image to next message
 ```
 
 ### Common Issues
@@ -257,9 +263,10 @@ allowed_tools = []
 ### Provider Format
 All models use `provider:model` format:
 ```toml
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 model = "openai:gpt-4o"
-model = "anthropic:claude-3-5-sonnet"
+model = "anthropic:claude-sonnet-4"
+model = "deepseek:deepseek-chat"
 ```
 
 ## Contributing
@@ -267,7 +274,7 @@ model = "anthropic:claude-3-5-sonnet"
 Octomind is an open-source project. Contributions are welcome!
 
 ### Adding New Providers
-The provider system is extensible. See `src/session/providers/` for examples.
+The provider system is extensible. See `src/providers/` for examples.
 
 ### Adding New Tools
 MCP tools can be added locally or as external servers. See the MCP documentation in the Advanced guide.

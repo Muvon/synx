@@ -227,6 +227,7 @@ async fn execute_tools_parallel_internal(
 						&call_with_id,
 						&config_clone,
 						&layer_config_clone,
+						cancel_token_for_task, // FIXED: Pass cancellation token
 					)
 					.await
 				})

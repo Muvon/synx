@@ -8,8 +8,8 @@ Octomind supports multiple AI providers through a unified, extensible interface.
 
 ### Provider Format Migration
 **All models now require the `provider:model` format:**
-- ❌ Old: `"anthropic/claude-3.5-sonnet"`
-- ✅ New: `"openrouter:anthropic/claude-3.5-sonnet"` or `"anthropic:claude-3-5-sonnet"`
+- ❌ Old: `"anthropic/claude-sonnet-4"`
+- ✅ New: `"openrouter:anthropic/claude-sonnet-4"` or `"anthropic:claude-sonnet-4"`
 
 ### New Provider Support
 - **Amazon Bedrock**: Added support for AWS Bedrock models
@@ -43,7 +43,7 @@ api_key = "your_key"  # Optional, can use env var
 - Vision models supported via OpenRouter: Claude 3+, GPT-4o, Gemini, Llama 3.2 vision, Pixtral
 - Use `octomind session --model <provider:model>` everywhere
 # Anthropic models via OpenRouter
-octomind session --model "openrouter:anthropic/claude-3.5-sonnet"
+octomind session --model "openrouter:anthropic/claude-sonnet-4"
 octomind session --model "openrouter:anthropic/claude-sonnet-4"
 
 # OpenAI models via OpenRouter
@@ -106,7 +106,7 @@ export ANTHROPIC_API_KEY="your_anthropic_key"
 
 #### Usage
 ```bash
-octomind session --model "anthropic:claude-3-5-sonnet"
+octomind session --model "anthropic:claude-sonnet-4"
 octomind session --model "anthropic:claude-3-5-haiku"
 octomind session --model "anthropic:claude-3-opus"
 ```
@@ -114,7 +114,7 @@ octomind session --model "anthropic:claude-3-opus"
 #### Vision Support
 ```bash
 # Start session with vision-capable model
-octomind session --model "anthropic:claude-3-5-sonnet"
+octomind session --model "anthropic:claude-sonnet-4"
 
 # Attach image and analyze
 > /image screenshot.png
@@ -124,7 +124,7 @@ octomind session --model "anthropic:claude-3-5-sonnet"
 #### Pricing (per 1M tokens)
 | Model | Input | Output |
 |-------|-------|--------|
-| claude-3-5-sonnet | $3.00 | $15.00 |
+| claude-sonnet-4 | $3.00 | $15.00 |
 | claude-3-5-haiku | $0.25 | $1.25 |
 | claude-3-opus | $15.00 | $75.00 |
 
@@ -222,6 +222,31 @@ octomind session --model "cloudflare:@cf/meta/llama-2-7b-chat-int8"
 octomind session --model "cloudflare:@cf/mistral/mistral-7b-instruct-v0.1"
 ```
 
+### DeepSeek
+**Cost-effective AI models with competitive performance**
+
+- **Format**: `deepseek:model-name`
+- **Features**: Tool support, cost-effective pricing, competitive performance
+- **Models**: DeepSeek Chat and other models
+- **Note**: Requires DeepSeek API key
+
+#### Setup
+```bash
+export DEEPSEEK_API_KEY="your_deepseek_key"
+```
+
+#### Configuration
+```toml
+[providers.deepseek]
+api_key = "your_key"  # Optional, can use env var
+```
+
+#### Usage
+```bash
+octomind session --model "deepseek:deepseek-chat"
+octomind session --model "deepseek:deepseek-coder"
+```
+
 ## Model Selection Strategy
 
 ### For Different Use Cases
@@ -241,7 +266,7 @@ model = "openai:gpt-4o-mini"  # Fast and cost-effective
 #### Code Analysis
 ```toml
 # For complex code analysis
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 
 # For fast code search
 model = "openai:gpt-4o-mini"
@@ -265,7 +290,7 @@ model = "openrouter:anthropic/claude-sonnet-4"
 1. `openai:o1-preview` - $15.00/$60.00
 2. `anthropic:claude-3-opus` - $15.00/$75.00
 3. `google:gemini-1.5-pro` - $3.50/$10.50
-4. `anthropic:claude-3-5-sonnet` - $3.00/$15.00
+4. `anthropic:claude-sonnet-4` - $3.00/$15.00
 5. `openai:gpt-4o` - $2.50/$10.00
 6. `google:gemini-1.0-pro` - $0.50/$1.50
 7. `anthropic:claude-3-5-haiku` - $0.25/$1.25
@@ -350,9 +375,9 @@ curl -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1
 
 #### Model Format Errors
 ```
-❌ anthropic/claude-3.5-sonnet
-✅ openrouter:anthropic/claude-3.5-sonnet
-✅ anthropic:claude-3-5-sonnet
+❌ anthropic/claude-sonnet-4
+✅ openrouter:anthropic/claude-sonnet-4
+✅ anthropic:claude-sonnet-4
 ```
 
 #### Google Vertex AI Issues
@@ -369,7 +394,7 @@ gcloud auth application-default login
 Check provider status:
 ```bash
 # Test different providers
-octomind session --model "openrouter:anthropic/claude-3.5-sonnet"
+octomind session --model "openrouter:anthropic/claude-sonnet-4"
 octomind session --model "openai:gpt-4o-mini"
 octomind session --model "anthropic:claude-3-5-haiku"
 ```
@@ -388,14 +413,14 @@ log_level = "debug"
 
 **Old (deprecated):**
 ```toml
-model = "anthropic/claude-3.5-sonnet"
+model = "anthropic/claude-sonnet-4"
 ```
 
 **New (required):**
 ```toml
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 # or
-model = "anthropic:claude-3-5-sonnet"
+model = "anthropic:claude-sonnet-4"
 ```
 
 ### Update Configuration

@@ -595,8 +595,9 @@ impl ChatSession {
 		input: &str,
 		config: &mut Config,
 		role: &str,
+		operation_cancelled: tokio::sync::watch::Receiver<bool>,
 	) -> Result<bool> {
-		super::commands::process_command(self, input, config, role).await
+		super::commands::process_command(self, input, config, role, operation_cancelled).await
 	}
 
 	/// Disable continuation triggers temporarily

@@ -20,8 +20,6 @@ use crate::session::chat::session::ChatSession;
 use crate::session::{layers::layer_trait::Layer, layers::GenericLayer};
 use anyhow::Result;
 use colored::Colorize;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 /// Execute a command layer without storing it in the session history
 pub async fn execute_command_layer(
@@ -30,7 +28,7 @@ pub async fn execute_command_layer(
 	chat_session: &mut ChatSession,
 	config: &Config,
 	role: &str,
-	operation_cancelled: Arc<AtomicBool>,
+	operation_cancelled: tokio::sync::watch::Receiver<bool>,
 ) -> Result<String> {
 	// Get role configuration to check for command layers
 	let (_, _, _, commands_config, _) = config.get_role_config(role);
@@ -129,10 +127,7 @@ pub async fn execute_command_layer(
 			&processed_input,
 			&chat_session.session,
 			config,
-			tokio::sync::watch::channel(
-				operation_cancelled.load(std::sync::atomic::Ordering::SeqCst),
-			)
-			.1,
+			operation_cancelled,
 		)
 		.await?;
 

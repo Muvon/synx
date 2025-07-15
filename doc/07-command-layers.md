@@ -85,7 +85,7 @@ Usage: `/run estimate`
 ```toml
 [developer.commands.review]
 name = "review"
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 system_prompt = """You are a code review expert. Analyze recent work and provide:
 
 1. Code quality assessment

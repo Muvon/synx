@@ -388,7 +388,7 @@ octomind session -r project_review
 octomind session --list
 
 # Session with custom model
-octomind session --model="anthropic:claude-3-5-sonnet" -n analysis
+octomind session --model="anthropic:claude-sonnet-4" -n analysis
 ```
 
 ### Session Commands

@@ -68,6 +68,7 @@ Instead of complex command-line tools, simply talk to Octomind:
 | Google | `google:model-name` | Vertex AI, Gemini 1.5+ vision support |
 | Amazon | `amazon:model-name` | Bedrock models, AWS integration, Claude vision |
 | Cloudflare | `cloudflare:model-name` | Edge AI, fast inference, Llama 3.2 vision |
+| DeepSeek | `deepseek:model-name` | Cost-effective models, competitive performance |
 
 ## 🛠️ Installation & Setup
 
@@ -110,7 +111,7 @@ octomind session --role=assistant
 octomind session --resume my_session
 
 # Use specific model
-octomind session --model "openrouter:anthropic/claude-3.5-sonnet"
+octomind session --model "openrouter:anthropic/claude-sonnet-4"
 ```
 
 ## 🎮 Session Commands
@@ -127,6 +128,13 @@ Within any session, use these commands:
 - `/run <command>` - Execute configured custom commands
 - `/done` - Finalize task with memorization, comprehensive summarization, and auto-commit
 - `/loglevel [debug|info|none]` - Set log level
+- `/mcp [info|list|full|health|dump|validate]` - MCP server management and debugging
+- `/role [role_name]` - View or change current role
+- `/save` - Save current session
+- `/clear` - Clear terminal screen
+- `/copy` - Copy last assistant response to clipboard
+- `/summarize` - Generate session summary
+- `/truncate` - Manually truncate session context
 - `/exit` - Exit current session
 
 ## 🎯 Context Management Commands
@@ -186,7 +194,7 @@ octomind config --show
 Contributions are welcome! We appreciate your help in making Octomind better.
 
 **Development Areas:**
-- **AI Providers**: Add new providers in `src/session/providers/`
+- **AI Providers**: Add new providers in `src/providers/`
 - **MCP Tools**: Extend tool capabilities via MCP server registry
 - **Documentation**: Improve guides and examples
 
@@ -205,7 +213,7 @@ cargo test
 **Common Issues:**
 - **Configuration Errors**: Check system config directory or regenerate with `octomind config`
 - **Missing API Keys**: Set environment variables for your AI provider
-- **Invalid Model Format**: Use `provider:model` format (e.g., `openrouter:anthropic/claude-3.5-sonnet`)
+- **Invalid Model Format**: Use `provider:model` format (e.g., `openrouter:anthropic/claude-sonnet-4`)
 - **Session Issues**: Use `/loglevel debug` to enable detailed logging
 
 **Getting Help:**

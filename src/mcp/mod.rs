@@ -1030,6 +1030,7 @@ pub async fn execute_layer_tool_call(
 	call: &McpToolCall,
 	config: &crate::config::Config,
 	layer_config: &crate::session::layers::LayerConfig,
+	cancellation_token: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<(McpToolResult, u64)> {
 	// Check if tools are enabled for this layer (has server_refs)
 	if layer_config.mcp.server_refs.is_empty() {
@@ -1050,8 +1051,8 @@ pub async fn execute_layer_tool_call(
 		));
 	}
 
-	// Pass to regular tool execution
-	execute_tool_call(call, config, None).await
+	// Pass to regular tool execution with cancellation token
+	execute_tool_call(call, config, cancellation_token).await
 }
 
 // Execute multiple tool calls
