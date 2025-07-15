@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.10.0] - 2025-07-15
+
+### 📋 Release Summary
+
+This release adds customizable output roles for session messages to enhance interaction control (ca1e288f). Several bug fixes improve session stability, including better cancellation handling, prevention of duplicate messages, and stricter configuration enforcement, alongside file lock implementation to avoid write conflicts and improved tool validation (93821f6, 6a9f835e, d25a7cd7, e2a05ccc, d2e707f9, e7277764, 5379398d). Additionally, the session flow has been streamlined for a smoother user experience (4091cf29).
+
+
+### ✨ New Features & Enhancements
+
+- **session**: add output_role control for session messages `ca1e288f`
+
+### 🔧 Improvements & Optimizations
+
+- **session**: simplify interactive and non-interactive session flow `4091cf29`
+
+### 🐛 Bug Fixes & Stability
+
+- **session**: propagate Ctrl+C cancellation to animation and tools `93821f6c`
+- **mcp/fs**: add file locks to prevent concurrent write conflicts `6a9f835e`
+- **config**: add missing output_role to default config sections `d25a7cd7`
+- **session**: prevent duplicate user messages with layers and continu... `e2a05ccc`
+- **session**: remove defaults to enforce strict output role config `d2e707f9`
+- **session**: replace ctrlc crate with tokio signal for Ctrl+C handling `e7277764`
+- **layers**: apply pattern-based tool validation in layers `5379398d`
+
+### 📊 Release Summary
+
+**Total commits**: 9 across 3 categories
+
+✨ **1** new feature - *Enhanced functionality*
+🔧 **1** improvement - *Better performance & code quality*
+🐛 **7** bug fixes - *Improved stability*
+
 ## [0.9.0] - 2025-07-10
 
 ### 📋 Release Summary
