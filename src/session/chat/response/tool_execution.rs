@@ -418,7 +418,20 @@ async fn execute_tools_parallel_internal(
 		}
 			}
 		},
-		_ = async { std::future::pending::<()>().await } => {
+		_ = async {
+			// Check for cancellation signal
+			if let Some(ref cancel_rx) = operation_cancelled {
+				let mut cancel_rx_clone = cancel_rx.clone();
+				while !*cancel_rx_clone.borrow() {
+					if cancel_rx_clone.changed().await.is_err() {
+						break;
+					}
+				}
+			} else {
+				// No cancellation token provided - wait indefinitely
+				std::future::pending::<()>().await;
+			}
+		} => {
 			// Cancellation occurred - provide immediate feedback
 			use colored::*;
 			println!(
