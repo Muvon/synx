@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.10.1] - 2025-07-17
+
+### 📋 Release Summary
+
+This release addresses several session management issues to improve stability and user experience, including better handling of cancellation signals and cleanup of partial messages (61a235d4, 959310fb, 7e5ec3ea). Documentation has also been updated to reflect these enhancements.
+
+
+### 🐛 Bug Fixes & Stability
+
+- **session**: resolve cancellation issue and update documentation `61a235d4`
+- **session**: handle cancellation signal correctly in tool loop `959310fb`
+- **session**: clean up partial messages on tool and layer cancellation `7e5ec3ea`
+
+### 📊 Release Summary
+
+**Total commits**: 3 across 1 categories
+
+🐛 **3** bug fixes - *Improved stability*
+
 ## [0.10.0] - 2025-07-15
 
 ### 📋 Release Summary
