@@ -548,8 +548,12 @@ pub fn clean_interrupted_tool_calls(
 	let mut removed_count = 0;
 	let mut indices_to_remove = Vec::new();
 
-	// First pass: Find assistant messages with tool_calls that have no responses
-	for (i, msg) in messages.iter().enumerate() {
+	// Only clean up incomplete sequences at the END of the conversation
+	// Find the last assistant message with tool_calls that has incomplete responses
+	let mut last_incomplete_assistant_index = None;
+
+	// Scan from the end to find the last incomplete tool call sequence
+	for (i, msg) in messages.iter().enumerate().rev() {
 		if msg.role == "assistant" && msg.tool_calls.is_some() {
 			if let Some(tool_calls_value) = &msg.tool_calls {
 				if let Ok(tool_calls) =
@@ -574,14 +578,28 @@ pub fn clean_interrupted_tool_calls(
 					}
 
 					if has_incomplete_calls {
-						indices_to_remove.push(i);
+						last_incomplete_assistant_index = Some(i);
+						break; // Found the last incomplete sequence, stop looking
 					}
 				}
 			}
 		}
 	}
 
-	// Second pass: Find orphaned tool messages (tool messages without preceding assistant tool_calls)
+	// If we found an incomplete sequence at the end, remove it and any orphaned tool messages after it
+	if let Some(incomplete_index) = last_incomplete_assistant_index {
+		// Remove the incomplete assistant message
+		indices_to_remove.push(incomplete_index);
+
+		// Remove any tool messages that come after this incomplete assistant message
+		for (i, msg) in messages.iter().enumerate() {
+			if i > incomplete_index && msg.role == "tool" {
+				indices_to_remove.push(i);
+			}
+		}
+	}
+
+	// Also remove any truly orphaned tool messages (tool messages without ANY preceding assistant tool_calls)
 	for (i, msg) in messages.iter().enumerate() {
 		if msg.role == "tool" {
 			if let Some(tool_call_id) = &msg.tool_call_id {
@@ -657,6 +675,7 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 	let mut messages = Vec::new();
 	let mut restoration_point_found = false;
 	let mut restoration_messages = Vec::new();
+	let mut pending_tool_calls = Vec::new(); // Collect tool calls for reconstruction
 
 	// Process the file line by line to avoid loading the entire file into memory
 	for line in reader.lines() {
@@ -753,8 +772,26 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 							}
 						}
 					}
-					"API_REQUEST" | "API_RESPONSE" | "TOOL_CALL" | "TOOL_RESULT" | "CACHE"
-					| "ERROR" | "SYSTEM" | "USER" | "ASSISTANT" => {
+					"TOOL_CALL" => {
+						// Collect tool calls to reconstruct assistant message with tool_calls
+						if let (Some(tool_name), Some(tool_id), Some(parameters)) = (
+							json_value.get("tool_name").and_then(|n| n.as_str()),
+							json_value.get("tool_id").and_then(|id| id.as_str()),
+							json_value.get("parameters"),
+						) {
+							// Store tool call for later reconstruction
+							pending_tool_calls.push(serde_json::json!({
+								"id": tool_id,
+								"type": "function",
+								"function": {
+									"name": tool_name,
+									"arguments": serde_json::to_string(parameters).unwrap_or_default()
+								}
+							}));
+						}
+					}
+					"API_REQUEST" | "API_RESPONSE" | "TOOL_RESULT" | "CACHE" | "ERROR"
+					| "SYSTEM" | "USER" | "ASSISTANT" => {
 						// Skip debug log entries during message parsing
 						continue;
 					}
@@ -766,6 +803,30 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 			} else if line.contains("\"role\":") && line.contains("\"content\":") {
 				// This is a regular message JSON line
 				if let Ok(message) = serde_json::from_str::<Message>(&line) {
+					// If this is the first tool message and we have pending tool calls,
+					// reconstruct the assistant message with tool_calls
+					if message.role == "tool" && !pending_tool_calls.is_empty() {
+						let assistant_with_tool_calls = Message {
+							role: "assistant".to_string(),
+							content: "".to_string(), // Empty content for tool call messages
+							tool_calls: Some(serde_json::Value::Array(pending_tool_calls.clone())),
+							tool_call_id: None,
+							name: None,
+							images: None,
+							timestamp: message.timestamp,
+							cached: false,
+						};
+
+						if restoration_point_found {
+							restoration_messages.push(assistant_with_tool_calls);
+						} else {
+							messages.push(assistant_with_tool_calls);
+						}
+
+						// Clear pending tool calls since we've reconstructed the assistant message
+						pending_tool_calls.clear();
+					}
+
 					if restoration_point_found {
 						restoration_messages.push(message);
 					} else {
