@@ -962,97 +962,28 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		if input.starts_with('/') {
 			// Handle special /done command separately
 			if input.trim() == "/done" {
-				use colored::*;
-				println!("{}", "🎯 Finalizing current task...".bright_blue());
-
-				// Reset first_message_processed to false so that the next message goes through layers again
-				first_message_processed = false;
-
-				// Clear plan data
-				if let Err(e) = crate::mcp::dev::plan::clear_plan_data().await {
-					crate::log_debug!("Failed to clear plan data: {}", e);
-				}
-
-				// Disable continuation triggers during /done processing
-				chat_session.disable_continuation();
-
-				// Apply reducer functionality to optimize context
-				let result = super::super::context_reduction::perform_context_reduction(
+				// Handle /done command using dedicated handler
+				match super::commands::handle_done(
 					&mut chat_session,
 					&current_config,
 					&role,
 					operation_rx.clone(),
 				)
-				.await;
-
-				// Re-enable continuation triggers after /done processing
-				chat_session.enable_continuation();
-				if let Err(e) = result {
-					use colored::*;
-					println!(
-						"{}: {}",
-						"❌ Error performing context reduction".bright_red(),
-						e
-					);
-				} else {
-					use colored::*;
-					println!(
-						"{}",
-						"✅ Task finalized and context optimized. Re-adding initial messages..."
-							.bright_cyan()
-					);
-
-					// CRITICAL FIX: Re-add initial messages (welcome + custom instructions)
-					// Same pattern as /truncate command
-					let current_dir = std::env::current_dir().unwrap_or_default();
-					match super::utils::get_initial_messages(&current_config, &role, &current_dir)
-						.await
-					{
-						Ok(initial_messages) => {
-							// Find system message position
-							let system_msg_count = chat_session
-								.session
-								.messages
-								.iter()
-								.take_while(|m| m.role == "system")
-								.count();
-
-							// Insert initial messages after system message(s)
-							for (i, msg) in initial_messages.into_iter().enumerate() {
-								chat_session
-									.session
-									.messages
-									.insert(system_msg_count + i, msg);
-							}
-
-							// Save the session with re-added messages
-							if let Err(e) = chat_session.save() {
-								println!("{}: {}", "Failed to save session".bright_red(), e);
-							} else {
-								println!(
-									"{}",
-									"✅ /done complete: Welcome message and custom instructions file re-added."
-										.bright_green()
-								);
-							}
+				.await
+				{
+					Ok((exit_flag, reset_first_message)) => {
+						if reset_first_message {
+							// Reset first_message_processed to false so that the next message goes through layers again
+							first_message_processed = false;
 						}
-						Err(e) => {
-							println!(
-								"{}: {}",
-								"Failed to re-add initial messages".bright_yellow(),
-								e
-							);
+						if exit_flag {
+							break;
 						}
 					}
-
-					println!(
-						"{}",
-						"\n🚀 Next message will be processed through the full layered architecture."
-							.bright_green()
-					);
-
-					// EditorConfig formatting has been removed to simplify dependencies
-					// Users can apply EditorConfig formatting manually or through their IDE
+					Err(e) => {
+						use colored::*;
+						println!("{}: {}", "❌ /done command failed".bright_red(), e);
+					}
 				}
 				continue;
 			}

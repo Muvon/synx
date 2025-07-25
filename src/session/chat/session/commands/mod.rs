@@ -18,6 +18,8 @@ mod cache;
 mod clear;
 mod context;
 mod copy;
+mod done;
+pub use done::handle_done;
 mod exit;
 mod help;
 mod image;
@@ -72,6 +74,11 @@ pub async fn process_command(
 		CONTEXT_COMMAND => context::handle_context(session, config, params),
 		LAYERS_COMMAND => layers::handle_layers(session, config, &current_role).await,
 		LOGLEVEL_COMMAND => loglevel::handle_loglevel(config, params),
+		DONE_COMMAND => {
+			// /done is handled directly in runner.rs main loop for session lifecycle management
+			// This case should not be reached as /done is intercepted before process_command
+			unreachable!("/done command should be handled in runner.rs main loop")
+		}
 		TRUNCATE_COMMAND => truncate::handle_truncate(session, config, &current_role).await,
 		SUMMARIZE_COMMAND => summarize::handle_summarize(session, config).await,
 		CACHE_COMMAND => cache::handle_cache(session, config, params).await,
@@ -116,7 +123,10 @@ async fn handle_unknown_command(command: &str, config: &Config, role: &str) -> R
 
 	// Advanced commands
 	println!("{} - Toggle layered processing", LAYERS_COMMAND.cyan());
-	println!("{} - Optimize session context", DONE_COMMAND.cyan());
+	println!(
+		"{} - Finalize task with context optimization",
+		DONE_COMMAND.cyan()
+	);
 	println!("{} - Smart context truncation", TRUNCATE_COMMAND.cyan());
 	println!("{} - Summarize conversation", SUMMARIZE_COMMAND.cyan());
 	println!("{} - Manage cache checkpoints", CACHE_COMMAND.cyan());
