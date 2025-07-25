@@ -535,26 +535,26 @@ fn has_incomplete_tool_calls(messages: &[Message]) -> bool {
 	false
 }
 
-/// Clean up interrupted tool calls - shared logic for both interactive sessions and restoration
+/// Clean up interrupted tool calls - simple chronological truncation approach
 ///
-/// Removes assistant messages with tool_calls that have no corresponding tool results.
-/// This function only removes messages that are genuinely incomplete, preserving
-/// complete tool call sequences.
+/// When incomplete tool calls are detected, truncates the message history from the
+/// first incomplete assistant message to the end, ensuring a clean conversation state.
 pub fn clean_interrupted_tool_calls(
 	messages: &mut Vec<Message>,
 	session_name: &str,
 	context: &str,
 ) -> bool {
-	let mut removed_count = 0;
-	let mut indices_to_remove = Vec::new();
+	if messages.is_empty() {
+		return false;
+	}
 
-	// Only clean up incomplete sequences at the END of the conversation
-	// Find the last assistant message with tool_calls that has incomplete responses
-	let mut last_incomplete_assistant_index = None;
+	// Find the FIRST incomplete tool call sequence scanning from the END
+	let mut truncate_from_index = None;
 
-	// Scan from the end to find the last incomplete tool call sequence
+	// Scan backwards to find the assistant message that started an incomplete sequence
 	for (i, msg) in messages.iter().enumerate().rev() {
 		if msg.role == "assistant" && msg.tool_calls.is_some() {
+			// Check if this assistant message has incomplete tool calls
 			if let Some(tool_calls_value) = &msg.tool_calls {
 				if let Ok(tool_calls) =
 					serde_json::from_value::<Vec<serde_json::Value>>(tool_calls_value.clone())
@@ -563,7 +563,7 @@ pub fn clean_interrupted_tool_calls(
 
 					for tool_call in tool_calls {
 						if let Some(call_id) = tool_call.get("id").and_then(|id| id.as_str()) {
-							// Look for a tool message with this call_id AFTER this assistant message
+							// Look for tool response AFTER this assistant message
 							let has_response = messages.iter().skip(i + 1).any(|response_msg| {
 								response_msg.role == "tool"
 									&& response_msg.tool_call_id.as_ref()
@@ -578,84 +578,37 @@ pub fn clean_interrupted_tool_calls(
 					}
 
 					if has_incomplete_calls {
-						last_incomplete_assistant_index = Some(i);
-						break; // Found the last incomplete sequence, stop looking
+						truncate_from_index = Some(i);
+						// Don't break - continue scanning to find the EARLIEST incomplete sequence
 					}
 				}
 			}
 		}
 	}
 
-	// If we found an incomplete sequence at the end, remove it and any orphaned tool messages after it
-	if let Some(incomplete_index) = last_incomplete_assistant_index {
-		// Remove the incomplete assistant message
-		indices_to_remove.push(incomplete_index);
+	// If we found an incomplete sequence, TRUNCATE from that point
+	if let Some(truncate_index) = truncate_from_index {
+		let original_len = messages.len();
+		messages.truncate(truncate_index);
+		let removed_count = original_len - messages.len();
 
-		// Remove any tool messages that come after this incomplete assistant message
-		for (i, msg) in messages.iter().enumerate() {
-			if i > incomplete_index && msg.role == "tool" {
-				indices_to_remove.push(i);
-			}
-		}
-	}
-
-	// Also remove any truly orphaned tool messages (tool messages without ANY preceding assistant tool_calls)
-	for (i, msg) in messages.iter().enumerate() {
-		if msg.role == "tool" {
-			if let Some(tool_call_id) = &msg.tool_call_id {
-				// Look for an assistant message with tool_calls that contains this call_id BEFORE this tool message
-				let has_preceding_call = messages.iter().take(i).any(|assistant_msg| {
-					assistant_msg.role == "assistant"
-						&& assistant_msg.tool_calls.is_some()
-						&& assistant_msg
-							.tool_calls
-							.as_ref()
-							.is_some_and(|tool_calls_value| {
-								serde_json::from_value::<Vec<serde_json::Value>>(
-									tool_calls_value.clone(),
-								)
-								.is_ok_and(|tool_calls| {
-									tool_calls.iter().any(|tool_call| {
-										tool_call.get("id").and_then(|id| id.as_str())
-											== Some(tool_call_id)
-									})
-								})
-							})
-				});
-
-				if !has_preceding_call {
-					indices_to_remove.push(i);
-				}
-			}
-		}
-	}
-
-	// Remove duplicates and sort in reverse order to maintain indices
-	indices_to_remove.sort_unstable();
-	indices_to_remove.dedup();
-
-	// Remove messages in reverse order to maintain indices
-	for &index in indices_to_remove.iter().rev() {
-		messages.remove(index);
-		removed_count += 1;
-	}
-
-	if removed_count > 0 {
-		eprintln!(
-			"🔧 {}: Removed {} incomplete/orphaned tool call sequence(s)",
-			context, removed_count
-		);
-
-		// Log the cleanup for debugging
-		let _ = crate::session::logger::log_system_message(
-			session_name,
-			&format!(
-				"{}: Cleaned up {} incomplete/orphaned tool call sequence(s)",
+		if removed_count > 0 {
+			eprintln!(
+				"🔧 {}: Truncated {} messages from incomplete tool sequence",
 				context, removed_count
-			),
-		);
+			);
 
-		return true;
+			// Log the cleanup
+			let _ = crate::session::logger::log_system_message(
+				session_name,
+				&format!(
+					"{}: Truncated {} messages from incomplete tool sequence",
+					context, removed_count
+				),
+			);
+
+			return true;
+		}
 	}
 
 	false
