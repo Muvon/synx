@@ -500,31 +500,26 @@ pub fn list_available_sessions() -> Result<Vec<(String, SessionInfo)>, anyhow::E
 /// - Complete sequences: assistant -> tool_calls -> tool_responses -> (optional final assistant)
 /// - Incomplete sequences: assistant -> tool_calls -> [interrupted, no tool responses]
 fn has_incomplete_tool_calls(messages: &[Message]) -> bool {
-	// Find the last assistant message with tool_calls
-	let mut last_assistant_with_tools = None;
-	for (i, msg) in messages.iter().enumerate().rev() {
+	// Check ALL assistant messages with tool_calls, not just the last one
+	for (i, msg) in messages.iter().enumerate() {
 		if msg.role == "assistant" && msg.tool_calls.is_some() {
-			last_assistant_with_tools = Some((i, msg));
-			break;
-		}
-	}
+			if let Some(tool_calls_value) = &msg.tool_calls {
+				// Parse the tool calls to get their IDs
+				if let Ok(tool_calls) =
+					serde_json::from_value::<Vec<serde_json::Value>>(tool_calls_value.clone())
+				{
+					for tool_call in tool_calls {
+						if let Some(call_id) = tool_call.get("id").and_then(|id| id.as_str()) {
+							// Look for a tool message with this call_id AFTER the assistant message
+							let has_response = messages.iter().skip(i + 1).any(|response_msg| {
+								response_msg.role == "tool"
+									&& response_msg.tool_call_id.as_ref()
+										== Some(&call_id.to_string())
+							});
 
-	if let Some((msg_index, assistant_msg)) = last_assistant_with_tools {
-		if let Some(tool_calls_value) = &assistant_msg.tool_calls {
-			// Parse the tool calls to get their IDs
-			if let Ok(tool_calls) =
-				serde_json::from_value::<Vec<serde_json::Value>>(tool_calls_value.clone())
-			{
-				for tool_call in tool_calls {
-					if let Some(call_id) = tool_call.get("id").and_then(|id| id.as_str()) {
-						// Look for a tool message with this call_id AFTER the assistant message
-						let has_response = messages.iter().skip(msg_index + 1).any(|msg| {
-							msg.role == "tool"
-								&& msg.tool_call_id.as_ref() == Some(&call_id.to_string())
-						});
-
-						if !has_response {
-							return true; // Found a tool call without a response
+							if !has_response {
+								return true; // Found a tool call without a response
+							}
 						}
 					}
 				}
@@ -548,11 +543,11 @@ pub fn clean_interrupted_tool_calls(
 		return false;
 	}
 
-	// Find the FIRST incomplete tool call sequence scanning from the END
+	// Find the FIRST incomplete tool call sequence scanning from the BEGINNING
 	let mut truncate_from_index = None;
 
-	// Scan backwards to find the assistant message that started an incomplete sequence
-	for (i, msg) in messages.iter().enumerate().rev() {
+	// Scan forward to find the FIRST assistant message with incomplete tool calls
+	for (i, msg) in messages.iter().enumerate() {
 		if msg.role == "assistant" && msg.tool_calls.is_some() {
 			// Check if this assistant message has incomplete tool calls
 			if let Some(tool_calls_value) = &msg.tool_calls {
@@ -579,7 +574,7 @@ pub fn clean_interrupted_tool_calls(
 
 					if has_incomplete_calls {
 						truncate_from_index = Some(i);
-						// Don't break - continue scanning to find the EARLIEST incomplete sequence
+						break; // Found the FIRST incomplete sequence, truncate from here
 					}
 				}
 			}
