@@ -962,6 +962,9 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		if input.starts_with('/') {
 			// Handle special /done command separately
 			if input.trim() == "/done" {
+				use colored::*;
+				println!("{}", "🎯 Finalizing current task...".bright_blue());
+
 				// Reset first_message_processed to false so that the next message goes through layers again
 				first_message_processed = false;
 
@@ -988,14 +991,63 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					use colored::*;
 					println!(
 						"{}: {}",
-						"Error performing context reduction".bright_red(),
+						"❌ Error performing context reduction".bright_red(),
 						e
 					);
 				} else {
 					use colored::*;
 					println!(
 						"{}",
-						"\nNext message will be processed through the full layered architecture."
+						"✅ Task finalized and context optimized. Re-adding initial messages..."
+							.bright_cyan()
+					);
+
+					// CRITICAL FIX: Re-add initial messages (welcome + custom instructions)
+					// Same pattern as /truncate command
+					let current_dir = std::env::current_dir().unwrap_or_default();
+					match super::utils::get_initial_messages(&current_config, &role, &current_dir)
+						.await
+					{
+						Ok(initial_messages) => {
+							// Find system message position
+							let system_msg_count = chat_session
+								.session
+								.messages
+								.iter()
+								.take_while(|m| m.role == "system")
+								.count();
+
+							// Insert initial messages after system message(s)
+							for (i, msg) in initial_messages.into_iter().enumerate() {
+								chat_session
+									.session
+									.messages
+									.insert(system_msg_count + i, msg);
+							}
+
+							// Save the session with re-added messages
+							if let Err(e) = chat_session.save() {
+								println!("{}: {}", "Failed to save session".bright_red(), e);
+							} else {
+								println!(
+									"{}",
+									"✅ /done complete: Welcome message and custom instructions file re-added."
+										.bright_green()
+								);
+							}
+						}
+						Err(e) => {
+							println!(
+								"{}: {}",
+								"Failed to re-add initial messages".bright_yellow(),
+								e
+							);
+						}
+					}
+
+					println!(
+						"{}",
+						"\n🚀 Next message will be processed through the full layered architecture."
 							.bright_green()
 					);
 
