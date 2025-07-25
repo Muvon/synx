@@ -594,6 +594,15 @@ async fn execute_api_call_and_process_response(
 	animation_cancel.store(true, Ordering::SeqCst);
 	let _ = animation_task.await;
 
+	// CRITICAL FIX: Check for cancellation after API call completion
+	// This prevents the race condition where Ctrl+C is pressed after API completes
+	// but before response processing begins
+	if *operation_rx_for_response.borrow() {
+		use colored::*;
+		println!("{}", "\nOperation cancelled by user.".bright_yellow());
+		return Ok(()); // Return gracefully to main loop instead of force exit
+	}
+
 	// Process response
 	match api_result {
 		Ok(response) => {
@@ -846,6 +855,15 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			// Clear operation context
 			*current_operation.lock().unwrap() = None;
 
+			// CRITICAL FIX: Reset continuation state when cancelled
+			// This prevents infinite loop where continuation_pending remains true after Ctrl+C
+			if chat_session.continuation_pending {
+				chat_session.continuation_pending = false;
+				log_debug!(
+					"Continuation state reset due to cancellation - breaking continuation loop"
+				);
+			}
+
 			// CRITICAL FIX: Reset cancellation state BEFORE continuing
 			// This prevents infinite loop where cancellation is always true
 			cancellation.reset();
@@ -867,20 +885,30 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 		// CRITICAL FIX: Check if continuation is pending from previous iteration
 		// If so, skip reading user input and process the injected summary request immediately
+		// BUT FIRST: Check if operation was cancelled to prevent infinite loops
 		let input_result = if chat_session.continuation_pending {
-			log_debug!("Continuation pending - processing injected summary request automatically");
-			// Get the last message which should be the injected summary request
-			chat_session
-				.session
-				.messages
-				.last()
-				.filter(|msg| msg.role == "user")
-				.map(|msg| InputResult::Text(msg.content.clone()))
-				.unwrap_or_else(|| {
-					log_debug!("Warning: Expected summary request message not found, falling back to user input");
-					read_user_input(chat_session.estimated_cost)
-						.unwrap_or(InputResult::Text(String::new()))
-				})
+			// Safety check: If cancellation occurred, reset continuation state and read user input normally
+			if cancellation.is_cancelled() {
+				log_debug!("Cancellation detected during continuation - resetting continuation state and reading user input");
+				chat_session.continuation_pending = false;
+				read_user_input(chat_session.estimated_cost)?
+			} else {
+				log_debug!(
+					"Continuation pending - processing injected summary request automatically"
+				);
+				// Get the last message which should be the injected summary request
+				chat_session
+					.session
+					.messages
+					.last()
+					.filter(|msg| msg.role == "user")
+					.map(|msg| InputResult::Text(msg.content.clone()))
+					.unwrap_or_else(|| {
+						log_debug!("Warning: Expected summary request message not found, falling back to user input");
+						read_user_input(chat_session.estimated_cost)
+							.unwrap_or(InputResult::Text(String::new()))
+					})
+			}
 		} else {
 			// Read user input with command completion and cost estimation
 			read_user_input(chat_session.estimated_cost)?
@@ -1176,6 +1204,15 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				// Update processing state to completed when done
 				*processing_state.lock().unwrap() = ProcessingState::CompletedWithResults;
 
+				// CRITICAL FIX: Check for cancellation after API call and response processing
+				// This ensures we return to input prompt gracefully instead of continuing
+				if cancellation.is_cancelled() {
+					log_debug!(
+						"Operation cancelled after API call completion - returning to input prompt"
+					);
+					continue; // Return to main loop for next user input
+				}
+
 				// CRITICAL FIX: Check if continuation was triggered during tool processing
 				// If continuation_pending is true, it means a summary request was injected
 				// and we need to skip waiting for user input and process it immediately
@@ -1184,6 +1221,13 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					// The summary request message has already been injected by check_and_handle_continuation
 					// Just continue the loop to process it immediately without waiting for user input
 					continue;
+				}
+
+				// SAFETY CHECK: Ensure continuation state is properly cleared after successful processing
+				// This provides additional protection against continuation state getting stuck
+				if chat_session.continuation_pending {
+					log_debug!("Warning: Continuation state still pending after successful processing - clearing it");
+					chat_session.continuation_pending = false;
 				}
 
 				// NOTE: Continuation check moved to AFTER potential summary response
