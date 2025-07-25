@@ -341,6 +341,7 @@ impl ChatSession {
 
 					// Create chat session from loaded session
 					let restored_model = session.info.model.clone(); // Extract model before moving session
+					let restored_cost = session.info.total_cost; // Extract cost before moving session
 					let mut chat_session = ChatSession {
 						session,
 						last_response: String::new(),
@@ -350,7 +351,7 @@ impl ChatSession {
 						top_p: effective_top_p,             // Use config-based top_p
 						top_k: effective_top_k,             // Use config-based top_k
 						max_tokens: effective_max_tokens,   // Use config-based max_tokens
-						estimated_cost: 0.0,
+						estimated_cost: restored_cost,      // FIXED: Use actual cost from session
 						cache_next_user_message: false,     // Initialize cache flag
 						spending_threshold_checkpoint: 0.0, // Initialize spending checkpoint
 						pending_image: None,                // Initialize pending image
@@ -360,8 +361,6 @@ impl ChatSession {
 						was_resumed: true,                  // This session was resumed from file
 					};
 
-					// Update the estimated cost from the loaded session
-					chat_session.estimated_cost = chat_session.session.info.total_cost;
 					// Initialize spending threshold checkpoint for loaded sessions
 					chat_session.spending_threshold_checkpoint = 0.0;
 

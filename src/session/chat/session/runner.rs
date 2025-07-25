@@ -782,6 +782,30 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	// We need to handle configuration reloading, so keep our own copy that we can update
 	let mut current_config = config_for_role.clone();
 
+	// Apply runtime state from session log if this is a resumed session
+	if chat_session.was_resumed {
+		if let Some(session_file) = &chat_session.session.session_file {
+			if let Ok(runtime_state) = crate::session::extract_runtime_state_from_log(session_file)
+			{
+				// Apply restored layers_enabled state if available
+				if let Some(layers_enabled) = runtime_state.layers_enabled {
+					// Apply the layers_enabled state to the current role's config
+					if let Some(role_config) = current_config.role_map.get_mut(&role) {
+						role_config.config.enable_layers = layers_enabled;
+						log_info!(
+							"Applied runtime layers state: {}",
+							if layers_enabled {
+								"enabled"
+							} else {
+								"disabled"
+							}
+						);
+					}
+				}
+			}
+		}
+	}
+
 	// Set the thread-local config for logging macros
 	crate::config::set_thread_config(&current_config);
 
@@ -1261,6 +1285,31 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 
 	// Set the thread-local config for logging macros
 	let mut current_config = config_for_role.clone();
+
+	// Apply runtime state from session log if this is a resumed session
+	if chat_session.was_resumed {
+		if let Some(session_file) = &chat_session.session.session_file {
+			if let Ok(runtime_state) = crate::session::extract_runtime_state_from_log(session_file)
+			{
+				// Apply restored layers_enabled state if available
+				if let Some(layers_enabled) = runtime_state.layers_enabled {
+					// Apply the layers_enabled state to the current role's config
+					if let Some(role_config) = current_config.role_map.get_mut(&role) {
+						role_config.config.enable_layers = layers_enabled;
+						log_info!(
+							"Applied runtime layers state: {}",
+							if layers_enabled {
+								"enabled"
+							} else {
+								"disabled"
+							}
+						);
+					}
+				}
+			}
+		}
+	}
+
 	crate::config::set_thread_config(&current_config);
 
 	// Process the single input (same logic as interactive session)

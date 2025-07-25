@@ -39,10 +39,13 @@ pub async fn handle_layers(
 		.map(|r| r.config.enable_layers)
 		.unwrap_or(false);
 
-	// Log the command execution
+	// Log the command execution with the actual resulting state
 	if let Some(session_file) = &session.session.session_file {
 		if let Some(session_name) = session_file.file_stem().and_then(|s| s.to_str()) {
-			let command_line = "/layers".to_string();
+			let command_line = format!(
+				"/layers {}",
+				if is_enabled { "enabled" } else { "disabled" }
+			);
 			let _ = crate::session::logger::log_session_command(session_name, &command_line);
 		}
 	}

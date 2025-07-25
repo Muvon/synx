@@ -546,10 +546,9 @@ pub fn clean_interrupted_tool_calls(
 	context: &str,
 ) -> bool {
 	let mut removed_count = 0;
-
-	// Find assistant messages with tool_calls that have no responses
 	let mut indices_to_remove = Vec::new();
 
+	// First pass: Find assistant messages with tool_calls that have no responses
 	for (i, msg) in messages.iter().enumerate() {
 		if msg.role == "assistant" && msg.tool_calls.is_some() {
 			if let Some(tool_calls_value) = &msg.tool_calls {
@@ -582,6 +581,41 @@ pub fn clean_interrupted_tool_calls(
 		}
 	}
 
+	// Second pass: Find orphaned tool messages (tool messages without preceding assistant tool_calls)
+	for (i, msg) in messages.iter().enumerate() {
+		if msg.role == "tool" {
+			if let Some(tool_call_id) = &msg.tool_call_id {
+				// Look for an assistant message with tool_calls that contains this call_id BEFORE this tool message
+				let has_preceding_call = messages.iter().take(i).any(|assistant_msg| {
+					assistant_msg.role == "assistant"
+						&& assistant_msg.tool_calls.is_some()
+						&& assistant_msg
+							.tool_calls
+							.as_ref()
+							.is_some_and(|tool_calls_value| {
+								serde_json::from_value::<Vec<serde_json::Value>>(
+									tool_calls_value.clone(),
+								)
+								.is_ok_and(|tool_calls| {
+									tool_calls.iter().any(|tool_call| {
+										tool_call.get("id").and_then(|id| id.as_str())
+											== Some(tool_call_id)
+									})
+								})
+							})
+				});
+
+				if !has_preceding_call {
+					indices_to_remove.push(i);
+				}
+			}
+		}
+	}
+
+	// Remove duplicates and sort in reverse order to maintain indices
+	indices_to_remove.sort_unstable();
+	indices_to_remove.dedup();
+
 	// Remove messages in reverse order to maintain indices
 	for &index in indices_to_remove.iter().rev() {
 		messages.remove(index);
@@ -590,7 +624,7 @@ pub fn clean_interrupted_tool_calls(
 
 	if removed_count > 0 {
 		eprintln!(
-			"🔧 {}: Removed {} incomplete tool call sequence(s)",
+			"🔧 {}: Removed {} incomplete/orphaned tool call sequence(s)",
 			context, removed_count
 		);
 
@@ -598,7 +632,7 @@ pub fn clean_interrupted_tool_calls(
 		let _ = crate::session::logger::log_system_message(
 			session_name,
 			&format!(
-				"{}: Cleaned up {} incomplete tool call sequence(s)",
+				"{}: Cleaned up {} incomplete/orphaned tool call sequence(s)",
 				context, removed_count
 			),
 		);
@@ -1063,8 +1097,11 @@ fn apply_command_to_runtime_state(state: &mut SessionRuntimeState, command_line:
 			}
 		}
 		"/layers" => {
-			// Toggle layers state - we don't know the previous state, so we assume it toggles
-			state.layers_enabled = Some(!state.layers_enabled.unwrap_or(false));
+			// Parse the actual state from the logged command
+			if parts.len() > 1 {
+				let state_str = parts[1];
+				state.layers_enabled = Some(state_str == "enabled");
+			}
 		}
 		"/cache" => {
 			// Set cache next message flag
