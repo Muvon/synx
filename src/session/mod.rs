@@ -491,43 +491,119 @@ pub fn list_available_sessions() -> Result<Vec<(String, SessionInfo)>, anyhow::E
 }
 
 /// Check if there are incomplete tool calls that need cleanup
+///
+/// A tool call sequence is incomplete if:
+/// 1. There's an assistant message with tool_calls
+/// 2. AND there are tool calls without corresponding tool response messages
+///
+/// This correctly distinguishes between:
+/// - Complete sequences: assistant -> tool_calls -> tool_responses -> (optional final assistant)
+/// - Incomplete sequences: assistant -> tool_calls -> [interrupted, no tool responses]
 fn has_incomplete_tool_calls(messages: &[Message]) -> bool {
-	// Only check if the last message is an assistant with tool_calls
-	// This is the only case that indicates an actual interruption
-	if let Some(last_msg) = messages.last() {
-		return last_msg.role == "assistant" && last_msg.tool_calls.is_some();
+	// Find the last assistant message with tool_calls
+	let mut last_assistant_with_tools = None;
+	for (i, msg) in messages.iter().enumerate().rev() {
+		if msg.role == "assistant" && msg.tool_calls.is_some() {
+			last_assistant_with_tools = Some((i, msg));
+			break;
+		}
 	}
+
+	if let Some((msg_index, assistant_msg)) = last_assistant_with_tools {
+		if let Some(tool_calls_value) = &assistant_msg.tool_calls {
+			// Parse the tool calls to get their IDs
+			if let Ok(tool_calls) =
+				serde_json::from_value::<Vec<serde_json::Value>>(tool_calls_value.clone())
+			{
+				for tool_call in tool_calls {
+					if let Some(call_id) = tool_call.get("id").and_then(|id| id.as_str()) {
+						// Look for a tool message with this call_id AFTER the assistant message
+						let has_response = messages.iter().skip(msg_index + 1).any(|msg| {
+							msg.role == "tool"
+								&& msg.tool_call_id.as_ref() == Some(&call_id.to_string())
+						});
+
+						if !has_response {
+							return true; // Found a tool call without a response
+						}
+					}
+				}
+			}
+		}
+	}
+
 	false
 }
 
 /// Clean up interrupted tool calls - shared logic for both interactive sessions and restoration
-/// Removes assistant messages with tool_calls that have no corresponding tool results
+///
+/// Removes assistant messages with tool_calls that have no corresponding tool results.
+/// This function only removes messages that are genuinely incomplete, preserving
+/// complete tool call sequences.
 pub fn clean_interrupted_tool_calls(
 	messages: &mut Vec<Message>,
 	session_name: &str,
 	context: &str,
 ) -> bool {
-	// Apply the same simple logic: check if last message is assistant with tool_calls
-	// This matches exactly what interactive sessions do during Ctrl+C cancellation
+	let mut removed_count = 0;
 
-	if let Some(last_msg) = messages.last() {
-		if last_msg.role == "assistant" && last_msg.tool_calls.is_some() {
-			// Last message is broken assistant with tool_calls - remove it
-			messages.pop();
+	// Find assistant messages with tool_calls that have no responses
+	let mut indices_to_remove = Vec::new();
 
-			eprintln!(
-				"🔧 {}: Removed incomplete tool call sequence (same as Ctrl+C cleanup)",
-				context
-			);
+	for (i, msg) in messages.iter().enumerate() {
+		if msg.role == "assistant" && msg.tool_calls.is_some() {
+			if let Some(tool_calls_value) = &msg.tool_calls {
+				if let Ok(tool_calls) =
+					serde_json::from_value::<Vec<serde_json::Value>>(tool_calls_value.clone())
+				{
+					let mut has_incomplete_calls = false;
 
-			// Log the cleanup for debugging
-			let _ = crate::session::logger::log_system_message(
-				session_name,
-				&format!("{}: Cleaned up incomplete tool call sequence", context),
-			);
+					for tool_call in tool_calls {
+						if let Some(call_id) = tool_call.get("id").and_then(|id| id.as_str()) {
+							// Look for a tool message with this call_id AFTER this assistant message
+							let has_response = messages.iter().skip(i + 1).any(|response_msg| {
+								response_msg.role == "tool"
+									&& response_msg.tool_call_id.as_ref()
+										== Some(&call_id.to_string())
+							});
 
-			return true;
+							if !has_response {
+								has_incomplete_calls = true;
+								break;
+							}
+						}
+					}
+
+					if has_incomplete_calls {
+						indices_to_remove.push(i);
+					}
+				}
+			}
 		}
+	}
+
+	// Remove messages in reverse order to maintain indices
+	for &index in indices_to_remove.iter().rev() {
+		messages.remove(index);
+		removed_count += 1;
+	}
+
+	if removed_count > 0 {
+		eprintln!(
+			"🔧 {}: Removed {} incomplete tool call sequence(s)",
+			context, removed_count
+		);
+
+		// Log the cleanup for debugging
+		let _ = crate::session::logger::log_system_message(
+			session_name,
+			&format!(
+				"{}: Cleaned up {} incomplete tool call sequence(s)",
+				context, removed_count
+			),
+		);
+
+		return true;
 	}
 
 	false
@@ -1204,4 +1280,172 @@ pub async fn chat_completion_with_provider(
 	)
 	.with_max_retries(params.max_retries);
 	provider.chat_completion(chat_params).await
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use serde_json::json;
+
+	fn create_test_message(
+		role: &str,
+		content: &str,
+		tool_calls: Option<serde_json::Value>,
+		tool_call_id: Option<String>,
+	) -> Message {
+		Message {
+			role: role.to_string(),
+			content: content.to_string(),
+			timestamp: 1234567890,
+			cached: false,
+			tool_call_id,
+			name: None,
+			tool_calls,
+			images: None,
+		}
+	}
+
+	#[test]
+	fn test_has_incomplete_tool_calls_complete_sequence() {
+		// Test complete tool call sequence: assistant -> tool_calls -> tool_response
+		let messages = vec![
+			create_test_message("user", "List files", None, None),
+			create_test_message(
+				"assistant",
+				"I'll list the files for you.",
+				Some(
+					json!([{"id": "call_123", "name": "list_files", "arguments": {"directory": "."}}]),
+				),
+				None,
+			),
+			create_test_message(
+				"tool",
+				"file1.txt\nfile2.txt",
+				None,
+				Some("call_123".to_string()),
+			),
+			create_test_message(
+				"assistant",
+				"Here are the files in the directory.",
+				None,
+				None,
+			),
+		];
+
+		// This should NOT be considered incomplete
+		assert!(!has_incomplete_tool_calls(&messages));
+	}
+
+	#[test]
+	fn test_has_incomplete_tool_calls_incomplete_sequence() {
+		// Test incomplete tool call sequence: assistant -> tool_calls -> [missing tool response]
+		let messages = vec![
+			create_test_message("user", "List files", None, None),
+			create_test_message(
+				"assistant",
+				"I'll list the files for you.",
+				Some(
+					json!([{"id": "call_123", "name": "list_files", "arguments": {"directory": "."}}]),
+				),
+				None,
+			),
+			// Missing tool response - this should be detected as incomplete
+		];
+
+		// This SHOULD be considered incomplete
+		assert!(has_incomplete_tool_calls(&messages));
+	}
+
+	#[test]
+	fn test_has_incomplete_tool_calls_multiple_calls_partial() {
+		// Test multiple tool calls where some have responses and some don't
+		let messages = vec![
+			create_test_message("user", "Do multiple things", None, None),
+			create_test_message(
+				"assistant",
+				"I'll do multiple things.",
+				Some(json!([
+					{"id": "call_123", "name": "list_files", "arguments": {"directory": "."}},
+					{"id": "call_456", "name": "shell", "arguments": {"command": "pwd"}}
+				])),
+				None,
+			),
+			create_test_message(
+				"tool",
+				"file1.txt\nfile2.txt",
+				None,
+				Some("call_123".to_string()),
+			),
+			// Missing response for call_456 - this should be detected as incomplete
+		];
+
+		// This SHOULD be considered incomplete (call_456 has no response)
+		assert!(has_incomplete_tool_calls(&messages));
+	}
+
+	#[test]
+	fn test_has_incomplete_tool_calls_no_tool_calls() {
+		// Test messages with no tool calls
+		let messages = vec![
+			create_test_message("user", "Hello", None, None),
+			create_test_message("assistant", "Hello! How can I help you?", None, None),
+		];
+
+		// This should NOT be considered incomplete
+		assert!(!has_incomplete_tool_calls(&messages));
+	}
+
+	#[test]
+	fn test_clean_interrupted_tool_calls_preserves_complete() {
+		// Test that complete sequences are preserved
+		let mut messages = vec![
+			create_test_message("user", "List files", None, None),
+			create_test_message(
+				"assistant",
+				"I'll list the files for you.",
+				Some(
+					json!([{"id": "call_123", "name": "list_files", "arguments": {"directory": "."}}]),
+				),
+				None,
+			),
+			create_test_message(
+				"tool",
+				"file1.txt\nfile2.txt",
+				None,
+				Some("call_123".to_string()),
+			),
+			create_test_message("assistant", "Here are the files.", None, None),
+		];
+
+		let original_count = messages.len();
+		let cleaned = clean_interrupted_tool_calls(&mut messages, "test_session", "Test");
+
+		// Should not clean anything (complete sequence)
+		assert!(!cleaned);
+		assert_eq!(messages.len(), original_count);
+	}
+
+	#[test]
+	fn test_clean_interrupted_tool_calls_removes_incomplete() {
+		// Test that incomplete sequences are removed
+		let mut messages = vec![
+			create_test_message("user", "List files", None, None),
+			create_test_message(
+				"assistant",
+				"I'll list the files for you.",
+				Some(
+					json!([{"id": "call_123", "name": "list_files", "arguments": {"directory": "."}}]),
+				),
+				None,
+			),
+			// Missing tool response - this assistant message should be removed
+		];
+
+		let cleaned = clean_interrupted_tool_calls(&mut messages, "test_session", "Test");
+
+		// Should clean the incomplete assistant message
+		assert!(cleaned);
+		assert_eq!(messages.len(), 1); // Only user message should remain
+		assert_eq!(messages[0].role, "user");
+	}
 }
