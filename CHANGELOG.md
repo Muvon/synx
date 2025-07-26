@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.10.2] - 2025-07-26
+
+### 📋 Release Summary
+
+This release improves session reliability by addressing incomplete tool calls, message truncation, and session resuming issues (105fcd80, 2ba67733, a281b8d5, 54aed7c5, 0ace2654, d9ac1b30, 7b5dfada). Additionally, the /done command has been streamlined for better usability, and new quick start and troubleshooting guides have been added to enhance user onboarding (855d1898, 9872b47f).
+
+
+### 🔧 Improvements & Optimizations
+
+- **done**: move /done command to dedicated file and clean code `855d1898`
+
+### 🐛 Bug Fixes & Stability
+
+- **session**: detect and truncate earliest incomplete tool calls on r... `105fcd80`
+- **session**: truncate messages on interrupted tool calls to clean state `2ba67733`
+- **session**: correct tool_calls reconstruction on session resume `a281b8d5`
+- **session**: restore layers state and cost on session resume `54aed7c5`
+- **session**: handle incomplete tool calls in session resuming `0ace2654`
+- **session**: re-add initial messages on /done command completion `d9ac1b30`
+- **session**: prevent infinite loop on Ctrl+C cancellation `7b5dfada`
+
+### 📚 Documentation & Examples
+
+- **instructions**: add quick start and troubleshooting guide `9872b47f`
+
+### 📊 Release Summary
+
+**Total commits**: 9 across 3 categories
+
+🔧 **1** improvement - *Better performance & code quality*
+🐛 **7** bug fixes - *Improved stability*
+📚 **1** documentation update - *Better developer experience*
+
 ## [0.10.1] - 2025-07-17
 
 ### 📋 Release Summary
