@@ -86,6 +86,8 @@ pub struct ChatCompletionWithValidationParams<'a> {
 	pub chat_session: Option<&'a mut crate::session::chat::session::ChatSession>,
 	/// Cancellation token for request abortion
 	pub cancellation_token: Option<tokio::sync::watch::Receiver<bool>>,
+	/// Flag to prevent infinite continuation loops during recursive calls
+	pub is_continuation_call: bool,
 }
 
 impl<'a> ChatCompletionWithValidationParams<'a> {
@@ -110,6 +112,7 @@ impl<'a> ChatCompletionWithValidationParams<'a> {
 			config,
 			chat_session: None,
 			cancellation_token: None,
+			is_continuation_call: false,
 		}
 	}
 
@@ -131,6 +134,12 @@ impl<'a> ChatCompletionWithValidationParams<'a> {
 	/// Set cancellation token
 	pub fn with_cancellation_token(mut self, token: watch::Receiver<bool>) -> Self {
 		self.cancellation_token = Some(token);
+		self
+	}
+
+	/// Mark this as a continuation call to prevent infinite loops
+	pub fn as_continuation_call(mut self) -> Self {
+		self.is_continuation_call = true;
 		self
 	}
 }
@@ -1214,41 +1223,55 @@ pub async fn chat_completion_with_validation(
 
 		// If we have a chat session, use automatic continuation system
 		if let Some(session) = params.chat_session {
-			// Use the unified continuation system for all context limit scenarios
-			if crate::session::chat::session_continuation::check_and_handle_continuation(
-				session,
-				params.config,
-			)
-			.await?
-			{
-				// Continuation was triggered - now make API call with updated messages
-				// Clone messages to avoid borrowing conflicts
-				let messages = session.session.messages.clone();
-
-				// Make API call with continuation message using Box::pin for recursion
-				let continuation_params = ChatCompletionWithValidationParams::new(
-					&messages,
-					params.model,
-					params.temperature,
-					params.top_p,
-					params.top_k,
-					params.max_tokens,
+			// CRITICAL FIX: Don't trigger continuation during recursive continuation calls
+			// This prevents infinite loops when continuation itself fails with retries
+			if !params.is_continuation_call {
+				// Use the unified continuation system for all context limit scenarios
+				if crate::session::chat::session_continuation::check_and_handle_continuation(
+					session,
 					params.config,
 				)
-				.with_max_retries(params.max_retries)
-				.with_chat_session(session);
+				.await?
+				{
+					// Continuation was triggered - now make API call with updated messages
+					// Clone messages to avoid borrowing conflicts
+					let messages = session.session.messages.clone();
 
-				let continuation_params = if let Some(token) = params.cancellation_token {
-					continuation_params.with_cancellation_token(token)
+					// Make API call with continuation message using Box::pin for recursion
+					let continuation_params = ChatCompletionWithValidationParams::new(
+						&messages,
+						params.model,
+						params.temperature,
+						params.top_p,
+						params.top_k,
+						params.max_tokens,
+						params.config,
+					)
+					.with_max_retries(params.max_retries)
+					.with_chat_session(session)
+					.as_continuation_call(); // CRITICAL: Mark as continuation call to prevent infinite loops
+
+					let continuation_params = if let Some(token) = params.cancellation_token {
+						continuation_params.with_cancellation_token(token)
+					} else {
+						continuation_params
+					};
+
+					return Box::pin(chat_completion_with_validation(continuation_params)).await;
 				} else {
-					continuation_params
-				};
-
-				return Box::pin(chat_completion_with_validation(continuation_params)).await;
+					// No continuation needed but still over limit - return error
+					return Err(anyhow::anyhow!(
+						"Input size ({} tokens) exceeds provider limit ({} tokens) for {} {}",
+						total_input_tokens,
+						max_input_tokens,
+						provider.name(),
+						actual_model
+					));
+				}
 			} else {
-				// No continuation needed but still over limit - return error
+				// This is already a continuation call and still over limit - return error to break the loop
 				return Err(anyhow::anyhow!(
-					"Input size ({} tokens) exceeds provider limit ({} tokens) for {} {}",
+					"Continuation call input size ({} tokens) exceeds provider limit ({} tokens) for {} {} - breaking infinite loop",
 					total_input_tokens,
 					max_input_tokens,
 					provider.name(),
