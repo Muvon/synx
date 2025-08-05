@@ -180,6 +180,7 @@ pub fn read_user_input(estimated_cost: f64) -> Result<InputResult> {
 		.auto_add_history(true) // Automatically add lines to history
 		.bell_style(rustyline::config::BellStyle::None) // No bell
 		.max_history_size(1000)? // Limit history size
+		.color_mode(rustyline::ColorMode::Enabled) // Enable proper ANSI color handling
 		.build();
 
 	// Create editor with our custom helper

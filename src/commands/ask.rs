@@ -341,6 +341,7 @@ fn get_interactive_input() -> Result<String> {
 		.auto_add_history(true)
 		.bell_style(rustyline::config::BellStyle::None)
 		.max_history_size(500)?
+		.color_mode(rustyline::ColorMode::Enabled) // Enable proper ANSI color handling
 		.build();
 
 	let mut editor: Editor<(), rustyline::history::FileHistory> = Editor::with_config(config)?;
