@@ -83,10 +83,11 @@ pub fn get_all_functions(config: &crate::config::Config) -> Vec<McpFunction> {
 pub async fn execute_agent_command(
 	call: &McpToolCall,
 	config: &crate::config::Config,
+	cancellation_token: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<McpToolResult> {
 	// Handle call_llm tool
 	if call.tool_name == "call_llm" {
-		return execute_call_llm(call, config).await;
+		return execute_call_llm(call, config, cancellation_token).await;
 	}
 
 	// Extract layer name from tool name (agent_<layer_name>)
@@ -134,16 +135,17 @@ pub async fn execute_agent_command(
 	};
 
 	// Process task through the agent layer using the provider system
-	let (result, agent_costs) = match process_layer_as_agent(agent_config, task, config).await {
-		Ok(res) => res,
-		Err(e) => {
-			return Ok(McpToolResult::error(
-				call.tool_name.clone(),
-				call.tool_id.clone(),
-				format!("Agent processing failed: {}", e),
-			));
-		}
-	};
+	let (result, agent_costs) =
+		match process_layer_as_agent(agent_config, task, config, cancellation_token).await {
+			Ok(res) => res,
+			Err(e) => {
+				return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					format!("Agent processing failed: {}", e),
+				));
+			}
+		};
 
 	// Return MCP-compliant result with cost metadata
 	match serde_json::to_value(agent_costs) {
@@ -166,6 +168,7 @@ async fn process_layer_as_agent(
 	layer_config: &crate::session::layers::LayerConfig,
 	task: &str,
 	config: &crate::config::Config,
+	cancellation_token: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<(String, crate::session::AgentCostData)> {
 	// Create isolated session for agent
 	let agent_session = crate::session::Session::new(
@@ -193,7 +196,11 @@ async fn process_layer_as_agent(
 	let layer = GenericLayer::new(agent_layer_config);
 
 	// Process task through layer with full MCP tools support
-	let operation_cancelled = tokio::sync::watch::channel(false).1;
+	// CRITICAL FIX: Use the passed cancellation token instead of creating a new one
+	let operation_cancelled = cancellation_token.unwrap_or_else(|| {
+		// Fallback: create a never-cancelled token if none provided
+		tokio::sync::watch::channel(false).1
+	});
 	let result = layer
 		.process(task, &agent_session, config, operation_cancelled)
 		.await?;
@@ -240,6 +247,7 @@ async fn process_layer_as_agent(
 async fn execute_call_llm(
 	call: &McpToolCall,
 	config: &crate::config::Config,
+	cancellation_token: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<McpToolResult> {
 	// Extract required parameters
 	let task = call
@@ -320,7 +328,8 @@ async fn execute_call_llm(
 	};
 
 	// Process task through the layer using existing logic
-	let (result, agent_costs) = process_layer_as_agent(&layer_config, task, config).await?;
+	let (result, agent_costs) =
+		process_layer_as_agent(&layer_config, task, config, cancellation_token).await?;
 
 	// Return MCP-compliant result with cost metadata
 	Ok(McpToolResult::success_with_metadata(

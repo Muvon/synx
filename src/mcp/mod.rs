@@ -615,7 +615,8 @@ async fn try_execute_tool_call(
 	}
 
 	// Create the actual tool execution future (without cancellation handling)
-	let tool_execution_future = execute_tool_without_cancellation(call, config);
+	let tool_execution_future =
+		execute_tool_without_cancellation(call, config, cancellation_token.clone());
 
 	// Apply centralized cancellation wrapper
 	if let Some(token) = cancellation_token {
@@ -656,6 +657,7 @@ async fn try_execute_tool_call(
 async fn execute_tool_without_cancellation(
 	call: &McpToolCall,
 	config: &crate::config::Config,
+	cancellation_token: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<McpToolResult> {
 	// STATIC ROUTING: Use pre-built tool map ONLY
 	let tool_server_map = {
@@ -817,7 +819,12 @@ async fn execute_tool_without_cancellation(
 								call.tool_name,
 								target_server.name()
 							);
-							let mut result = agent::execute_agent_command(call, config).await?;
+							let mut result = agent::execute_agent_command(
+								call,
+								config,
+								cancellation_token.clone(),
+							)
+							.await?;
 							result.tool_id = call.tool_id.clone();
 							return Ok(result);
 						} else {
