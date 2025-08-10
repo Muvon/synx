@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.11.0] - 2025-08-10
+
+### 📋 Release Summary
+
+This release adds support for the latest GPT-5 and Anthropic opus-4-1 AI models, expanding the range of AI capabilities (076e797d, b8f3576b). Several improvements enhance session stability and usability, including better input rendering with ANSI color support and cancellation options for agent tools (574d08e5, ed9e2820, e245ecff, a07109dd). Additionally, bug fixes prevent infinite retry loops and improve text editing reliability (574d08e5, 315ddfda).
+
+
+### ✨ New Features & Enhancements
+
+- **openai**: add GPT-5 model support with pricing and params `076e797d`
+- **anthropic**: add opus-4-1 model and fix temp/top_p handling `b8f3576b`
+
+### 🐛 Bug Fixes & Stability
+
+- **session**: prevent infinite retries on continuation calls `574d08e5`
+- **text_editing**: prevent repeated line_replace on new lines `315ddfda`
+- **mcp**: add cancellation support to agent tool execution `ed9e2820`
+- **session**: enable ANSI color mode for rustyline input rendering `e245ecff`
+- **session**: prevent infinite retry loops on continuation errors `a07109dd`
+
+### 📊 Release Summary
+
+**Total commits**: 7 across 2 categories
+
+✨ **2** new features - *Enhanced functionality*
+🐛 **5** bug fixes - *Improved stability*
+
 ## [0.10.2] - 2025-07-26
 
 ### 📋 Release Summary
