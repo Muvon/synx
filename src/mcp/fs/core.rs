@@ -282,7 +282,16 @@ pub async fn execute_text_editor(call: &McpToolCall) -> Result<McpToolResult> {
 				None => None,
 			};
 
-			file_ops::view_file_spec(call, Path::new(&path), view_range).await
+			let result = file_ops::view_file_spec(call, Path::new(&path), view_range).await?;
+
+			// RESET: Clear line modification tracking after successful view
+			if !result.result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false) {
+				if let Err(e) = crate::mcp::fs::text_editing::reset_line_count_tracking(Path::new(&path)).await {
+					crate::log_debug!("Failed to reset line tracking for {}: {}", path, e);
+				}
+			}
+
+			Ok(result)
 		},
 		"view_many" => {
 			// Extract paths parameter for view_many command

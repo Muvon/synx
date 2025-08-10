@@ -30,6 +30,31 @@ lazy_static! {
 	static ref FILE_LOCKS: Mutex<HashMap<String, Arc<Mutex<()>>>> = Mutex::new(HashMap::new());
 }
 
+// Thread-safe line count change tracking for line number protection
+lazy_static! {
+	static ref FILE_LINE_COUNT_CHANGES: Mutex<HashMap<String, LineCountChangeInfo>> =
+		Mutex::new(HashMap::new());
+}
+
+#[derive(Debug, Clone)]
+struct LineCountChangeInfo {
+	last_operation: String,
+	original_line_count: usize,
+	new_line_count: usize,
+	net_change: i32, // positive = lines added, negative = lines removed
+}
+
+impl LineCountChangeInfo {
+	fn new(operation: &str, original_count: usize, new_count: usize) -> Self {
+		Self {
+			last_operation: operation.to_string(),
+			original_line_count: original_count,
+			new_line_count: new_count,
+			net_change: new_count as i32 - original_count as i32,
+		}
+	}
+}
+
 // Acquire a file-specific lock to prevent concurrent writes to the same file
 async fn acquire_file_lock(path: &Path) -> Result<Arc<Mutex<()>>> {
 	let path_str = path.to_string_lossy().to_string();
@@ -42,6 +67,89 @@ async fn acquire_file_lock(path: &Path) -> Result<Arc<Mutex<()>>> {
 		.clone();
 
 	Ok(file_lock)
+}
+
+// Check if operation changes line count and mark if needed
+async fn check_and_mark_line_count_change(
+	path: &Path,
+	operation: &str,
+	original_content: &str,
+	new_content: &str,
+) -> Result<()> {
+	let original_lines = original_content.lines().count();
+	let new_lines = new_content.lines().count();
+
+	// Only mark if line count actually changed
+	if original_lines != new_lines {
+		let path_str = path.to_string_lossy().to_string();
+		let mut changes = FILE_LINE_COUNT_CHANGES.lock().await;
+		changes.insert(
+			path_str,
+			LineCountChangeInfo::new(operation, original_lines, new_lines),
+		);
+	}
+
+	Ok(())
+}
+
+// Check if file has line count changes (used by protected operations)
+async fn has_line_count_changes(path: &Path) -> Result<bool> {
+	let path_str = path.to_string_lossy().to_string();
+	let changes = FILE_LINE_COUNT_CHANGES.lock().await;
+	Ok(changes.contains_key(&path_str))
+}
+
+// Reset tracking (called by view operations) - public for core.rs access
+pub async fn reset_line_count_tracking(path: &Path) -> Result<()> {
+	let path_str = path.to_string_lossy().to_string();
+	let mut changes = FILE_LINE_COUNT_CHANGES.lock().await;
+	changes.remove(&path_str);
+	Ok(())
+}
+
+// Validate if line-dependent operation is safe
+async fn validate_line_dependent_operation(
+	path: &Path,
+	operation: &str,
+	call: &McpToolCall,
+) -> Result<Option<McpToolResult>> {
+	if has_line_count_changes(path).await? {
+		let path_str = path.to_string_lossy().to_string();
+		let changes = FILE_LINE_COUNT_CHANGES.lock().await;
+
+		if let Some(info) = changes.get(&path_str) {
+			let change_description = if info.net_change > 0 {
+				format!("added {} lines", info.net_change)
+			} else {
+				format!("removed {} lines", -info.net_change)
+			};
+
+			let error_msg = format!(
+				"CRITICAL: File line count has been changed. Line numbers are no longer valid. \
+				Use 'view' or 'view_range' command first to refresh line numbers, then retry your operation.\n\n\
+				Previous operation: {} ({} → {} lines, {})\n\
+				File: {}\n\n\
+				Safe workflow:\n\
+				1. text_editor(command=\"view\", path=\"{}\")  # or view_range\n\
+				2. [Your {} operation with fresh line numbers]",
+				info.last_operation,
+				info.original_line_count,
+				info.new_line_count,
+				change_description,
+				path_str,
+				path_str,
+				operation
+			);
+
+			return Ok(Some(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				error_msg,
+			)));
+		}
+	}
+
+	Ok(None)
 }
 
 // Helper function to resolve line indices, supporting negative indexing
@@ -194,9 +302,16 @@ pub async fn str_replace_spec(
 	let new_content = content.replace(old_str, new_str);
 
 	// Write the new content
-	tokio_fs::write(path, new_content)
+	tokio_fs::write(path, &new_content)
 		.await
 		.map_err(|e| anyhow!("Permission denied. Cannot write to file: {}", e))?;
+
+	// CHECK: Mark only if line count changed
+	if let Err(e) =
+		check_and_mark_line_count_change(path, "str_replace", &content, &new_content).await
+	{
+		crate::log_debug!("Failed to check line count change: {}", e);
+	}
 
 	Ok(McpToolResult {
 		tool_name: "text_editor".to_string(),
@@ -215,6 +330,11 @@ pub async fn insert_text_spec(
 	insert_line: usize,
 	new_str: &str,
 ) -> Result<McpToolResult> {
+	// PROTECTION: Check if operation is safe (line-dependent)
+	if let Some(error_result) = validate_line_dependent_operation(path, "insert", call).await? {
+		return Ok(error_result);
+	}
+
 	if !path.exists() {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
@@ -267,9 +387,15 @@ pub async fn insert_text_spec(
 	};
 
 	// Write the new content
-	tokio_fs::write(path, final_content)
+	tokio_fs::write(path, &final_content)
 		.await
 		.map_err(|e| anyhow!("Permission denied. Cannot write to file: {}", e))?;
+
+	// CHECK: Insert always changes line count (adds lines)
+	if let Err(e) = check_and_mark_line_count_change(path, "insert", &content, &final_content).await
+	{
+		crate::log_debug!("Failed to check line count change: {}", e);
+	}
 
 	Ok(McpToolResult {
 		tool_name: "text_editor".to_string(),
@@ -289,6 +415,13 @@ pub async fn line_replace_spec(
 	view_range: (usize, usize),
 	new_str: &str,
 ) -> Result<McpToolResult> {
+	// PROTECTION: Check if operation is safe (line-dependent)
+	if let Some(error_result) =
+		validate_line_dependent_operation(path, "line_replace", call).await?
+	{
+		return Ok(error_result);
+	}
+
 	if !path.exists() {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
@@ -417,9 +550,16 @@ pub async fn line_replace_spec(
 	};
 
 	// Write the new content
-	tokio_fs::write(path, final_content)
+	tokio_fs::write(path, &final_content)
 		.await
 		.map_err(|e| anyhow!("Permission denied. Cannot write to file: {}", e))?;
+
+	// CHECK: Mark only if line count changed
+	if let Err(e) =
+		check_and_mark_line_count_change(path, "line_replace", &file_content, &final_content).await
+	{
+		crate::log_debug!("Failed to check line count change: {}", e);
+	}
 
 	// Create a snippet showing the replaced lines with smart highlighting
 	let replaced_snippet = if original_lines.is_empty() {
@@ -692,6 +832,11 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 
 	let path = Path::new(path_str);
 
+	// PROTECTION: Check if operation is safe (line-dependent)
+	if let Some(error_result) = validate_line_dependent_operation(path, "batch_edit", call).await? {
+		return Ok(error_result);
+	}
+
 	// Check if file exists
 	if !path.exists() {
 		return Ok(McpToolResult::error(
@@ -899,6 +1044,14 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 			call.tool_id.clone(),
 			format!("Failed to write file '{}': {}", path_str, e),
 		));
+	}
+
+	// CHECK: Mark only if net line count changed after all operations
+	if let Err(e) =
+		check_and_mark_line_count_change(path, "batch_edit", &original_content, &final_content)
+			.await
+	{
+		crate::log_debug!("Failed to check line count change: {}", e);
 	}
 
 	// Update operation details with success status
