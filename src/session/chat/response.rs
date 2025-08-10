@@ -506,7 +506,8 @@ pub async fn process_continuation_message_immediately(
 		params.config,
 	)
 	.with_max_retries(params.chat_session.max_retries)
-	.with_cancellation_token(params.operation_cancelled.clone());
+	.with_cancellation_token(params.operation_cancelled.clone())
+	.as_continuation_call(); // CRITICAL FIX: Mark as continuation call to prevent infinite retry loops
 
 	// Make API call with continuation message
 	match crate::session::chat_completion_with_validation(chat_params).await {
