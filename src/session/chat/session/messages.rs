@@ -107,6 +107,57 @@ impl ChatSession {
 		}
 	}
 
+	// Check if request spending threshold is exceeded and stop execution if needed
+	pub fn check_request_spending_threshold(&mut self, config: &Config) -> Result<bool> {
+		// If threshold is 0 or negative, feature is disabled
+		if config.max_request_spending_threshold <= 0.0 {
+			return Ok(true); // Continue without checking
+		}
+
+		let current_cost = self.session.info.total_cost;
+		let threshold = config.max_request_spending_threshold;
+		let cost_since_request_start = current_cost - self.request_spending_checkpoint;
+
+		// Check if we've exceeded the threshold since request start
+		if cost_since_request_start >= threshold {
+			use colored::*;
+
+			println!();
+			println!(
+				"{}",
+				"⚠️  REQUEST SPENDING THRESHOLD EXCEEDED ⚠️"
+					.bright_red()
+					.bold()
+			);
+			println!(
+				"{} ${:.5}",
+				"Current request cost:".bright_cyan(),
+				cost_since_request_start
+			);
+			println!("{} ${:.5}", "Threshold:".bright_cyan(), threshold);
+			println!(
+				"{} ${:.5}",
+				"Total session cost:".bright_cyan(),
+				current_cost
+			);
+			println!();
+			println!(
+				"{}",
+				"Request execution stopped to prevent overspending.".bright_red()
+			);
+			println!();
+
+			return Ok(false); // Stop execution
+		}
+
+		Ok(true) // Under threshold, continue
+	}
+
+	// Initialize request spending checkpoint at the start of a new request
+	pub fn start_request_spending_tracking(&mut self) {
+		self.request_spending_checkpoint = self.session.info.total_cost;
+	}
+
 	// Add a system message
 	pub fn add_system_message(&mut self, content: &str) -> Result<()> {
 		// Log to raw session log

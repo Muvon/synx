@@ -127,6 +127,33 @@ allowed_tools = []"#
 		}
 	}
 
+	// Check request spending threshold before executing command layer
+	match session.check_request_spending_threshold(config) {
+		Ok(should_continue) => {
+			if !should_continue {
+				// Request spending threshold exceeded - stop execution
+				println!(
+					"{}",
+					"✗ Command execution cancelled due to request spending threshold.".bright_red()
+				);
+				return Ok(false);
+			}
+		}
+		Err(e) => {
+			// Error checking request threshold, log warning and stop execution
+			println!(
+				"{}: {}",
+				"Warning: Error checking request spending threshold".bright_yellow(),
+				e
+			);
+			println!(
+				"{}",
+				"✗ Command execution cancelled due to request threshold check error.".bright_red()
+			);
+			return Ok(false);
+		}
+	}
+
 	// Execute the command layer
 	println!();
 	match command_executor::execute_command_layer(

@@ -220,6 +220,31 @@ pub async fn process_tool_results(
 		}
 	}
 
+	// Check request spending threshold before making follow-up API call
+	match chat_session.check_request_spending_threshold(config) {
+		Ok(should_continue) => {
+			if !should_continue {
+				// Request spending threshold exceeded - stop execution
+				animation_cancel.store(true, Ordering::SeqCst);
+				let _ = animation_task.await;
+				println!(
+					"{}",
+					"✗ Tool follow-up cancelled due to request spending threshold.".bright_red()
+				);
+				return Ok(None);
+			}
+		}
+		Err(e) => {
+			// Error checking request threshold, log warning and continue
+			use colored::*;
+			println!(
+				"{}: {}",
+				"Warning: Error checking request spending threshold".bright_yellow(),
+				e
+			);
+		}
+	}
+
 	// CRITICAL FIX: Check for cancellation before making follow-up API call
 	if *operation_cancelled.borrow() {
 		// Stop animation before returning

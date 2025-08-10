@@ -75,6 +75,11 @@ markdown_theme = "default"
 # When exceeded, Octomind will prompt before continuing
 max_session_spending_threshold = 0.0
 
+# Request spending threshold in USD (0.0 = no limit)
+# When exceeded during a single request processing, Octomind will stop execution
+# This tracks cost from user input until next user input or session end
+max_request_spending_threshold = 0.0
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND CONFIGURATIONS
 # Configure behavior for built-in commands like ask and shell

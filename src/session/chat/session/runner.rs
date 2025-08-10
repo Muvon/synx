@@ -571,6 +571,26 @@ async fn execute_api_call_and_process_response(
 				);
 			}
 		}
+
+		// Check request spending threshold
+		match chat_session.check_request_spending_threshold(config) {
+			Ok(should_continue) => {
+				if !should_continue {
+					// Request spending threshold exceeded - stop execution
+					let _ = animation_task.await;
+					return Ok(());
+				}
+			}
+			Err(e) => {
+				// Error checking request threshold, log and continue
+				use colored::*;
+				println!(
+					"{}: {}",
+					"Warning: Error checking request spending threshold".bright_yellow(),
+					e
+				);
+			}
+		}
 	}
 
 	// Make API call
@@ -973,6 +993,9 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		if input.trim().is_empty() {
 			continue;
 		}
+
+		// Initialize request spending tracking at the start of each request
+		chat_session.start_request_spending_tracking();
 
 		// Immediate feedback - show that we received the input
 		// This reduces perceived latency by giving instant visual feedback

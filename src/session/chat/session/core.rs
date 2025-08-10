@@ -133,6 +133,7 @@ pub struct ChatSession {
 	pub estimated_cost: f64,
 	pub cache_next_user_message: bool, // Flag to cache the next user message
 	pub spending_threshold_checkpoint: f64, // Track spending at last threshold check
+	pub request_spending_checkpoint: f64, // Track spending at start of current request
 	pub pending_image: Option<crate::session::image::ImageAttachment>, // Pending image attachment
 	pub max_retries: u32,              // Maximum number of retries for provider errors
 	pub continuation_pending: bool,    // Flag for session continuation state
@@ -222,6 +223,7 @@ impl ChatSession {
 			estimated_cost: 0.0,                // Initialize estimated cost as zero
 			cache_next_user_message: false,     // Initialize cache flag
 			spending_threshold_checkpoint: 0.0, // Initialize spending checkpoint
+			request_spending_checkpoint: 0.0,   // Initialize request spending checkpoint
 			pending_image: None,                // Initialize pending image
 			max_retries: max_retries_value,     // Set max retries value
 			continuation_pending: false,        // Initialize continuation state
@@ -354,6 +356,7 @@ impl ChatSession {
 						estimated_cost: restored_cost,      // FIXED: Use actual cost from session
 						cache_next_user_message: false,     // Initialize cache flag
 						spending_threshold_checkpoint: 0.0, // Initialize spending checkpoint
+						request_spending_checkpoint: 0.0,   // Initialize request spending checkpoint
 						pending_image: None,                // Initialize pending image
 						max_retries: params.max_retries.unwrap_or(0), // Use provided max_retries or default to 0
 						continuation_pending: false,        // Initialize continuation state

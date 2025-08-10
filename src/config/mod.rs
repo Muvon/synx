@@ -136,6 +136,8 @@ pub struct Config {
 	pub markdown_theme: String,
 	// Session spending threshold in USD - if > 0, prompt user when exceeded
 	pub max_session_spending_threshold: f64,
+	// Request spending threshold in USD - if > 0, stop execution when exceeded during single request
+	pub max_request_spending_threshold: f64,
 
 	// Use long-term (1h) caching for system messages (strict: must be in config)
 	pub use_long_system_cache: bool,
