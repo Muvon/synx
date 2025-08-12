@@ -2014,6 +2014,11 @@ mod tests {
 		fs::write(&file_path, "line 1\nline 2\nline 3\nline 4\nline 5\n")
 			.await
 			.unwrap();
+
+		// Reset line count tracking since we rewrote the file
+		crate::mcp::fs::text_editing::reset_line_count_tracking(&file_path)
+			.await
+			.unwrap();
 		let call = McpToolCall {
 			tool_id: "test".to_string(),
 			tool_name: "batch_edit".to_string(),
@@ -2030,6 +2035,7 @@ mod tests {
 		};
 
 		let result = execute_batch_edit(&call).await.unwrap();
+
 		// Check if operation succeeded
 		if let Some(content_array) = result.result["content"].as_array() {
 			if let Some(first_content) = content_array.first() {
@@ -2047,6 +2053,7 @@ mod tests {
 
 		let content = fs::read_to_string(&file_path).await.unwrap();
 		let lines: Vec<&str> = content.lines().collect();
+
 		assert_eq!(
 			lines[4], "INSERTED AFTER LINE 4",
 			"Should insert after line 4"
