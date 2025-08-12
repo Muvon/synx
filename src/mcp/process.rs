@@ -849,8 +849,10 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 	);
 
 	// Check for cancellation during the operation with faster polling
-	let cancellation_future = async {
-		if let Some(ref token) = cancellation_token {
+	// Clone the token to avoid complex reference types in async block
+	let cancellation_token_clone = cancellation_token.clone();
+	let cancellation_future = async move {
+		if let Some(token) = cancellation_token_clone {
 			loop {
 				tokio::time::sleep(Duration::from_millis(10)).await; // Much faster polling
 				if *token.borrow() {
