@@ -530,10 +530,20 @@ pub async fn process_continuation_message_immediately(
 			Box::pin(process_response(continuation_params)).await
 		}
 		Err(e) => {
-			// If continuation fails, log the error but don't crash the session
-			log_info!("Continuation API call failed: {}", e);
-			log_info!("Falling back to normal session flow");
-			Ok(())
+			// CRITICAL FIX: Reset continuation state when API call fails after exhausting retries
+			// This prevents infinite retry loops when rate limits are hit
+			log_info!(
+				"Continuation API call failed after exhausting retries: {}",
+				e
+			);
+
+			// Reset continuation state to prevent infinite loop
+			params.chat_session.continuation_pending = false;
+			log_debug!("Continuation state reset due to API failure - breaking continuation loop");
+
+			// Return the error to properly propagate it up the chain
+			// This will cause the session runner to handle the error appropriately
+			Err(e)
 		}
 	}
 }
