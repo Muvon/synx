@@ -535,9 +535,9 @@ pub async fn execute_tool_call(
 
 	match result {
 		Ok(tool_result) => {
-			// Apply large response handling to ALL tools in one centralized place
-			let checked_result = handle_large_response(tool_result, config).await?;
-			Ok((checked_result, tool_time_ms))
+			// Skip individual large response handling when called from parallel execution
+			// Large response handling is now done in batch after all tools complete
+			Ok((tool_result, tool_time_ms))
 		}
 		Err(e) => Err(e),
 	}
@@ -944,7 +944,7 @@ async fn execute_tool_without_cancellation(
 }
 
 // Helper function to handle large response warnings
-async fn handle_large_response(
+pub async fn handle_large_response(
 	result: McpToolResult,
 	config: &crate::config::Config,
 ) -> Result<McpToolResult> {

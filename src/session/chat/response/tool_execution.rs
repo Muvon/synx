@@ -21,6 +21,7 @@ use crate::session::chat::ToolProcessor;
 use crate::{log_debug, log_info};
 use anyhow::Result;
 use colored::Colorize;
+use std::io::IsTerminal;
 
 /// Context for tool execution - can be either main session or layer context
 pub enum ToolExecutionContext<'a> {
@@ -453,7 +454,183 @@ async fn execute_tools_parallel_internal(
 		}
 	}
 
-	Ok((tool_results, total_tool_time_ms))
+	// Handle large outputs with batched confirmation
+	let processed_results = handle_large_tool_results(tool_results, config).await?;
+
+	Ok((processed_results, total_tool_time_ms))
+}
+
+// Handle large tool results with batched confirmation
+async fn handle_large_tool_results(
+	results: Vec<crate::mcp::McpToolResult>,
+	config: &Config,
+) -> Result<Vec<crate::mcp::McpToolResult>> {
+	use colored::Colorize;
+	use std::io::{stdin, stdout, Write};
+
+	// Find large results
+	let mut large_indices = Vec::new();
+	let mut total_tokens = 0;
+
+	for (index, result) in results.iter().enumerate() {
+		let estimated_tokens = crate::session::estimate_tokens(&format!("{}", result.result));
+		if estimated_tokens > config.mcp_response_warning_threshold {
+			large_indices.push((index, estimated_tokens));
+			total_tokens += estimated_tokens;
+		}
+	}
+
+	// No large results - return as is
+	if large_indices.is_empty() {
+		return Ok(results);
+	}
+
+	// Single large result - use existing individual behavior
+	if large_indices.len() == 1 {
+		let (index, _) = large_indices[0];
+		let result = &results[index];
+		let processed = crate::mcp::handle_large_response(result.clone(), config).await?;
+		let mut new_results = results;
+		new_results[index] = processed;
+		return Ok(new_results);
+	}
+
+	// Multiple large results - batch handling
+	// Auto-decline in non-interactive mode
+	if !std::io::stdin().is_terminal() {
+		println!(
+			"{}",
+			format!(
+				"Large outputs from {} tools ({} total tokens) automatically declined in non-interactive mode.",
+				large_indices.len(), total_tokens
+			)
+			.bright_red()
+		);
+		let mut processed_results = results;
+		for (index, tokens) in large_indices {
+			processed_results[index] = crate::mcp::McpToolResult::error(
+				processed_results[index].tool_name.clone(),
+				processed_results[index].tool_id.clone(),
+				format!("Large output from tool '{}' ({} tokens) was automatically declined in non-interactive mode.", processed_results[index].tool_name, tokens)
+			);
+		}
+		return Ok(processed_results);
+	}
+
+	// Interactive mode - show batched warning
+	println!(
+		"{}",
+		format!(
+			"⚠️  WARNING: {} tools produced large outputs (total: {} tokens)",
+			large_indices.len(),
+			total_tokens
+		)
+		.bright_yellow()
+	);
+
+	// Show each large tool
+	for (i, (index, tokens)) in large_indices.iter().enumerate() {
+		let result = &results[*index];
+		let server_name =
+			crate::session::chat::response::get_tool_server_name_async(&result.tool_name, config)
+				.await;
+		println!(
+			"{}",
+			format!(
+				"[{}] {} ({}) - {} tokens{}",
+				i + 1,
+				result.tool_name,
+				server_name,
+				tokens,
+				if !result.tool_id.is_empty() {
+					format!(" [ID: {}]", result.tool_id)
+				} else {
+					String::new()
+				}
+			)
+			.bright_yellow()
+		);
+	}
+
+	println!(
+		"{}",
+		"This may consume significant tokens and impact your usage limits.".bright_yellow()
+	);
+
+	// Single prompt for all
+	print!("{}", "Do you want to continue? [y/N/1,2,3]: ".bright_cyan());
+	stdout().flush().unwrap();
+
+	let mut input = String::new();
+	stdin().read_line(&mut input).unwrap_or_default();
+	let input = input.trim();
+
+	let mut processed_results = results;
+
+	if input.is_empty() || input.to_lowercase().starts_with('n') {
+		// Decline all
+		println!("{}", "All large outputs declined by user.".bright_red());
+		for (index, tokens) in large_indices {
+			processed_results[index] = crate::mcp::McpToolResult::error(
+				processed_results[index].tool_name.clone(),
+				processed_results[index].tool_id.clone(),
+				format!(
+					"User declined large output from tool '{}' ({} tokens).",
+					processed_results[index].tool_name, tokens
+				),
+			);
+		}
+	} else if input.to_lowercase().starts_with('y') {
+		// Accept all
+		println!("{}", "Proceeding with all outputs...".bright_green());
+	} else {
+		// Parse selective numbers
+		let selected: std::collections::HashSet<usize> = input
+			.split(',')
+			.filter_map(|s| s.trim().parse::<usize>().ok())
+			.filter(|&i| i > 0 && i <= large_indices.len())
+			.collect();
+
+		if selected.is_empty() {
+			println!("{}", "Invalid selection. Declining all...".bright_red());
+			for (index, tokens) in large_indices {
+				processed_results[index] = crate::mcp::McpToolResult::error(
+					processed_results[index].tool_name.clone(),
+					processed_results[index].tool_id.clone(),
+					format!(
+						"User declined large output from tool '{}' ({} tokens).",
+						processed_results[index].tool_name, tokens
+					),
+				);
+			}
+		} else {
+			let kept_count = selected.len();
+			let declined_count = large_indices.len() - kept_count;
+			println!(
+				"{}",
+				format!(
+					"✓ Keeping {} tools, declining {} tools",
+					kept_count, declined_count
+				)
+				.bright_green()
+			);
+
+			for (i, (index, tokens)) in large_indices.iter().enumerate() {
+				if !selected.contains(&(i + 1)) {
+					processed_results[*index] = crate::mcp::McpToolResult::error(
+						processed_results[*index].tool_name.clone(),
+						processed_results[*index].tool_id.clone(),
+						format!(
+							"User selectively declined large output from tool '{}' ({} tokens).",
+							processed_results[*index].tool_name, tokens
+						),
+					);
+				}
+			}
+		}
+	}
+
+	Ok(processed_results)
 }
 
 // Parameters for tool display functions
