@@ -61,6 +61,10 @@ pub async fn handle_help(config: &Config, role: &str) -> Result<bool> {
 		RUN_COMMAND.cyan()
 	);
 	println!(
+		"{} <template_name> - Send predefined prompt templates",
+		PROMPT_COMMAND.cyan()
+	);
+	println!(
 		"{} [model] - Show current model or change to a different model (runtime only)",
 		MODEL_COMMAND.cyan()
 	);

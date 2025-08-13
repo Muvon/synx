@@ -814,3 +814,58 @@ output_role = "assistant"
 [agents.mcp]
 server_refs = ["filesystem", "octocode"]
 allowed_tools = ["text_editor", "batch_edit", "list_files", "semantic_search", "view_signatures"]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROMPT TEMPLATES
+# Define reusable prompt templates for quick access via /prompt command
+# Usage: /prompt <name>
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Example prompt templates - customize or add your own
+[[prompts]]
+name = "review"
+description = "Request code review with focus on best practices"
+prompt = """Please review the code above focusing on:
+- Code quality and best practices
+- Security considerations
+- Performance implications
+- Maintainability and readability
+- Potential bugs or edge cases
+
+Provide specific suggestions for improvement."""
+
+[[prompts]]
+name = "explain"
+description = "Ask for detailed explanation of code or concept"
+prompt = "Please provide a detailed explanation of the code/concept above, including how it works, why it's designed this way, and any important considerations."
+
+[[prompts]]
+name = "optimize"
+description = "Request optimization suggestions"
+prompt = """Please analyze the code above and suggest optimizations for:
+- Performance improvements
+- Memory usage reduction
+- Code simplification
+- Better algorithms or data structures
+
+Explain the trade-offs for each suggestion."""
+
+[[prompts]]
+name = "test"
+description = "Request test cases and testing strategy"
+prompt = """Please help create comprehensive tests for the code above:
+- Unit test cases covering normal scenarios
+- Edge cases and error conditions
+- Integration test considerations
+- Mock/stub requirements
+- Testing strategy recommendations"""
+
+[[prompts]]
+name = "debug"
+description = "Help with debugging and troubleshooting"
+prompt = """Please help debug the issue above:
+- Analyze potential root causes
+- Suggest debugging approaches
+- Recommend logging or monitoring points
+- Provide step-by-step troubleshooting guide
+- Identify common pitfalls in this scenario"""

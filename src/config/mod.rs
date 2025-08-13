@@ -110,6 +110,16 @@ pub struct ShellConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PromptConfig {
+	/// Name of the prompt (used with /prompt command)
+	pub name: String,
+	/// The prompt template text
+	pub prompt: String,
+	/// Optional description for help display
+	pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
 	// Config version for future migrations (always first field)
 	pub version: u32,
@@ -176,6 +186,9 @@ pub struct Config {
 
 	// Shell command configuration
 	pub shell: ShellConfig,
+
+	// Prompt template configurations
+	pub prompts: Vec<PromptConfig>,
 
 	// Legacy system prompt field for backward compatibility
 	pub system: Option<String>,

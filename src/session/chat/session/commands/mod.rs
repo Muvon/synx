@@ -29,6 +29,7 @@ mod list;
 mod loglevel;
 mod mcp;
 mod model;
+mod prompt;
 mod report;
 mod role;
 mod run;
@@ -91,6 +92,7 @@ pub async fn process_command(
 		}
 		IMAGE_COMMAND => image::handle_image(session, params).await,
 		ROLE_COMMAND => role::handle_role(session, config, params).await,
+		PROMPT_COMMAND => prompt::handle_prompt(session, config, &current_role, params).await,
 		_ => handle_unknown_command(command, config, &current_role).await,
 	}
 }
@@ -133,6 +135,10 @@ async fn handle_unknown_command(command: &str, config: &Config, role: &str) -> R
 	println!("{} - Display session context", CONTEXT_COMMAND.cyan());
 	println!("{} - Show MCP server status", MCP_COMMAND.cyan());
 	println!("{} - Execute command layer", RUN_COMMAND.cyan());
+	println!(
+		"{} - Send predefined prompt templates",
+		PROMPT_COMMAND.cyan()
+	);
 	println!("{} - Attach image to message", IMAGE_COMMAND.cyan());
 	println!("{} - Switch session role", ROLE_COMMAND.cyan());
 	println!(
