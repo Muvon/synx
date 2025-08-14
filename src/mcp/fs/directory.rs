@@ -318,9 +318,9 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 			cmd.arg("--context").arg(context_lines.to_string());
 		}
 
-		// Add the search pattern
-		cmd.arg(content_pattern);
-
+		// Use -F flag to treat the pattern as a fixed string (literal) rather than regex
+		// This avoids regex parsing errors with special characters
+		cmd.arg("-F").arg(content_pattern);
 		// Add the directory as the search path
 		cmd.arg(&directory);
 
@@ -556,5 +556,46 @@ mod tests {
 		let line = "C:\\Users\\file.rs";
 		let result = parse_ripgrep_line(line);
 		assert_eq!(result, None);
+	}
+	#[test]
+	fn test_content_search_with_special_chars() {
+		// Create a mock tool call with content parameter containing special regex characters
+		let _call = McpToolCall {
+			tool_name: "list_files".to_string(),
+			tool_id: "test_id".to_string(),
+			parameters: json!({
+				"directory": "src",
+				"content": "backward_step()"
+			}),
+		};
+
+		// Use std::process::Command::new to create a command and inspect its arguments
+		let mut cmd = Command::new("rg");
+		cmd.arg("--line-number");
+
+		// Add the -F flag and content pattern
+		cmd.arg("-F").arg("backward_step()");
+		cmd.arg("src");
+
+		// Get the arguments as a Vec<String> for comparison
+		let args: Vec<String> = cmd
+			.get_args()
+			.map(|arg| arg.to_string_lossy().to_string())
+			.collect();
+
+		// Verify the command contains the -F flag followed by the content pattern
+		assert!(args.contains(&"-F".to_string()));
+		assert!(args.contains(&"backward_step()".to_string()));
+
+		// Verify the order: -F should come before the pattern
+		let f_index = args.iter().position(|arg| arg == "-F").unwrap();
+		let pattern_index = args
+			.iter()
+			.position(|arg| arg == "backward_step()")
+			.unwrap();
+		assert!(
+			f_index < pattern_index,
+			"-F flag should come before the pattern"
+		);
 	}
 }
