@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "1024"]
+
 // Main lib.rs file that exports our modules
 pub mod config;
 pub mod directories;

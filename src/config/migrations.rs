@@ -41,8 +41,7 @@ pub fn check_and_upgrade_config(config_path: &Path) -> Result<bool> {
 
 	if current_version < CURRENT_CONFIG_VERSION {
 		println!(
-			"🔄 Config version {} detected, upgrading to version {}...",
-			current_version, CURRENT_CONFIG_VERSION
+			"🔄 Config version {current_version} detected, upgrading to version {CURRENT_CONFIG_VERSION}..."
 		);
 
 		// Perform the migration by modifying the TOML content directly
@@ -117,10 +116,7 @@ fn migrate_config_content(content: &str, from_version: u32) -> Result<String> {
 		}
 	}
 
-	println!(
-		"🔄 Applied migration from version {} to {}",
-		from_version, current_version
-	);
+	println!("🔄 Applied migration from version {from_version} to {current_version}");
 	Ok(lines.join("\n"))
 }
 
@@ -145,17 +141,11 @@ pub fn force_upgrade_config(config_path: &Path) -> Result<()> {
 		.unwrap_or(0) as u32;
 
 	if current_version >= CURRENT_CONFIG_VERSION {
-		println!(
-			"✅ Config is already at the latest version ({})",
-			current_version
-		);
+		println!("✅ Config is already at the latest version ({current_version})");
 		return Ok(());
 	}
 
-	println!(
-		"🔄 Upgrading config from version {} to {}...",
-		current_version, CURRENT_CONFIG_VERSION
-	);
+	println!("🔄 Upgrading config from version {current_version} to {CURRENT_CONFIG_VERSION}...");
 
 	// Perform the migration
 	let upgraded_content = migrate_config_content(&config_content, current_version)?;

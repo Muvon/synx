@@ -156,7 +156,7 @@ pub async fn execute_command_layer(
 
 		// Add the stats to the session with a special prefix for commands
 		chat_session.session.add_layer_stats(
-			&format!("command:{}", command_name),
+			&format!("command:{command_name}"),
 			&effective_model,
 			usage.prompt_tokens,
 			usage.output_tokens,

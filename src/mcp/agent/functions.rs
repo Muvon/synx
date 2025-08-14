@@ -129,7 +129,7 @@ pub async fn execute_agent_command(
 			return Ok(McpToolResult::error(
 				call.tool_name.clone(),
 				call.tool_id.clone(),
-				format!("Agent '{}' not configured", layer_name),
+				format!("Agent '{layer_name}' not configured"),
 			));
 		}
 	};
@@ -142,7 +142,7 @@ pub async fn execute_agent_command(
 				return Ok(McpToolResult::error(
 					call.tool_name.clone(),
 					call.tool_id.clone(),
-					format!("Agent processing failed: {}", e),
+					format!("Agent processing failed: {e}"),
 				));
 			}
 		};
@@ -158,7 +158,7 @@ pub async fn execute_agent_command(
 		Err(e) => Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			format!("Failed to serialize agent costs: {}", e),
+			format!("Failed to serialize agent costs: {e}"),
 		)),
 	}
 }

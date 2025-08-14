@@ -333,7 +333,7 @@ pub async fn execute_ast_grep_command(call: &McpToolCall) -> Result<McpToolResul
 			return Ok(McpToolResult::error(
 				call.tool_name.clone(),
 				call.tool_id.clone(),
-				format!("Failed to expand glob patterns: {}", e),
+				format!("Failed to expand glob patterns: {e}"),
 			));
 		}
 	};
@@ -442,9 +442,9 @@ pub async fn execute_ast_grep_command(call: &McpToolCall) -> Result<McpToolResul
 					"max_lines": max_lines
 				},
 				"message": if success {
-					format!("AST-grep {} executed successfully with exit code {}", operation_type, status_code)
+					format!("AST-grep {operation_type} executed successfully with exit code {status_code}")
 				} else {
-					format!("AST-grep {} failed with exit code {}", operation_type, status_code)
+					format!("AST-grep {operation_type} failed with exit code {status_code}")
 				}
 			});
 
@@ -457,7 +457,7 @@ pub async fn execute_ast_grep_command(call: &McpToolCall) -> Result<McpToolResul
 		}
 		Err(e) => json!({
 			"success": false,
-			"output": format!("Failed to execute ast-grep command: {}", e),
+			"output": format!("Failed to execute ast-grep command: {e}"),
 			"code": -1,
 			"operation": if rewrite.is_some() { "rewrite" } else { "search" },
 			"parameters": {

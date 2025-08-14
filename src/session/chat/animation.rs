@@ -37,7 +37,7 @@ pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> 
 
 	// Format message with cost in prompt-like format
 	let message = if cost > 0.0 {
-		format!("[~${:.2}] Generating response...", cost)
+		format!("[~${cost:.2}] Generating response...")
 	} else {
 		"Generating response...".to_string()
 	};

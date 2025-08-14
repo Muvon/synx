@@ -35,7 +35,7 @@ pub fn extract_and_validate_query(call: &McpToolCall) -> Result<String, McpToolR
 			return Err(McpToolResult::error(
 				call.tool_name.clone(),
 				call.tool_id.clone(),
-				format!("Query parameter must be a string, got: {}", other),
+				format!("Query parameter must be a string, got: {other}"),
 			));
 		}
 		None => {
@@ -123,6 +123,6 @@ pub fn create_api_error_result(
 	McpToolResult::error(
 		tool_name.to_string(),
 		tool_id.to_string(),
-		format!("Failed to execute {} search: {}", search_type, error),
+		format!("Failed to execute {search_type} search: {error}"),
 	)
 }

@@ -35,7 +35,7 @@ fn add_to_shell_history(command: &str) -> Result<()> {
 	} else if shell.contains("bash") {
 		format!("{}/.bash_history", home)
 	} else if shell.contains("fish") {
-		format!("{}/.local/share/fish/fish_history", home)
+		format!("{home}/.local/share/fish/fish_history")
 	} else {
 		// Default to bash history
 		format!("{}/.bash_history", home)
@@ -47,16 +47,16 @@ fn add_to_shell_history(command: &str) -> Result<()> {
 			.duration_since(std::time::UNIX_EPOCH)
 			.unwrap_or_default()
 			.as_secs();
-		format!(": {}:0;{}\n", timestamp, command)
+		format!(": {timestamp}:0;{command}\n")
 	} else if shell.contains("fish") {
 		let timestamp = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
 			.unwrap_or_default()
 			.as_secs();
-		format!("- cmd: {}\n  when: {}\n", command, timestamp)
+		format!("- cmd: {command}\n  when: {timestamp}\n")
 	} else {
 		// Bash format
-		format!("{}\n", command)
+		format!("{command}\n")
 	};
 
 	// Append to history file
@@ -253,8 +253,8 @@ pub async fn execute_shell_command(call: &McpToolCall) -> Result<McpToolResult> 
 				"background": true,
 				"pid": pid,
 				"command": command,
-				"message": format!("Command started in background with PID {}", pid),
-				"note": format!("Use 'kill {}' to terminate this background process if needed", pid)
+				"message": format!("Command started in background with PID {pid}"),
+				"note": format!("Use 'kill {pid}' to terminate this background process if needed")
 			}),
 		});
 	}
@@ -272,12 +272,7 @@ pub async fn execute_shell_command(call: &McpToolCall) -> Result<McpToolResult> 
 			} else if stdout.is_empty() {
 				stderr
 			} else {
-				format!(
-					"{}
-
-Error: {}",
-					stdout, stderr
-				)
+				format!("{stdout}\n\nError: {stderr}")
 			};
 
 			// Apply token-based truncation to prevent huge outputs
@@ -301,8 +296,7 @@ Error: {}",
 					"shell".to_string(),
 					call.tool_id.clone(),
 					format!(
-						"Command failed with exit code {}\nCommand: {}\n\nOutput:\n{}",
-						status_code, command, truncated_output
+						"Command failed with exit code {status_code}\nCommand: {command}\n\nOutput:\n{truncated_output}"
 					),
 				))
 			}
@@ -310,7 +304,7 @@ Error: {}",
 		Err(e) => Ok(McpToolResult::error(
 			"shell".to_string(),
 			call.tool_id.clone(),
-			format!("Error: {}", e),
+			format!("Error: {e}"),
 		)),
 	}
 }

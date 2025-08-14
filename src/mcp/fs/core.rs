@@ -36,8 +36,7 @@ fn resolve_line_index(index: i64, total_lines: usize) -> Result<usize, String> {
 		let pos_index = index as usize;
 		if pos_index > total_lines {
 			return Err(format!(
-				"Line {} exceeds file length ({} lines)",
-				index, total_lines
+				"Line {index} exceeds file length ({total_lines} lines)"
 			));
 		}
 		Ok(pos_index)
@@ -46,8 +45,7 @@ fn resolve_line_index(index: i64, total_lines: usize) -> Result<usize, String> {
 		let from_end = (-index) as usize;
 		if from_end > total_lines {
 			return Err(format!(
-				"Negative index {} exceeds file length ({} lines)",
-				index, total_lines
+				"Negative index {index} exceeds file length ({total_lines} lines)"
 			));
 		}
 		Ok(total_lines - from_end + 1)
@@ -61,8 +59,7 @@ fn resolve_line_range(start: i64, end: i64, total_lines: usize) -> Result<(usize
 
 	if resolved_start > resolved_end {
 		return Err(format!(
-			"Start line ({}) cannot be greater than end line ({})",
-			start, end
+			"Start line ({start}) cannot be greater than end line ({end})"
 		));
 	}
 
@@ -241,7 +238,7 @@ pub async fn execute_text_editor(call: &McpToolCall) -> Result<McpToolResult> {
 												return Ok(McpToolResult::error(
 													call.tool_name.clone(),
 													call.tool_id.clone(),
-													format!("Invalid view_range: {}", err),
+													format!("Invalid view_range: {err}"),
 												));
 											}
 										}
@@ -474,7 +471,7 @@ pub async fn execute_text_editor(call: &McpToolCall) -> Result<McpToolResult> {
 		_ => Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			format!("Invalid command: {}. Allowed commands are: view, view_many, create, str_replace, insert, line_replace, undo_edit", command),
+			format!("Invalid command: {command}. Allowed commands are: view, view_many, create, str_replace, insert, line_replace, undo_edit"),
 		)),
 	}
 }
@@ -641,7 +638,7 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			format!("Source file does not exist: {}", from_path),
+			format!("Source file does not exist: {from_path}"),
 		));
 	}
 
@@ -651,7 +648,7 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 			return Ok(McpToolResult::error(
 				call.tool_name.clone(),
 				call.tool_id.clone(),
-				format!("Failed to read source file '{}': {}", from_path, e),
+				format!("Failed to read source file '{from_path}': {e}"),
 			));
 		}
 	};
@@ -668,7 +665,7 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 			return Ok(McpToolResult::error(
 				call.tool_name.clone(),
 				call.tool_id.clone(),
-				format!("Invalid from_range: {}", err),
+				format!("Invalid from_range: {err}"),
 			));
 		}
 	};
@@ -707,10 +704,7 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 			return Ok(McpToolResult::error(
 				call.tool_name.clone(),
 				call.tool_id.clone(),
-				format!(
-					"Failed to create parent directories for '{}': {}",
-					append_path, e
-				),
+				format!("Failed to create parent directories for '{append_path}': {e}"),
 			));
 		}
 	}
@@ -723,7 +717,7 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 				return Ok(McpToolResult::error(
 					call.tool_name.clone(),
 					call.tool_id.clone(),
-					format!("Failed to read target file '{}': {}", append_path, e),
+					format!("Failed to read target file '{append_path}': {e}"),
 				));
 			}
 		}
@@ -739,9 +733,9 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 		} else {
 			// Check if extracted content already ends with newline
 			if extracted_content.ends_with('\n') {
-				format!("{}{}", extracted_content, target_content)
+				format!("{extracted_content}{target_content}")
 			} else {
-				format!("{}\n{}", extracted_content, target_content)
+				format!("{extracted_content}\n{target_content}")
 			}
 		}
 	} else if append_line == -1 {
@@ -749,9 +743,9 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 		if target_content.is_empty() {
 			extracted_content.clone()
 		} else if target_content.ends_with('\n') {
-			format!("{}{}", target_content, extracted_content)
+			format!("{target_content}{extracted_content}")
 		} else {
-			format!("{}\n{}", target_content, extracted_content)
+			format!("{target_content}\n{extracted_content}")
 		}
 	} else {
 		// Insert after specific line
@@ -763,10 +757,8 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 				call.tool_name.clone(),
 				call.tool_id.clone(),
 				format!(
-					"Insert position {} exceeds target file length ({} lines) in '{}'",
-					insert_after,
-					target_lines.len(),
-					append_path
+					"Insert position {insert_after} exceeds target file length ({}) lines) in '{append_path}'",
+					target_lines.len()
 				),
 			));
 		}
@@ -798,7 +790,7 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			format!("Failed to write to target file '{}': {}", append_path, e),
+			format!("Failed to write to target file '{append_path}': {e}"),
 		));
 	}
 
@@ -807,21 +799,16 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 	let position_desc = match append_line {
 		0 => "beginning of file".to_string(),
 		-1 => "end of file".to_string(),
-		n => format!("after line {}", n),
+		n => format!("after line {n}"),
 	};
 
 	Ok(McpToolResult::success(
 		call.tool_name.clone(),
 		call.tool_id.clone(),
 		format!(
-			"Successfully extracted {} lines (lines {}-{}) from '{}' and appended to '{}' at {}.\n\nExtracted content:\n{}",
-			lines_extracted,
+			"Successfully extracted {lines_extracted} lines (lines {}-{}) from '{from_path}' and appended to '{append_path}' at {position_desc}.\n\nExtracted content:\n{extracted_content_display}",
 			from_range.0,
-			from_range.1,
-			from_path,
-			append_path,
-			position_desc,
-			extracted_content_display
+			from_range.1
 		),
 	))
 }

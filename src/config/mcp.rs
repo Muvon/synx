@@ -353,8 +353,7 @@ impl RoleMcpConfig {
 				// Note: Using println instead of log_debug since we're in a module
 				// The log_debug macro would need to be imported
 				println!(
-					"DEBUG: Server '{}' referenced by role but not found in global registry",
-					server_name
+					"DEBUG: Server '{server_name}' referenced by role but not found in global registry"
 				);
 			}
 		}

@@ -82,8 +82,7 @@ pub async fn execute_plan(call: &McpToolCall) -> Result<McpToolResult> {
 			call.tool_name.clone(),
 			call.tool_id.clone(),
 			format!(
-				"Unknown command '{}'. Available commands: start, step, next, list, done, reset",
-				command
+				"Unknown command '{command}'. Available commands: start, step, next, list, done, reset"
 			),
 		)),
 	}
@@ -187,14 +186,14 @@ async fn handle_start_command(call: &McpToolCall) -> Result<McpToolResult> {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			format!("Failed to create plan: {}", e),
+			format!("Failed to create plan: {e}"),
 		));
 	}
 
 	// Build response
-	let mut response = format!("PLAN CREATED: {}\n\nTASKS:\n", title);
+	let mut response = format!("PLAN CREATED: {title}\n\nTASKS:\n");
 	for (i, task) in tasks.iter().enumerate() {
-		response.push_str(&format!("{}. {}\n", i + 1, task));
+		response.push_str(&format!("{}. {task}\n", i + 1));
 	}
 	response.push_str(&format!("\nCURRENT: Task 1/{} - {}", tasks.len(), tasks[0]));
 
@@ -236,7 +235,7 @@ async fn handle_step_command(call: &McpToolCall) -> Result<McpToolResult> {
 				return Ok(McpToolResult::error(
 					call.tool_name.clone(),
 					call.tool_id.clone(),
-					format!("Failed to add step details: {}", e),
+					format!("Failed to add step details: {e}"),
 				));
 			}
 
@@ -248,10 +247,7 @@ async fn handle_step_command(call: &McpToolCall) -> Result<McpToolResult> {
 			Ok(McpToolResult::success(
 				call.tool_name.clone(),
 				call.tool_id.clone(),
-				format!(
-					"Step details added to Task {}/{} - {}",
-					current, total, task_title
-				),
+				format!("Step details added to Task {current}/{total} - {task_title}"),
 			))
 		}
 		Some(_) => Ok(McpToolResult::error(
@@ -271,14 +267,10 @@ async fn handle_step_command(call: &McpToolCall) -> Result<McpToolResult> {
 
 			let response = if details.is_empty() {
 				format!(
-					"CURRENT TASK ({}/{}): {}\n\nNo details recorded yet.",
-					current, total, task_title
+					"CURRENT TASK ({current}/{total}): {task_title}\n\nNo details recorded yet."
 				)
 			} else {
-				format!(
-					"CURRENT TASK ({}/{}): {}\n\nDETAILS:\n{}",
-					current, total, task_title, details
-				)
+				format!("CURRENT TASK ({current}/{total}): {task_title}\n\nDETAILS:\n{details}")
 			};
 
 			Ok(McpToolResult::success(
@@ -336,7 +328,7 @@ async fn handle_next_command(call: &McpToolCall) -> Result<McpToolResult> {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			format!("Failed to complete task: {}", e),
+			format!("Failed to complete task: {e}"),
 		));
 	}
 
@@ -351,12 +343,9 @@ async fn handle_next_command(call: &McpToolCall) -> Result<McpToolResult> {
 			storage
 				.get_current_task_info()
 				.unwrap_or((0, 0, "Unknown".to_string()));
-		format!(
-			"Task completed: {}\n\nNEXT TASK ({}/{}): {}",
-			content, current, total, task_title
-		)
+		format!("Task completed: {content}\n\nNEXT TASK ({current}/{total}): {task_title}")
 	} else {
-		format!("Final task completed: {}\n\nAll tasks in plan '{}' are now complete. Use 'done' command to finalize.", content, plan_title)
+		format!("Final task completed: {content}\n\nAll tasks in plan '{plan_title}' are now complete. Use 'done' command to finalize.")
 	};
 
 	Ok(McpToolResult::success(
@@ -388,7 +377,7 @@ async fn handle_list_command(call: &McpToolCall) -> Result<McpToolResult> {
 			.get_current_task_info()
 			.unwrap_or((0, 0, "Unknown".to_string()));
 
-	let mut response = format!("PLAN: {}\n\nTASKS:\n", plan_title);
+	let mut response = format!("PLAN: {plan_title}\n\nTASKS:\n");
 
 	for (i, (task_title, status)) in task_list.iter().enumerate() {
 		let task_num = i + 1;
@@ -410,15 +399,13 @@ async fn handle_list_command(call: &McpToolCall) -> Result<McpToolResult> {
 		};
 
 		response.push_str(&format!(
-			"{} {}. {}{}\n",
-			status_icon, task_num, task_title, status_text
+			"{status_icon} {task_num}. {task_title}{status_text}\n"
 		));
 	}
 
 	if current <= total {
 		response.push_str(&format!(
-			"\nCURRENT: Task {}/{} - {}",
-			current, total, current_task_title
+			"\nCURRENT: Task {current}/{total} - {current_task_title}"
 		));
 	}
 
@@ -479,14 +466,11 @@ async fn handle_done_command(call: &McpToolCall) -> Result<McpToolResult> {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			format!("Failed to complete plan: {}", e),
+			format!("Failed to complete plan: {e}"),
 		));
 	}
 
-	let response = format!(
-		"PLAN COMPLETED: {}\n\nFINAL SUMMARY: {}",
-		plan_title, content
-	);
+	let response = format!("PLAN COMPLETED: {plan_title}\n\nFINAL SUMMARY: {content}");
 
 	Ok(McpToolResult::success(
 		call.tool_name.clone(),
@@ -503,7 +487,7 @@ async fn handle_reset_command(call: &McpToolCall) -> Result<McpToolResult> {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			format!("Failed to reset plan: {}", e),
+			format!("Failed to reset plan: {e}"),
 		));
 	}
 

@@ -353,7 +353,7 @@ impl Config {
 			)
 		} else {
 			// STRICT CONFIG: Unknown roles are not allowed - all roles must be explicitly defined
-			panic!("CRITICAL CONFIG ERROR: Role '{}' not found in config. All roles must be explicitly defined in config template.", role);
+			panic!("CRITICAL CONFIG ERROR: Role '{role}' not found in config. All roles must be explicitly defined in config template.");
 		}
 	}
 
@@ -427,7 +427,7 @@ impl Config {
 		let all_layers = if let Some(layers) = &self.layers {
 			layers
 		} else {
-			panic!("CRITICAL CONFIG ERROR: No layers defined in config but role '{}' references layers: {:?}. All layers must be explicitly defined in config.", role, layer_refs);
+			panic!("CRITICAL CONFIG ERROR: No layers defined in config but role '{role}' references layers: {layer_refs:?}. All layers must be explicitly defined in config.");
 		};
 
 		let mut result = Vec::new();
@@ -444,7 +444,7 @@ impl Config {
 				result.push(layer);
 			} else {
 				// STRICT CONFIG: Missing layer is CRITICAL error
-				panic!("CRITICAL CONFIG ERROR: Layer '{}' referenced by role '{}' but not found in config layers registry. All referenced layers must be explicitly defined in config.", layer_name, role);
+				panic!("CRITICAL CONFIG ERROR: Layer '{layer_name}' referenced by role '{role}' but not found in config layers registry. All referenced layers must be explicitly defined in config.");
 			}
 		}
 

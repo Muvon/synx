@@ -35,12 +35,11 @@ pub fn format_search_results(search_result: &Value, query: &str) -> Result<Strin
 
 	if web_results.is_empty() {
 		return Ok(format!(
-			"No web search results found for query: \"{}\"",
-			query
+			"No web search results found for query: \"{query}\""
 		));
 	}
 
-	let mut result_text = format!("Web search results for \"{}\":\n\n", query);
+	let mut result_text = format!("Web search results for \"{query}\":\n\n");
 
 	for (index, result) in web_results.iter().enumerate() {
 		let rank = index + 1;
