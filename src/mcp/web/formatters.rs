@@ -26,18 +26,30 @@ pub fn format_search_results(search_result: &Value, query: &str) -> Result<Strin
 			.unwrap_or_else(|_| "Failed to serialize".to_string())
 	);
 
-	// Check if we have web results
-	let web_results = search_result
-		.get("web")
-		.and_then(|w| w.get("results"))
-		.and_then(|r| r.as_array())
-		.ok_or_else(|| anyhow!("No web results found in search response"))?;
-
-	if web_results.is_empty() {
-		return Ok(format!(
-			"No web search results found for query: \"{query}\""
-		));
-	}
+	// Check if we have web results - Brave API omits 'web' section when multiple quoted phrases used
+	let web_results = match search_result.get("web") {
+		Some(web_section) => match web_section.get("results").and_then(|r| r.as_array()) {
+			Some(results) => {
+				if results.is_empty() {
+					return Ok(format!(
+						"No web search results found for query: \"{query}\""
+					));
+				}
+				results
+			}
+			None => {
+				return Ok(format!(
+					"No web search results found for query: \"{query}\""
+				));
+			}
+		},
+		None => {
+			// No 'web' section - often caused by multiple quoted phrases or overly complex queries
+			return Ok(format!(
+				"No web search results found for query: \"{query}\".\n\nNote: Multiple quoted phrases in one query often return no results. Try simpler queries or separate searches."
+			));
+		}
+	};
 
 	let mut result_text = format!("Web search results for \"{query}\":\n\n");
 

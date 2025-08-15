@@ -34,17 +34,27 @@ Requires BRAVE_API_KEY environment variable to be set.
 Results format:
 Each result is on a separate line with: [Rank] Title | URL | Description
 
-Best Practices:
-- Use specific, targeted search queries
-- Use quotes for exact phrase matching: \"exact phrase\"
-- Use site: operator for specific domains: site:github.com
-- Use - operator to exclude terms: python -django
-- Keep queries focused to get relevant results
+**CRITICAL: Multiple quoted phrases in one query will return NO RESULTS**
+- GOOD: \"machine learning tutorial\"
+- BAD: \"machine learning\" \"tutorial\" \"python\" (returns nothing)
+- GOOD: machine learning python tutorial
+- BAD: \"price rate\" \"momentum oscillator\" \"indicator\" (returns nothing)
 
-Examples:
-- `{\"query\": \"rust web framework\"}`
-- `{\"query\": \"\\\"machine learning\\\" tutorial\"}`
-- `{\"query\": \"site:stackoverflow.com async rust\"}`
+**Query Guidelines:**
+- Use single quoted phrases: \"exact phrase match\"
+- Use natural language: rust async programming tutorial
+- Use basic operators: site:github.com, -exclude_term
+- Keep queries simple and focused
+
+**Examples that work:**
+- `{\"query\": \"rust web framework comparison\"}`
+- `{\"query\": \"machine learning tutorial\"}`
+- `{\"query\": \"site:stackoverflow.com python async\"}`
+- `{\"query\": \"javascript -react\"}`
+
+**Examples that DON'T work (return no results):**
+- `{\"query\": \"\\\"rust\\\" \\\"web\\\" \\\"framework\\\"\"}`
+- `{\"query\": \"\\\"price rate\\\" \\\"momentum\\\" trading\"}`
 "
 		.to_string(),
 		parameters: json!({
