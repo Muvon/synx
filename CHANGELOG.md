@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.12.0] - 2025-08-18
+
+### 📋 Release Summary
+
+This release adds reusable prompt templates and spending tracking to enhance session management, along with batch processing for improved tool efficiency (9848036f, f5b46206, 5a3926f3). Several bug fixes improve search accuracy, prevent retry loops, and enhance system stability (a24932e7, b9d4f783, 4edc057f). Dependency updates and testing refinements further optimize overall performance (a69f72b9, 74d80515).
+
+
+### ✨ New Features & Enhancements
+
+- **mcp,chat**: batch large output prompts for parallel tool calls `5a3926f3`
+- **session**: add /prompt command with reusable templates `9848036f`
+- **session**: add request spending threshold and tracking `f5b46206`
+
+### 🐛 Bug Fixes & Stability
+
+- **web**: clarify no-results issue with multiple quoted phrases `a24932e7`
+- **style**: update format strings for Clippy compliance `01aaacf0`
+- **list_files**: treat content pattern as fixed string to avoid regex errors `efb8a3b5`
+- **session**: prevent infinite retry loop on continuation failure `b9d4f783`
+- **mcp**: prevent recursion in cancellation polling loop `4edc057f`
+
+### 🔄 Other Changes
+
+- **deps**: update and reorganize dependencies `a69f72b9`
+- **fs**: reset line count tracking in batch_edit test `74d80515`
+
+### 📊 Release Summary
+
+**Total commits**: 10 across 3 categories
+
+✨ **3** new features - *Enhanced functionality*
+🐛 **5** bug fixes - *Improved stability*
+🔄 **2** other changes - *Maintenance & tooling*
+
 ## [0.11.0] - 2025-08-10
 
 ### 📋 Release Summary
