@@ -275,44 +275,72 @@ async fn execute_tools_parallel_internal(
 				match task_result {
 			Ok(result) => match result {
 				Ok((res, tool_time_ms)) => {
-					// Tool succeeded, reset the error counter (if available)
-					if let Some(error_tracker) = context.error_tracker() {
-						error_tracker.record_success(&tool_name);
-					}
+					// CRITICAL MCP PROTOCOL FIX: Check if result is actually an error
+					if res.is_error() {
+						// This is an MCP error result (isError: true) - treat as error
+						_has_error = true;
 
-					// Display the complete tool execution with consolidated info
-					let display_params = ToolDisplayParams {
-						stored_tool_call: &stored_tool_call,
-						tool_name: &tool_name,
-						tool_id: &tool_id,
-						tool_index,
-						is_single_tool,
-					};
-					display_tool_success(
-						display_params,
-						&res,
-						tool_time_ms,
-						config,
-						context.session_name(),
-						context.execution_context(), // Pass the execution context
-					)
-					.await;
-
-					tool_results.push(res.clone());
-
-					// AGENT COST TRACKING: Extract and apply agent costs if present
-					if let Some(metadata) = res.result.get("metadata") {
-						if let Ok(agent_costs) = serde_json::from_value::<crate::session::AgentCostData>(metadata.clone()) {
-							// Apply agent costs to main session (only for MainSession context)
-							if let ToolExecutionContext::MainSession { chat_session, .. } = context {
-								chat_session.session.add_agent_cost(agent_costs);
-								crate::log_debug!("Applied agent costs to main session from tool '{}'", tool_name);
+						// Record error in error tracker
+						if let Some(error_tracker) = context.error_tracker() {
+							let has_hit_threshold = error_tracker.record_error(&tool_name);
+							if has_hit_threshold {
+								crate::log_debug!("Tool '{}' has hit error threshold", tool_name);
 							}
 						}
-					}
 
-					// Accumulate tool execution time
-					total_tool_time_ms += tool_time_ms;
+						// Extract error message from MCP result
+						let error_content = crate::mcp::extract_mcp_content(&res.result);
+						let error = anyhow::anyhow!("{}", error_content);
+
+						// Display as error, not success
+						display_tool_error(&stored_tool_call, &tool_name, &error, tool_index, is_single_tool);
+
+						// Still push the result for conversation continuity (AI needs to see the error)
+						tool_results.push(res.clone());
+
+						// Accumulate tool execution time even for errors
+						total_tool_time_ms += tool_time_ms;
+					} else {
+						// This is a genuine success (isError: false or missing)
+						// Tool succeeded, reset the error counter (if available)
+						if let Some(error_tracker) = context.error_tracker() {
+							error_tracker.record_success(&tool_name);
+						}
+
+						// Display the complete tool execution with consolidated info
+						let display_params = ToolDisplayParams {
+							stored_tool_call: &stored_tool_call,
+							tool_name: &tool_name,
+							tool_id: &tool_id,
+							tool_index,
+							is_single_tool,
+						};
+						display_tool_success(
+							display_params,
+							&res,
+							tool_time_ms,
+							config,
+							context.session_name(),
+							context.execution_context(), // Pass the execution context
+						)
+						.await;
+
+						tool_results.push(res.clone());
+
+						// AGENT COST TRACKING: Extract and apply agent costs if present
+						if let Some(metadata) = res.result.get("metadata") {
+							if let Ok(agent_costs) = serde_json::from_value::<crate::session::AgentCostData>(metadata.clone()) {
+								// Apply agent costs to main session (only for MainSession context)
+								if let ToolExecutionContext::MainSession { chat_session, .. } = context {
+									chat_session.session.add_agent_cost(agent_costs);
+									crate::log_debug!("Applied agent costs to main session from tool '{}'", tool_name);
+								}
+							}
+						}
+
+						// Accumulate tool execution time
+						total_tool_time_ms += tool_time_ms;
+					}
 				}
 				Err(e) => {
 					_has_error = true;

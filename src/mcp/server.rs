@@ -673,12 +673,27 @@ async fn execute_tool_call_internal(
 				result.get("result").cloned().unwrap_or(json!("No result"))
 			};
 
-			// Create MCP-compliant tool result
-			let tool_result = McpToolResult::success(
-				tool_name.clone(),
-				call.tool_id.clone(),
-				crate::mcp::extract_mcp_content(&output),
-			);
+			// Create MCP-compliant tool result - check if external server returned an error
+			let tool_result = if result.get("error").is_some() {
+				// External server returned an error - create error result
+				let error_message = result
+					.get("error")
+					.and_then(|e| e.get("message"))
+					.and_then(|m| m.as_str())
+					.unwrap_or("External MCP server error");
+				McpToolResult::error(
+					tool_name.clone(),
+					call.tool_id.clone(),
+					error_message.to_string(),
+				)
+			} else {
+				// External server returned success
+				McpToolResult::success(
+					tool_name.clone(),
+					call.tool_id.clone(),
+					crate::mcp::extract_mcp_content(&output),
+				)
+			};
 
 			Ok(tool_result)
 		}

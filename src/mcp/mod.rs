@@ -115,6 +115,14 @@ impl McpToolResult {
 			}),
 		}
 	}
+
+	// Check if this result represents an error based on MCP protocol
+	pub fn is_error(&self) -> bool {
+		self.result
+			.get("isError")
+			.and_then(|v| v.as_bool())
+			.unwrap_or(false)
+	}
 }
 
 // Extract content from MCP-compliant result
@@ -1087,4 +1095,73 @@ pub async fn execute_tool_calls(
 	}
 
 	results
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use serde_json::json;
+
+	#[test]
+	fn test_mcp_tool_result_is_error() {
+		// Test success result
+		let success_result = McpToolResult::success(
+			"test_tool".to_string(),
+			"test_id".to_string(),
+			"Success message".to_string(),
+		);
+		assert!(
+			!success_result.is_error(),
+			"Success result should not be an error"
+		);
+
+		// Test error result
+		let error_result = McpToolResult::error(
+			"test_tool".to_string(),
+			"test_id".to_string(),
+			"Error message".to_string(),
+		);
+		assert!(error_result.is_error(), "Error result should be an error");
+
+		// Test result with missing isError field (should default to false)
+		let manual_result = McpToolResult {
+			tool_name: "test_tool".to_string(),
+			tool_id: "test_id".to_string(),
+			result: json!({
+				"content": [{"type": "text", "text": "No isError field"}]
+			}),
+		};
+		assert!(
+			!manual_result.is_error(),
+			"Result without isError field should default to false"
+		);
+
+		// Test result with explicit isError: false
+		let explicit_false_result = McpToolResult {
+			tool_name: "test_tool".to_string(),
+			tool_id: "test_id".to_string(),
+			result: json!({
+				"content": [{"type": "text", "text": "Explicit false"}],
+				"isError": false
+			}),
+		};
+		assert!(
+			!explicit_false_result.is_error(),
+			"Result with isError: false should not be an error"
+		);
+
+		// Test result with explicit isError: true
+		let explicit_true_result = McpToolResult {
+			tool_name: "test_tool".to_string(),
+			tool_id: "test_id".to_string(),
+			result: json!({
+				"content": [{"type": "text", "text": "Explicit true"}],
+				"isError": true
+			}),
+		};
+		assert!(
+			explicit_true_result.is_error(),
+			"Result with isError: true should be an error"
+		);
+	}
 }
