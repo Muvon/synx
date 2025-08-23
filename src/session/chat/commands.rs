@@ -39,8 +39,9 @@ pub const IMAGE_COMMAND: &str = "/image";
 pub const CONTEXT_COMMAND: &str = "/context";
 pub const ROLE_COMMAND: &str = "/role";
 pub const PROMPT_COMMAND: &str = "/prompt";
+pub const PLAN_COMMAND: &str = "/plan";
 // List of all available commands for autocomplete
-pub const COMMANDS: [&str; 24] = [
+pub const COMMANDS: [&str; 25] = [
 	HELP_COMMAND,
 	HELP_COMMAND_ALT,
 	EXIT_COMMAND,
@@ -65,4 +66,5 @@ pub const COMMANDS: [&str; 24] = [
 	CONTEXT_COMMAND,
 	ROLE_COMMAND,
 	PROMPT_COMMAND,
+	PLAN_COMMAND,
 ];

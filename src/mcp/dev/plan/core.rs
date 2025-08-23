@@ -503,3 +503,58 @@ pub async fn clear_plan_data() -> Result<()> {
 	let mut storage = PLAN_STORAGE.lock().unwrap();
 	storage.clear_plan()
 }
+
+/// Get current plan display for session commands
+pub async fn get_current_plan_display() -> Result<String> {
+	let storage = PLAN_STORAGE.lock().unwrap();
+
+	// Check if plan exists
+	if !storage.has_active_plan().unwrap_or(false) {
+		return Err(anyhow::anyhow!(
+			"Use 'plan(command=\"start\", title=\"...\", tasks=[...])' to create a plan first"
+		));
+	}
+
+	let plan_title = storage
+		.get_plan_title()
+		.unwrap_or_else(|_| "Unknown Plan".to_string());
+	let task_list = storage.get_task_list().unwrap_or_else(|_| Vec::new());
+	let (current, total, current_task_title) =
+		storage
+			.get_current_task_info()
+			.unwrap_or((0, 0, "Unknown".to_string()));
+
+	let mut response = format!("PLAN: {plan_title}\n\nTASKS:\n");
+
+	for (i, (task_title, status)) in task_list.iter().enumerate() {
+		let task_num = i + 1;
+		let status_icon = match status {
+			TaskStatus::Completed => "✅",
+			TaskStatus::InProgress => {
+				if task_num == current {
+					"🔄"
+				} else {
+					"⏳"
+				}
+			}
+		};
+
+		let status_text = if task_num == current {
+			" (IN PROGRESS)"
+		} else {
+			"" // Both completed and pending tasks show no additional text
+		};
+
+		response.push_str(&format!(
+			"{status_icon} {task_num}. {task_title}{status_text}\n"
+		));
+	}
+
+	if current <= total {
+		response.push_str(&format!(
+			"\nCURRENT: Task {current}/{total} - {current_task_title}"
+		));
+	}
+
+	Ok(response)
+}

@@ -29,6 +29,7 @@ mod list;
 mod loglevel;
 mod mcp;
 mod model;
+mod plan;
 mod prompt;
 mod report;
 mod role;
@@ -93,6 +94,7 @@ pub async fn process_command(
 		IMAGE_COMMAND => image::handle_image(session, params).await,
 		ROLE_COMMAND => role::handle_role(session, config, params).await,
 		PROMPT_COMMAND => prompt::handle_prompt(session, config, &current_role, params).await,
+		PLAN_COMMAND => plan::handle_plan().await,
 		_ => handle_unknown_command(command, config, &current_role).await,
 	}
 }
@@ -141,6 +143,7 @@ async fn handle_unknown_command(command: &str, config: &Config, role: &str) -> R
 	);
 	println!("{} - Attach image to message", IMAGE_COMMAND.cyan());
 	println!("{} - Switch session role", ROLE_COMMAND.cyan());
+	println!("{} - Display current plan status", PLAN_COMMAND.cyan());
 	println!(
 		"{}/{} - Exit the session",
 		EXIT_COMMAND.cyan(),
