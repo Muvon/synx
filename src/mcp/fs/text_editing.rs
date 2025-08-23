@@ -291,7 +291,7 @@ pub async fn str_replace_spec(
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			format!("Found {} matches for replacement text. Please provide more context to make a unique match.", occurrences),
+			format!("Found {} matches for replacement text. Please provide more context to make a unique match or use line_replace when you know exactly which line to replace.", occurrences),
 		));
 	}
 
