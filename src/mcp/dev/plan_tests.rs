@@ -56,7 +56,10 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "Test Plan",
-				"tasks": ["Task 1", "Task 2"]
+				"tasks": [
+					{"title": "Task 1", "description": "First task description"},
+					{"title": "Task 2", "description": "Second task description"}
+				]
 			})),
 		);
 		let result = execute_plan(&call).await.unwrap();
@@ -84,7 +87,7 @@ mod tests {
 		let call = create_plan_call(
 			"start",
 			Some(json!({
-				"tasks": ["Task 1"]
+				"tasks": [{"title": "Task 1", "description": "First task description"}]
 			})),
 		);
 		let result = execute_plan(&call).await.unwrap();
@@ -122,7 +125,7 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "",
-				"tasks": ["Task 1"]
+				"tasks": [{"title": "Task 1", "description": "First task description"}]
 			})),
 		);
 		let result = execute_plan(&call).await.unwrap();
@@ -140,7 +143,10 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "Test Plan",
-				"tasks": ["Task 1", "Task 2"]
+				"tasks": [
+					{"title": "Task 1", "description": "First task description"},
+					{"title": "Task 2", "description": "Second task description"}
+				]
 			})),
 		);
 		let _ = execute_plan(&start_call).await;
@@ -191,7 +197,12 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "Development Tasks",
-				"tasks": ["Design", "Implement", "Test", "Deploy"]
+				"tasks": [
+					{"title": "Design", "description": "Design the system"},
+					{"title": "Implement", "description": "Implement the features"},
+					{"title": "Test", "description": "Test the implementation"},
+					{"title": "Deploy", "description": "Deploy to production"}
+				]
 			})),
 		);
 		let _ = execute_plan(&start_call).await;
@@ -231,7 +242,7 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "Simple Task",
-				"tasks": ["Complete project"]
+				"tasks": [{"title": "Complete project", "description": "Finish all remaining work"}]
 			})),
 		);
 		let _ = execute_plan(&start_call).await;
@@ -264,7 +275,7 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "Test Plan",
-				"tasks": ["Task 1"]
+				"tasks": [{"title": "Task 1", "description": "First task description"}]
 			})),
 		);
 		let _ = execute_plan(&start_call).await;
@@ -305,7 +316,10 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "Behavior Test",
-				"tasks": ["Task 1", "Task 2"]
+				"tasks": [
+					{"title": "Task 1", "description": "First task description"},
+					{"title": "Task 2", "description": "Second task description"}
+				]
 			})),
 		);
 		let _ = execute_plan(&start_call).await;
@@ -357,7 +371,10 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "First Plan",
-				"tasks": ["Task A", "Task B"]
+				"tasks": [
+					{"title": "Task A", "description": "Task A description"},
+					{"title": "Task B", "description": "Task B description"}
+				]
 			})),
 		);
 		let result1 = execute_plan(&start_call1).await.unwrap();
@@ -381,7 +398,11 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "Second Plan",
-				"tasks": ["Task X", "Task Y", "Task Z"]
+				"tasks": [
+					{"title": "Task X", "description": "Task X description"},
+					{"title": "Task Y", "description": "Task Y description"},
+					{"title": "Task Z", "description": "Task Z description"}
+				]
 			})),
 		);
 		let result2 = execute_plan(&start_call2).await.unwrap();
@@ -417,7 +438,7 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "First Plan",
-				"tasks": ["Task A"]
+				"tasks": [{"title": "Task A", "description": "Task A description"}]
 			})),
 		);
 		let _ = execute_plan(&start_call1).await;
@@ -435,7 +456,10 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "Second Plan",
-				"tasks": ["Task X", "Task Y"]
+				"tasks": [
+					{"title": "Task X", "description": "Task X description"},
+					{"title": "Task Y", "description": "Task Y description"}
+				]
 			})),
 		);
 		let result2 = execute_plan(&start_call2).await.unwrap();
@@ -460,7 +484,10 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "First Plan",
-				"tasks": ["Task A", "Task B"]
+				"tasks": [
+					{"title": "Task A", "description": "Task A description"},
+					{"title": "Task B", "description": "Task B description"}
+				]
 			})),
 		);
 		let _ = execute_plan(&start_call1).await;
@@ -482,7 +509,10 @@ mod tests {
 			"start",
 			Some(json!({
 				"title": "Second Plan",
-				"tasks": ["Task X", "Task Y"]
+				"tasks": [
+					{"title": "Task X", "description": "Task X description"},
+					{"title": "Task Y", "description": "Task Y description"}
+				]
 			})),
 		);
 		let result2 = execute_plan(&start_call2).await.unwrap();
