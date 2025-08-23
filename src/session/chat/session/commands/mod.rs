@@ -143,7 +143,10 @@ async fn handle_unknown_command(command: &str, config: &Config, role: &str) -> R
 	);
 	println!("{} - Attach image to message", IMAGE_COMMAND.cyan());
 	println!("{} - Switch session role", ROLE_COMMAND.cyan());
-	println!("{} - Display current plan status", PLAN_COMMAND.cyan());
+	println!(
+		"{} - Display current plan status (for complex tasks only)",
+		PLAN_COMMAND.cyan()
+	);
 	println!(
 		"{}/{} - Exit the session",
 		EXIT_COMMAND.cyan(),

@@ -41,13 +41,56 @@ use serde_json::json;
 pub fn get_plan_function() -> McpFunction {
 	McpFunction {
         name: "plan".to_string(),
-        description: "Execute structured plans with task breakdown and step-by-step progression. Supports creating task lists, tracking progress, and automatic continuation through plan execution.".to_string(),
+        description: "Execute structured plans with detailed task breakdown and step-by-step progression for COMPLEX, MULTI-STEP tasks that require careful coordination and context tracking.
+
+⚠️  **WHEN TO USE PLANS:**
+- Complex implementations requiring multiple coordinated steps
+- Tasks that span multiple files, systems, or components  
+- Long-running work that may be interrupted and resumed
+- Multi-phase projects (research → design → implement → test)
+- Tasks requiring specific sequencing and dependencies
+- Work that benefits from progress tracking and checkpoints
+
+🚫 **DO NOT USE PLANS FOR:**
+- Simple, single-step tasks (just do them directly!)
+- Quick fixes or small changes
+- Straightforward implementations that can be done in one go
+- Tasks that are obvious and don't need decomposition
+- Anything that takes less than 10-15 minutes
+- Simple questions or information requests
+
+**RULE OF THUMB:** If you can complete the task in a single focused session without losing context, DON'T use a plan. Plans are for complex work that genuinely benefits from structured breakdown and progress tracking.
+
+**MANDATORY: All tasks must include detailed descriptions!**
+
+Commands:
+- start: Create new plan with detailed tasks (ERROR if plan exists - use 'done' or 'reset' first)
+- step: Add progress details to current task (does NOT complete it)
+- next: Mark current task as COMPLETED and advance to next task
+- list: Show all tasks with full descriptions and progress status
+- done: Complete entire plan with final summary
+- reset: Clear all plan data
+
+**Task Format (REQUIRED):**
+Each task must be an object with:
+- title: Short, clear task title
+- description: DETAILED explanation of exactly what needs to be done
+
+Example: tasks=[{\"title\": \"Setup database\", \"description\": \"Install PostgreSQL 14+, create 'myapp' database, set up users table with id, email, password_hash fields, configure connection pooling with max 20 connections, create indexes on email field, and test connectivity with sample queries\"}]
+
+**Best Practices:**
+- Use detailed descriptions that explain EXACTLY what needs to be done
+- Include specific steps, requirements, and expected outcomes
+- Make descriptions comprehensive enough for context recovery after breaks
+- Think sequentially - each task should build on previous ones
+- Include technical details, file paths, commands, and configurations
+- Reserve for genuinely complex work that benefits from structured approach".to_string(),
         parameters: json!({
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The operation to perform:\n- start: Create new plan with tasks (ERROR if plan exists - use 'done' or 'reset' first)\n- step: Add progress details to current task (does NOT complete it)\n- next: Mark current task as COMPLETED and advance to next task\n- list: Show all tasks with progress status\n- done: Complete entire plan with final summary\n- reset: Clear all plan data",
+                    "description": "The operation to perform",
                     "enum": ["start", "step", "next", "list", "done", "reset"]
                 },
                 "title": {
@@ -57,9 +100,20 @@ pub fn get_plan_function() -> McpFunction {
                 "tasks": {
                     "type": "array",
                     "items": {
-                        "type": "string"
+                        "type": "object",
+                        "required": ["title", "description"],
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Short, clear task title"
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "DETAILED explanation of exactly what needs to be done, including specific steps, requirements, and expected outcomes. Make this comprehensive for easy context recovery."
+                            }
+                        }
                     },
-                    "description": "Array of task titles (required for 'start' command)"
+                    "description": "Array of detailed task objects with titles and comprehensive descriptions (REQUIRED for 'start' command)"
                 },
                 "content": {
                     "type": "string",

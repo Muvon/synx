@@ -14,7 +14,7 @@
 
 //! In-memory storage implementation for plan tool
 
-use super::storage::{ExecutionPlan, PlanStatus, PlanStorage, PlanTask, TaskStatus};
+use super::storage::{ExecutionPlan, PlanStatus, PlanStorage, PlanTask, TaskData, TaskStatus};
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 
@@ -36,15 +36,16 @@ impl Default for MemoryPlanStorage {
 }
 
 impl PlanStorage for MemoryPlanStorage {
-	fn create_plan(&mut self, title: String, tasks: Vec<String>) -> Result<()> {
+	fn create_plan(&mut self, title: String, tasks: Vec<TaskData>) -> Result<()> {
 		if tasks.is_empty() {
 			return Err(anyhow!("Cannot create plan with empty task list"));
 		}
 
 		let plan_tasks: Vec<PlanTask> = tasks
 			.into_iter()
-			.map(|task_title| PlanTask {
-				title: task_title,
+			.map(|task_data| PlanTask {
+				title: task_data.title,
+				description: task_data.description,
 				details: String::new(),
 				summary: None,
 				status: TaskStatus::InProgress, // All tasks start as InProgress, managed by current_task_index
@@ -125,7 +126,7 @@ impl PlanStorage for MemoryPlanStorage {
 		Ok(plan.current_task_index < plan.tasks.len())
 	}
 
-	fn get_task_list(&self) -> Result<Vec<(String, TaskStatus)>> {
+	fn get_task_list(&self) -> Result<Vec<(String, String, TaskStatus)>> {
 		let plan = self
 			.plan
 			.as_ref()
@@ -138,13 +139,13 @@ impl PlanStorage for MemoryPlanStorage {
 			} else {
 				TaskStatus::InProgress // Current and pending tasks both show as InProgress
 			};
-			tasks.push((task.title.clone(), status));
+			tasks.push((task.title.clone(), task.description.clone(), status));
 		}
 
 		Ok(tasks)
 	}
 
-	fn get_current_task_info(&self) -> Result<(usize, usize, String)> {
+	fn get_current_task_info(&self) -> Result<(usize, usize, String, String)> {
 		let plan = self
 			.plan
 			.as_ref()
@@ -159,6 +160,7 @@ impl PlanStorage for MemoryPlanStorage {
 			plan.current_task_index + 1, // 1-indexed for display
 			plan.tasks.len(),
 			current_task.title.clone(),
+			current_task.description.clone(),
 		))
 	}
 

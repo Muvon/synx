@@ -28,7 +28,7 @@
 ///
 /// Output: Always {content: [{type: "text", text: ...}], isError: ...} and includes tool_id.
 use super::memory_storage::MemoryPlanStorage;
-use super::storage::{PlanStorage, TaskStatus};
+use super::storage::{PlanStorage, TaskData, TaskStatus};
 use crate::mcp::{McpToolCall, McpToolResult};
 use anyhow::Result;
 use serde_json::Value;
@@ -118,27 +118,75 @@ async fn handle_start_command(call: &McpToolCall) -> Result<McpToolResult> {
 		}
 	};
 
-	// Extract tasks parameter
+	// Extract tasks parameter - ONLY detailed objects supported
 	let tasks = match call.parameters.get("tasks") {
 		Some(Value::Array(task_array)) => {
 			let mut tasks = Vec::new();
 			for (i, task_value) in task_array.iter().enumerate() {
 				match task_value {
-					Value::String(task_str) => {
-						if task_str.trim().is_empty() {
-							return Ok(McpToolResult::error(
-								call.tool_name.clone(),
-								call.tool_id.clone(),
-								format!("Task {} cannot be empty", i + 1),
-							));
-						}
-						tasks.push(task_str.clone());
+					// Handle detailed task objects (ONLY supported format)
+					Value::Object(task_obj) => {
+						let title = match task_obj.get("title") {
+							Some(Value::String(t)) => {
+								if t.trim().is_empty() {
+									return Ok(McpToolResult::error(
+										call.tool_name.clone(),
+										call.tool_id.clone(),
+										format!("Task {} title cannot be empty", i + 1),
+									));
+								}
+								t.clone()
+							}
+							Some(_) => {
+								return Ok(McpToolResult::error(
+									call.tool_name.clone(),
+									call.tool_id.clone(),
+									format!("Task {} title must be a string", i + 1),
+								));
+							}
+							None => {
+								return Ok(McpToolResult::error(
+									call.tool_name.clone(),
+									call.tool_id.clone(),
+									format!("Task {} missing required 'title' field", i + 1),
+								));
+							}
+						};
+
+						let description = match task_obj.get("description") {
+							Some(Value::String(d)) => {
+								if d.trim().is_empty() {
+									return Ok(McpToolResult::error(
+										call.tool_name.clone(),
+										call.tool_id.clone(),
+										format!("Task {} description cannot be empty", i + 1),
+									));
+								}
+								d.clone()
+							}
+							Some(_) => {
+								return Ok(McpToolResult::error(
+									call.tool_name.clone(),
+									call.tool_id.clone(),
+									format!("Task {} description must be a string", i + 1),
+								));
+							}
+							None => {
+								return Ok(McpToolResult::error(
+									call.tool_name.clone(),
+									call.tool_id.clone(),
+									format!("Task {} missing required 'description' field", i + 1),
+								));
+							}
+						};
+
+						tasks.push(TaskData::new(title, description));
 					}
 					_ => {
 						return Ok(McpToolResult::error(
 							call.tool_name.clone(),
 							call.tool_id.clone(),
-							format!("Task {} must be a string", i + 1),
+							format!("Task {} must be an object with 'title' and 'description' fields. Simple strings are no longer supported - use detailed task objects for better context recovery.", i + 1),
 						));
 					}
 				}
@@ -158,7 +206,7 @@ async fn handle_start_command(call: &McpToolCall) -> Result<McpToolResult> {
 			return Ok(McpToolResult::error(
 				call.tool_name.clone(),
 				call.tool_id.clone(),
-				"Tasks parameter must be an array of strings".to_string(),
+				"Tasks parameter must be an array of detailed task objects with 'title' and 'description' fields".to_string(),
 			));
 		}
 		None => {
@@ -193,9 +241,14 @@ async fn handle_start_command(call: &McpToolCall) -> Result<McpToolResult> {
 	// Build response
 	let mut response = format!("PLAN CREATED: {title}\n\nTASKS:\n");
 	for (i, task) in tasks.iter().enumerate() {
-		response.push_str(&format!("{}. {task}\n", i + 1));
+		response.push_str(&format!("{}. {}\n", i + 1, task.title));
+		response.push_str(&format!("   📝 {}\n", task.description));
 	}
-	response.push_str(&format!("\nCURRENT: Task 1/{} - {}", tasks.len(), tasks[0]));
+	response.push_str(&format!(
+		"\nCURRENT: Task 1/{} - {}",
+		tasks.len(),
+		tasks[0].title
+	));
 
 	Ok(McpToolResult::success(
 		call.tool_name.clone(),
@@ -239,10 +292,9 @@ async fn handle_step_command(call: &McpToolCall) -> Result<McpToolResult> {
 				));
 			}
 
-			let (current, total, task_title) =
-				storage
-					.get_current_task_info()
-					.unwrap_or((0, 0, "Unknown".to_string()));
+			let (current, total, task_title, _task_description) = storage
+				.get_current_task_info()
+				.unwrap_or((0, 0, "Unknown".to_string(), "No description".to_string()));
 
 			Ok(McpToolResult::success(
 				call.tool_name.clone(),
@@ -260,10 +312,9 @@ async fn handle_step_command(call: &McpToolCall) -> Result<McpToolResult> {
 			let details = storage
 				.get_current_step_details()
 				.unwrap_or_else(|_| "No details recorded yet".to_string());
-			let (current, total, task_title) =
-				storage
-					.get_current_task_info()
-					.unwrap_or((0, 0, "Unknown".to_string()));
+			let (current, total, task_title, _task_description) = storage
+				.get_current_task_info()
+				.unwrap_or((0, 0, "Unknown".to_string(), "No description".to_string()));
 
 			let response = if details.is_empty() {
 				format!(
@@ -339,10 +390,9 @@ async fn handle_next_command(call: &McpToolCall) -> Result<McpToolResult> {
 		.unwrap_or_else(|_| "Unknown Plan".to_string());
 
 	let response = if has_more {
-		let (current, total, task_title) =
-			storage
-				.get_current_task_info()
-				.unwrap_or((0, 0, "Unknown".to_string()));
+		let (current, total, task_title, _task_description) = storage
+			.get_current_task_info()
+			.unwrap_or((0, 0, "Unknown".to_string(), "No description".to_string()));
 		format!("Task completed: {content}\n\nNEXT TASK ({current}/{total}): {task_title}")
 	} else {
 		format!("Final task completed: {content}\n\nAll tasks in plan '{plan_title}' are now complete. Use 'done' command to finalize.")
@@ -372,14 +422,13 @@ async fn handle_list_command(call: &McpToolCall) -> Result<McpToolResult> {
 		.get_plan_title()
 		.unwrap_or_else(|_| "Unknown Plan".to_string());
 	let task_list = storage.get_task_list().unwrap_or_else(|_| Vec::new());
-	let (current, total, current_task_title) =
-		storage
-			.get_current_task_info()
-			.unwrap_or((0, 0, "Unknown".to_string()));
+	let (current, total, current_task_title, current_task_description) = storage
+		.get_current_task_info()
+		.unwrap_or((0, 0, "Unknown".to_string(), "No description".to_string()));
 
 	let mut response = format!("PLAN: {plan_title}\n\nTASKS:\n");
 
-	for (i, (task_title, status)) in task_list.iter().enumerate() {
+	for (i, (task_title, task_description, status)) in task_list.iter().enumerate() {
 		let task_num = i + 1;
 		let status_icon = match status {
 			TaskStatus::Completed => "✅",
@@ -401,11 +450,18 @@ async fn handle_list_command(call: &McpToolCall) -> Result<McpToolResult> {
 		response.push_str(&format!(
 			"{status_icon} {task_num}. {task_title}{status_text}\n"
 		));
+
+		// Add description with proper indentation
+		let description_lines: Vec<&str> = task_description.lines().collect();
+		for line in description_lines {
+			response.push_str(&format!("   📝 {}\n", line));
+		}
+		response.push('\n'); // Extra line between tasks
 	}
 
 	if current <= total {
 		response.push_str(&format!(
-			"\nCURRENT: Task {current}/{total} - {current_task_title}"
+			"CURRENT: Task {current}/{total} - {current_task_title}\n📝 {current_task_description}"
 		));
 	}
 
@@ -510,23 +566,20 @@ pub async fn get_current_plan_display() -> Result<String> {
 
 	// Check if plan exists
 	if !storage.has_active_plan().unwrap_or(false) {
-		return Err(anyhow::anyhow!(
-			"Use 'plan(command=\"start\", title=\"...\", tasks=[...])' to create a plan first"
-		));
+		return Err(anyhow::anyhow!("Use plan tool only for COMPLEX, multi-step tasks that require structured breakdown. For simple tasks, just execute them directly without a plan."));
 	}
 
 	let plan_title = storage
 		.get_plan_title()
 		.unwrap_or_else(|_| "Unknown Plan".to_string());
 	let task_list = storage.get_task_list().unwrap_or_else(|_| Vec::new());
-	let (current, total, current_task_title) =
-		storage
-			.get_current_task_info()
-			.unwrap_or((0, 0, "Unknown".to_string()));
+	let (current, total, current_task_title, current_task_description) = storage
+		.get_current_task_info()
+		.unwrap_or((0, 0, "Unknown".to_string(), "No description".to_string()));
 
 	let mut response = format!("PLAN: {plan_title}\n\nTASKS:\n");
 
-	for (i, (task_title, status)) in task_list.iter().enumerate() {
+	for (i, (task_title, task_description, status)) in task_list.iter().enumerate() {
 		let task_num = i + 1;
 		let status_icon = match status {
 			TaskStatus::Completed => "✅",
@@ -548,11 +601,18 @@ pub async fn get_current_plan_display() -> Result<String> {
 		response.push_str(&format!(
 			"{status_icon} {task_num}. {task_title}{status_text}\n"
 		));
+
+		// Add description with proper indentation
+		let description_lines: Vec<&str> = task_description.lines().collect();
+		for line in description_lines {
+			response.push_str(&format!("   📝 {}\n", line));
+		}
+		response.push('\n'); // Extra line between tasks
 	}
 
 	if current <= total {
 		response.push_str(&format!(
-			"\nCURRENT: Task {current}/{total} - {current_task_title}"
+			"CURRENT: Task {current}/{total} - {current_task_title}\n📝 {current_task_description}"
 		));
 	}
 

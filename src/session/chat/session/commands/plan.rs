@@ -29,9 +29,10 @@ pub async fn handle_plan() -> Result<bool> {
 				e.to_string().dimmed()
 			);
 			println!(
-				"💡 Use the {} MCP tool to create and manage plans",
+				"💡 Use the {} MCP tool only for complex, multi-step tasks that require structured breakdown",
 				"plan".bright_cyan()
 			);
+			println!("For simple tasks, just execute them directly without creating a plan");
 		}
 	}
 

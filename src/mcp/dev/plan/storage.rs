@@ -30,7 +30,8 @@ pub struct ExecutionPlan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanTask {
 	pub title: String,
-	pub details: String,         // Progress details from `step` commands
+	pub description: String, // NEW: Detailed explanation of what needs to be done
+	pub details: String,     // Progress details from `step` commands
 	pub summary: Option<String>, // Final summary from `next` command
 	pub status: TaskStatus,
 	pub completed_at: Option<DateTime<Utc>>,
@@ -48,10 +49,23 @@ pub enum TaskStatus {
 	Completed,
 }
 
+/// Task creation data structure
+#[derive(Debug, Clone)]
+pub struct TaskData {
+	pub title: String,
+	pub description: String,
+}
+
+impl TaskData {
+	pub fn new(title: String, description: String) -> Self {
+		Self { title, description }
+	}
+}
+
 /// Storage abstraction for plan execution
 pub trait PlanStorage {
-	/// Create new execution plan with tasks
-	fn create_plan(&mut self, title: String, tasks: Vec<String>) -> Result<()>;
+	/// Create new execution plan with detailed tasks
+	fn create_plan(&mut self, title: String, tasks: Vec<TaskData>) -> Result<()>;
 
 	/// Add details to current task (can be called multiple times)
 	fn add_step_details(&mut self, content: String) -> Result<()>;
@@ -65,11 +79,11 @@ pub trait PlanStorage {
 	/// Check if there are more tasks to complete
 	fn has_more_tasks(&self) -> Result<bool>;
 
-	/// Get task list with status (titles only)
-	fn get_task_list(&self) -> Result<Vec<(String, TaskStatus)>>;
+	/// Get task list with status and descriptions
+	fn get_task_list(&self) -> Result<Vec<(String, String, TaskStatus)>>; // (title, description, status)
 
-	/// Get current task info
-	fn get_current_task_info(&self) -> Result<(usize, usize, String)>; // (current, total, title)
+	/// Get current task info with description
+	fn get_current_task_info(&self) -> Result<(usize, usize, String, String)>; // (current, total, title, description)
 
 	/// Mark entire plan as completed
 	fn complete_plan(&mut self, summary: String) -> Result<()>;
