@@ -21,6 +21,7 @@ use super::super::context_truncation::{
 };
 use super::super::input::{read_user_input, InputResult};
 use super::super::response::{process_response, ResponseProcessingParams};
+use super::super::CostTracker;
 use super::core::{ChatSession, SessionInitParams};
 use crate::config::Config;
 use crate::session::cancellation::SessionCancellation;
@@ -626,6 +627,19 @@ async fn execute_api_call_and_process_response(
 	// Process response
 	match api_result {
 		Ok(response) => {
+			// CRITICAL FIX: Track exchange cost immediately after successful API call
+			// This ensures all API calls (with or without tool calls) have their costs tracked
+			if let Err(e) =
+				CostTracker::track_exchange_cost(chat_session, &response.exchange, config)
+			{
+				use colored::*;
+				println!(
+					"{}: Failed to track exchange cost: {}",
+					"Warning".bright_yellow(),
+					e
+				);
+			}
+
 			// Process the response with tool calls
 			// CRITICAL FIX: Use operation_cancelled instead of creating a new token
 			// This ensures Ctrl+C cancellation works properly during tool execution
