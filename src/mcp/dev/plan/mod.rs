@@ -45,7 +45,7 @@ pub fn get_plan_function() -> McpFunction {
 
 ⚠️  **WHEN TO USE PLANS:**
 - Complex implementations requiring multiple coordinated steps
-- Tasks that span multiple files, systems, or components  
+- Tasks that span multiple files, systems, or components
 - Long-running work that may be interrupted and resumed
 - Multi-phase projects (research → design → implement → test)
 - Tasks requiring specific sequencing and dependencies
@@ -78,6 +78,24 @@ Each task must be an object with:
 
 Example: tasks=[{\"title\": \"Setup database\", \"description\": \"Install PostgreSQL 14+, create 'myapp' database, set up users table with id, email, password_hash fields, configure connection pooling with max 20 connections, create indexes on email field, and test connectivity with sample queries\"}]
 
+<description_requirements>
+- Write descriptions as if someone else needs to complete the task from scratch
+- Include specific file paths, exact commands, configuration details
+- Specify expected outcomes and validation criteria
+- Add error handling steps and troubleshooting notes
+- Mention dependencies and prerequisites
+- Use technical specifics, not vague statements
+- Minimum 2-3 detailed sentences per task
+</description_requirements>
+
+<examples>
+❌ BAD: \"Fix authentication bug\"
+✅ GOOD: \"Debug authentication failure in src/auth/login.rs by adding logging to validate_token() function, check JWT expiration logic around line 45, test with expired tokens, and ensure proper error messages are returned to client with 401 status code\"
+
+❌ BAD: \"Update config\"
+✅ GOOD: \"Modify config-templates/default.toml to add new [database] section with connection_pool_size=20, timeout_seconds=30, and retry_attempts=3, then update src/config/mod.rs DatabaseConfig struct to include these fields with proper validation\"
+</examples>
+
 **Best Practices:**
 - Use detailed descriptions that explain EXACTLY what needs to be done
 - Include specific steps, requirements, and expected outcomes
@@ -109,11 +127,11 @@ Example: tasks=[{\"title\": \"Setup database\", \"description\": \"Install Postg
                             },
                             "description": {
                                 "type": "string",
-                                "description": "DETAILED explanation of exactly what needs to be done, including specific steps, requirements, and expected outcomes. Make this comprehensive for easy context recovery."
+                                "description": "Comprehensive explanation of exactly what needs to be done. Include: specific file paths, exact commands to run, configuration details, expected outcomes, error handling steps, validation criteria, and any dependencies. Write as if someone else needs to complete this task from scratch with zero context. Minimum 2-3 sentences with technical specifics."
                             }
                         }
                     },
-                    "description": "Array of detailed task objects with titles and comprehensive descriptions (REQUIRED for 'start' command)"
+                    "description": "Array of detailed task objects with titles and comprehensive descriptions (REQUIRED for 'start' command). Each task description must include specific technical details, file paths, commands, expected outcomes, and validation steps - write as if someone else needs to complete the task from scratch."
                 },
                 "content": {
                     "type": "string",
