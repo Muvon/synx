@@ -23,7 +23,8 @@ use rustyline::{
 use rustyline::{CompletionType, Config as RustylineConfig, EditMode, Editor};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Result of user input operation
 #[derive(Debug)]
@@ -34,6 +35,8 @@ pub enum InputResult {
 	Cancelled,
 	/// User wants to exit (Ctrl+D)
 	Exit,
+	/// Add message to context without sending (Ctrl+G)
+	AddWithoutSending(String),
 }
 
 // Custom event handler for smart Ctrl+E behavior
@@ -56,6 +59,26 @@ impl ConditionalEventHandler for SmartCtrlEHandler {
 			// Return None to let the default key binding take effect
 			None
 		}
+	}
+}
+
+// Custom handler for Ctrl+G - sets flag and accepts the line
+struct CtrlGHandler {
+	add_without_sending: Arc<AtomicBool>,
+}
+
+impl ConditionalEventHandler for CtrlGHandler {
+	fn handle(
+		&self,
+		_evt: &Event,
+		_n: RepeatCount,
+		_positive: bool,
+		_ctx: &rustyline::EventContext,
+	) -> Option<Cmd> {
+		// Set the flag to indicate this should be added without sending
+		self.add_without_sending.store(true, Ordering::SeqCst);
+		// Accept the line
+		Some(Cmd::AcceptLine)
 	}
 }
 use std::path::PathBuf;
@@ -173,6 +196,9 @@ fn load_history_from_file() -> Result<Vec<String>> {
 
 // Read user input with support for multiline input, command completion, and persistent history
 pub fn read_user_input(estimated_cost: f64) -> Result<InputResult> {
+	// Flag to track if Ctrl+G was pressed
+	let add_without_sending = Arc::new(AtomicBool::new(false));
+
 	// Configure rustyline with proper completion behavior for file completion
 	let config = RustylineConfig::builder()
 		.completion_type(CompletionType::List) // Bash-like completion with partial matches
@@ -237,6 +263,15 @@ pub fn read_user_input(estimated_cost: f64) -> Result<InputResult> {
 		EventHandler::Simple(Cmd::Newline),
 	);
 
+	// Ctrl+G to submit without sending to API
+	let add_without_sending_clone = add_without_sending.clone();
+	editor.bind_sequence(
+		Event::KeySeq(vec![KeyEvent::new('g', Modifiers::CTRL)]),
+		EventHandler::Conditional(Box::new(CtrlGHandler {
+			add_without_sending: add_without_sending_clone,
+		})),
+	);
+
 	// Load persistent history using our safe method
 	match load_history_from_file() {
 		Ok(history_lines) => {
@@ -261,6 +296,9 @@ pub fn read_user_input(estimated_cost: f64) -> Result<InputResult> {
 	// Read line with command completion and history search (Ctrl+R)
 	match editor.readline(&prompt) {
 		Ok(line) => {
+			// Check if Ctrl+G was pressed
+			let is_add_without_sending = add_without_sending.load(Ordering::SeqCst);
+
 			// Add to in-memory history (auto_add_history is true, but we also save to file)
 			let _ = editor.add_history_entry(line.clone());
 
@@ -276,7 +314,11 @@ pub fn read_user_input(estimated_cost: f64) -> Result<InputResult> {
 				let _ = crate::session::logger::log_user_request(&line);
 			}
 
-			Ok(InputResult::Text(line))
+			if is_add_without_sending {
+				Ok(InputResult::AddWithoutSending(line))
+			} else {
+				Ok(InputResult::Text(line))
+			}
 		}
 		Err(ReadlineError::Interrupted) => {
 			// Ctrl+C - Return cancellation result

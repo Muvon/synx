@@ -982,6 +982,32 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		// Handle the input result with proper error recovery
 		let input = match input_result {
 			InputResult::Text(text) => text,
+			InputResult::AddWithoutSending(text) => {
+				// Ctrl+G pressed - add message to context without sending
+				use colored::*;
+
+				// Skip if input is empty
+				if text.trim().is_empty() {
+					continue;
+				}
+
+				// Add the message to session context
+				chat_session.add_user_message(&text)?;
+
+				// Save the session to persist the added message
+				if let Err(e) = chat_session.save() {
+					log_debug!(
+						"Warning: Failed to save session after adding message: {}",
+						e
+					);
+				}
+
+				// Provide feedback to user
+				println!("{}", "✓ Message added to context".bright_cyan());
+
+				// Continue to next input without sending to API
+				continue;
+			}
 			InputResult::Cancelled => {
 				// Ctrl+C pressed during input
 				log_debug!("Input cancelled by user - cleaning up");
