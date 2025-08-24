@@ -102,6 +102,7 @@ impl LayeredOrchestrator {
 		input: &str,
 		session: &mut Session,
 		config: &Config,
+		role: &str,
 		operation_cancelled: tokio::sync::watch::Receiver<bool>,
 	) -> Result<String> {
 		// If no layers are configured (layers disabled), return input unchanged
@@ -327,11 +328,58 @@ impl LayeredOrchestrator {
 						"{}",
 						"Output mode: replace (replacing with all layer outputs)".bright_cyan()
 					);
-					// Clear existing messages and add all layer outputs with configured role
+
+					// Find system message to preserve
+					let system_message = session
+						.messages
+						.iter()
+						.find(|m| m.role == "system")
+						.cloned();
+
+					// Clear existing messages
 					session.messages.clear();
-					for output_text in &result.outputs {
-						session.add_message(layer.config().output_role.as_str(), output_text);
+
+					// Build final message list following /truncate pattern
+					let mut final_messages = Vec::new();
+
+					// Add system message first
+					if let Some(sys_msg) = system_message {
+						final_messages.push(sys_msg);
 					}
+
+					// Add initial messages (welcome + instructions) using centralized function
+					let current_dir = std::env::current_dir().unwrap_or_default();
+					if let Ok(initial_messages) =
+						crate::session::chat::session::get_initial_messages(
+							config,
+							role,
+							&current_dir,
+						)
+						.await
+					{
+						final_messages.extend(initial_messages);
+					}
+
+					// Add all layer outputs with configured role
+					for output_text in &result.outputs {
+						let output_msg = crate::session::Message {
+							role: layer.config().output_role.as_str().to_string(),
+							content: output_text.clone(),
+							timestamp: std::time::SystemTime::now()
+								.duration_since(std::time::UNIX_EPOCH)
+								.unwrap_or_default()
+								.as_secs(),
+							cached: false,
+							tool_calls: None,
+							tool_call_id: None,
+							name: None,
+							images: None,
+						};
+						final_messages.push(output_msg);
+					}
+
+					// Update session with final messages
+					session.messages = final_messages;
 				}
 				OutputMode::Last => {
 					println!(

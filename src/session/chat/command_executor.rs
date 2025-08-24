@@ -251,13 +251,54 @@ pub async fn execute_command_layer(
 				);
 			}
 
-			// Clear existing messages and replace with all command outputs
+			// Find system message to preserve
+			let system_message = chat_session
+				.session
+				.messages
+				.iter()
+				.find(|m| m.role == "system")
+				.cloned();
+
+			// Clear existing messages
 			chat_session.session.messages.clear();
-			for output_text in &result.outputs {
-				chat_session
-					.session
-					.add_message(command_config.output_role.as_str(), output_text);
+
+			// Build final message list following /truncate pattern
+			let mut final_messages = Vec::new();
+
+			// Add system message first
+			if let Some(sys_msg) = system_message {
+				final_messages.push(sys_msg);
 			}
+
+			// Add initial messages (welcome + instructions) using centralized function
+			let current_dir = std::env::current_dir().unwrap_or_default();
+			if let Ok(initial_messages) =
+				crate::session::chat::session::get_initial_messages(config, role, &current_dir)
+					.await
+			{
+				final_messages.extend(initial_messages);
+			}
+
+			// Add all command outputs with configured role
+			for output_text in &result.outputs {
+				let output_msg = crate::session::Message {
+					role: command_config.output_role.as_str().to_string(),
+					content: output_text.clone(),
+					timestamp: std::time::SystemTime::now()
+						.duration_since(std::time::UNIX_EPOCH)
+						.unwrap_or_default()
+						.as_secs(),
+					cached: false,
+					tool_calls: None,
+					tool_call_id: None,
+					name: None,
+					images: None,
+				};
+				final_messages.push(output_msg);
+			}
+
+			// Update session with final messages
+			chat_session.session.messages = final_messages;
 
 			// Save session to persist the replacement
 			let _ = chat_session.save();

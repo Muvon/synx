@@ -32,6 +32,6 @@ pub async fn process_with_layers(
 ) -> anyhow::Result<String> {
 	let orchestrator = LayeredOrchestrator::from_config(config, role);
 	orchestrator
-		.process(input, session, config, operation_cancelled)
+		.process(input, session, config, role, operation_cancelled)
 		.await
 }
