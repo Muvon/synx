@@ -2,169 +2,247 @@
 
 ## What is Octomind?
 
-Octomind is a session-based AI development assistant written in Rust that helps developers understand and work with their codebase through natural conversation. Built with a simplified, session-first approach, it provides intelligent code assistance through built-in tools for file operations, code analysis, and development tasks.
+Octomind is a session-first AI development assistant that transforms how you interact with codebases through natural language conversations. Built on the Model Context Protocol (MCP), it provides seamless integration with development tools, multi-provider AI support, and intelligent cost optimization.
 
-## Simplified Architecture
+**Key Principles:**
+- **Session-First**: Everything happens in interactive AI conversations
+- **Tool Integration**: Built-in MCP tools for development, filesystem, web, and agent operations
+- **Multi-Provider**: Unified interface across 7 AI providers
+- **Cost Optimization**: Smart caching and real-time usage tracking
+- **Role-Based**: Developer (full tools) and Assistant (chat-only) configurations
 
-Octomind has been redesigned around a core principle: **everything happens within interactive AI sessions**. Gone are the separate command-line tools for indexing and searching. Instead, all functionality is accessible through natural conversation with AI assistants that have built-in development tools.
+## Architecture Overview
 
-### Session-First Design
+Octomind implements a clean, session-first architecture:
 
 ```mermaid
 graph TB
     A[User] --> B[Interactive Session]
     B --> C[Role Configuration]
     B --> D[MCP Tools]
-    B --> E[AI Provider]
+    B --> E[AI Providers]
+    B --> F[Session Management]
 
-    C --> F[Developer Role<br/>Full Tools]
-    C --> G[Assistant Role<br/>No Tools]
-    C --> H[Custom Role<br/>Configurable]
+    C --> G[Developer Role<br/>Full Tools]
+    C --> H[Assistant Role<br/>Chat Only]
+    C --> I[Custom Roles<br/>Configurable]
 
-    D --> I[File Operations]
-    D --> J[Code Analysis]
-    D --> K[Shell Commands]
-    D --> L[External Tools]
+    D --> J[Developer Server<br/>shell, ast_grep]
+    D --> K[Filesystem Server<br/>text_editor, batch_edit]
+    D --> L[Web Server<br/>web_search, read_html]
+    D --> M[Agent Server<br/>Specialized AI routing]
 
-    E --> M[Multiple AI Providers<br/>OpenRouter, OpenAI, Anthropic, etc.]
+    E --> N[OpenRouter<br/>Multi-provider]
+    E --> O[OpenAI<br/>Direct API]
+    E --> P[Anthropic<br/>Claude models]
+    E --> Q[Google/Amazon<br/>Cloudflare/DeepSeek]
+
+    F --> R[Context Management<br/>Smart continuation]
+    F --> S[Cost Tracking<br/>Real-time monitoring]
+    F --> T[Caching System<br/>Automatic optimization]
 ```
 
 ## Core Components
 
-### 1. Session Management
-- **Interactive conversations** with AI assistants
-- **Session persistence** - save, resume, and organize conversations
-- **Role-based configuration** - developer/assistant/custom roles
-- **Context management** - smart truncation, auto token management, cache/cost tracking
-- **Session continuation** - automatic when token limits are reached
+### 1. Session-First Design
 
-### 2. Tool & Agent Integration (MCP)
-- Unified tool system via Model-Centric Programming (MCP) protocol
-- Tools: file operations, code analysis, shell, web, advanced AST search
-- **/run <command>**: invokes command layers (config-driven, does not affect session history)
-- **agent_<name>(task=...)**: invokes a config-driven agent tool as a specialized AI helper
-- **All tools/commands/agents are added via config only (no code needed)**
+**Interactive AI Conversations**: All functionality is accessed through natural language sessions with persistent context and intelligent management.
 
-### 3. Layered Architecture
-- Every session, command, and agent is a layer with its own config
-- Layer config determines input/output mode, system prompt, allowed tools, and model
-- Agents are registered as MCP tools, accessible as `agent_<name>`
+**Key Features:**
+- **Persistent Context**: Sessions maintain conversation history with smart truncation
+- **Smart Continuation**: Automatic context preservation when token limits are reached
+- **Cost Tracking**: Real-time monitoring of usage and costs across sessions
+- **Session Management**: Save, resume, and organize conversations by name
 
-### 4. Role-Based Usage
-- **Developer Role**: Full toolset, codebase access
-- **Assistant Role**: Chat only, no tools
-- **Custom Roles**: Fully configurable via config
+### 2. MCP Tool System
 
-See [Session Guide](./05-sessions.md), [Advanced Features](./06-advanced.md), and [Command Layers](./07-command-layers.md) for full details.
+**Built-in MCP Servers** provide comprehensive development capabilities:
 
-### 4. AI Provider Support
-Extensive support for multiple AI providers with unified interface:
-- OpenRouter (multi-provider access)
-- OpenAI, Anthropic, Google Vertex AI
-- Amazon Bedrock, Cloudflare Workers AI
+**Developer Server** (`src/mcp/dev/`):
+- `shell(command="...")` - Execute shell commands with output capture
+- `ast_grep(pattern="...", language="...")` - Search and refactor code using AST patterns
 
-### 5. Layered Architecture
-For complex development tasks, an optional multi-stage processing system:
-- **Query Processor**: Improves and clarifies user requests
-- **Context Generator**: Gathers necessary code context using tools
-- **Developer**: Implements solutions and produces responses
+**Filesystem Server** (`src/mcp/fs/`):
+- `text_editor(command="view|create|str_replace", path="...")` - File operations
+- `list_files(directory="...", pattern="...")` - Directory listing with filtering
+- `batch_edit(path="...", operations=[...])` - Multiple file operations atomically
 
-**Context Management**: Use `/done` to finalize tasks with comprehensive summarization.
+**Web Server** (`src/mcp/web/`):
+- `web_search(query="...")` - Search the web using Brave Search API
+- `read_html(sources=["..."])` - Convert HTML content to Markdown
 
+**Agent Server** (`src/mcp/agent/`):
+- `agent_*()` tools - Route tasks to specialized AI processing layers
+- Dynamic tool generation based on configuration
+
+### 3. Multi-Provider AI Support
+
+**Unified Interface** across 7 AI providers with consistent `provider:model` format:
+
+| Provider | Format | Key Features |
+|----------|--------|--------------|
+| **OpenRouter** | `openrouter:provider/model` | Multi-provider access, caching, vision |
+| **OpenAI** | `openai:model-name` | Direct API, GPT-4o vision, cost calculation |
+| **Anthropic** | `anthropic:model-name` | Claude models, caching, vision support |
+| **Google** | `google:model-name` | Vertex AI, Gemini 1.5+ vision |
+| **Amazon** | `amazon:model-name` | Bedrock models, AWS integration |
+| **Cloudflare** | `cloudflare:model-name` | Edge AI, fast inference |
+| **DeepSeek** | `deepseek:model-name` | Cost-effective models |
+
+### 4. Role-Based Configuration
+
+**Developer Role** (`config-templates/default.toml` lines 156-337):
+- Full access to all MCP tools
+- Optimized system prompts for development tasks
+- Layer processing enabled for complex workflows
+- Server references: developer, filesystem, web, agent
+
+**Assistant Role** (lines 340-355):
+- Chat-only mode with limited tool access
+- General assistance system prompts
+- Minimal tool permissions for safety
+
+**Custom Roles**: Define specific tool permissions and configurations
+
+### 5. Smart Cost Optimization
+
+**Automatic Caching**:
+- Cache markers for expensive operations
+- Provider-specific cache support (Anthropic Claude, etc.)
+- Configurable cache thresholds and timeouts
+
+**Real-Time Tracking**:
+- Per-session cost monitoring
+- Per-request spending thresholds
+- Detailed usage reporting with `/report` command
+
+**Context Management**:
+- Smart truncation when limits approached
+- AI-driven context preservation during continuation
+- Efficient token usage optimization
 ## Key Features
 
-### 1. Natural Conversation Interface
-Instead of complex command-line options, simply talk to Octomind:
-- **"How does authentication work in this project?"**
-- **"Show me the main configuration files"**
-- **"Help me fix this compilation error"**
-- **"Add error handling to the login function"**
+### Multimodal Vision Support
 
-### 2. Intelligent Project Understanding
-Sessions automatically analyze your project context:
-- **Project structure** and organization
-- **Code relationships** and dependencies
-- **Configuration files** and settings
-- **Documentation** and README files
+**Image Analysis** with `/image <path>` command:
+- Support for PNG, JPEG, GIF, WebP, BMP, and other formats
+- Vision capabilities across all supported providers
+- Intelligent file completion and path resolution
+- Use cases: UI analysis, diagram interpretation, code screenshots
 
-### 3. Built-in Development Tools
-All tools are accessible through natural conversation:
-- **File operations**: View, edit, create files
-- **Code analysis**: Understand structure and relationships
-- **Shell commands**: Execute development tasks
-- **Search capabilities**: Find code by meaning
+### Smart Session Continuation
 
-### 4. Flexible Role System
-Choose the right mode for your needs:
-- **Developer Role**: Full development environment
-- **Assistant Role**: Simple chat without tools
-- **Custom Roles**: Define your own specialized configurations
+**Automatic Context Management** (`src/session/chat/continuation/`):
+- AI-driven context preservation when token limits reached
+- File context parsing with `filename:startline:endline` format
+- Visual feedback showing continuation status
+- Zero configuration required
 
-### 5. Session Management
-Organize your development conversations:
-- **Save and resume** development sessions
-- **Context optimization** for long conversations
-- **Token management** and cost tracking
-- **Session switching** for different projects
+### Layered Processing System
 
-## How to Use Octomind
+**AI Pipeline Architecture** (`src/session/layers/`):
+- Task refinement and research layers
+- Custom command execution with `/run <command>`
+- Agent system for specialized AI routing
+- Configurable input/output modes
 
-### Basic Workflow
+### Advanced Development Tools
 
-1. **Start a session**: `octomind session`
-2. **Ask questions**: Natural language about your code
-3. **Get assistance**: AI helps with analysis and modifications
-4. **Continue working**: Session maintains context and history
+**AST-Based Code Operations**:
+- `ast_grep()` for structural code search and refactoring
+- Pattern-based transformations using AST understanding
+- Language-aware code analysis
 
-### Example Interactions
+**Batch File Operations**:
+- `batch_edit()` for atomic multi-line changes
+- Original line number preservation
+- Conflict detection and rollback
 
+## Usage Patterns
+
+### Development Workflow
+
+```bash
+# Start development session
+octomind session
+
+# Natural language interactions
+> "How does authentication work in this project?"
+> "Add error handling to the login function"
+> "Refactor the database connection code"
+
+# Use built-in tools
+> shell(command="cargo test")
+> text_editor(command="view", path="src/main.rs", view_range=[1, 50])
+> ast_grep(pattern="fn $NAME($ARGS)", language="rust")
 ```
-> How is user authentication implemented?
 
-[AI analyzes project structure, finds auth-related files, explains the implementation]
+### Session Commands
 
-> Can you add rate limiting to the login endpoint?
+Essential commands for session management:
+- `/help` - Show available commands
+- `/info` - Display token usage and costs
+- `/image <path>` - Attach images for AI analysis
+- `/mcp info` - Check MCP server status
+- `/model <model>` - Switch AI models
+- `/cache` - Add cache checkpoint
+- `/done` - Finalize task with memorization
 
-[AI examines the login code, implements rate limiting, shows the changes]
+### Cost Management
 
-> Why is the build failing?
+**Real-Time Monitoring**:
+- `/info` - Current session costs and token usage
+- `/report` - Detailed cost breakdown by request
+- Automatic cache markers for optimization
+- Spending thresholds and warnings
 
-[AI checks build errors, analyzes the code, suggests fixes]
+## Configuration System
+
+### Template-Based Configuration
+
+**Default Template** (`config-templates/default.toml`):
+- All defaults defined in template file
+- Environment variable overrides with `OCTOMIND_*` prefix
+- Role-specific configurations
+- MCP server definitions
+
+**Key Configuration Sections**:
+- System-wide settings (model, max_tokens, log_level)
+- Role configurations (developer, assistant, custom)
+- MCP server definitions (built-in and external)
+- Layer configurations for AI processing pipeline
+
+### Environment Overrides
+
+```bash
+# System settings
+export OCTOMIND_MODEL="openrouter:anthropic/claude-sonnet-4"
+export OCTOMIND_LOG_LEVEL="debug"
+
+# Role-specific settings
+export OCTOMIND_ROLES__DEVELOPER__TEMPERATURE="0.1"
+export OCTOMIND_ROLES__DEVELOPER__MAX_TOKENS="16384"
 ```
 
 ## Getting Started
 
-### Quick Setup
+### Quick Start
 
-1. **Install Octomind** - See [Installation Guide](./01-installation.md) for detailed instructions
-2. **Configure AI Provider** - See [Provider Setup](./03-providers.md) for comprehensive setup
-3. **Start Your First Session**
-  ```bash
-  # Start in your project directory
-  cd your_project
-  octomind session
-  ```
+1. **Install**: `curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash`
+2. **Set API Key**: `export OPENROUTER_API_KEY="your_key"`
+3. **Start Session**: `octomind session`
+4. **Try Commands**: `/help`, `/info`, `/mcp info`
 
-### What's Different
+### Next Steps
 
-Octomind now uses a simplified, session-first approach:
+- **[Installation Guide](./01-installation.md)** - Detailed setup and prerequisites
+- **[Configuration Guide](./03-configuration.md)** - Customize settings and roles
+- **[Provider Setup](./04-providers.md)** - Configure AI models and keys
+- **[Sessions Guide](./05-sessions.md)** - Master interactive sessions
+- **[Advanced Features](./06-advanced.md)** - MCP tools and extensibility
+- **[Command Layers](./07-command-layers.md)** - AI processing pipeline
+- **[MCP Development](./08-mcp-server-development.md)** - Tool development
 
-```bash
-# Everything in one place
-octomind session
+---
 
-# Then just ask naturally:
-> "How does auth work in this project?"
-> "Add error handling to login"
-> "Why is the build failing?"
-```
-
-No separate indexing or search commands needed.
-
-## Next Steps
-
-- [Installation Guide](./01-installation.md) - Detailed installation methods and setup
-- [Configuration Guide](./03-configuration.md) - Set up providers and roles
-- [Provider Setup](./04-providers.md) - Configure AI models
-- [Session Guide](./05-sessions.md) - Master interactive sessions
-- [Advanced Features](./06-advanced.md) - Layered architecture and MCP tools
+**Octomind v0.12.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.

@@ -1,15 +1,24 @@
 # Installation Guide
 
-## Overview
+This guide covers all installation methods for Octomind, from quick setup to development builds.
 
-Octomind provides multiple installation methods to suit different needs, from quick installation scripts to building from source with cross-compilation support.
+## Prerequisites
+
+### For Users
+- **API Key** from supported AI provider (OpenRouter, OpenAI, Anthropic, etc.)
+- **Operating System**: Linux, macOS, or Windows
+
+### For Developers
+- **Rust 1.82+** and Cargo
+- **Git** for version control
+- **API Key** from supported AI provider
 
 ## Quick Installation (Recommended)
 
-Use our installation script to automatically download the appropriate binary for your platform:
+The fastest way to get started with Octomind:
 
 ```bash
-# Install latest version
+# One-line install
 curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
 
 # Or download and inspect first
@@ -18,319 +27,346 @@ chmod +x install.sh
 ./install.sh
 ```
 
+This script automatically:
+- Detects your platform (Linux, macOS, Windows)
+- Downloads the appropriate binary
+- Installs to `/usr/local/bin` (or equivalent)
+- Sets up shell completions (optional)
+
 ## Manual Installation
 
-Download pre-compiled binaries from the [releases page](https://github.com/muvon/octomind/releases) for your platform:
+### Download Pre-built Binaries
 
-- **Linux**: `octomind-{version}-x86_64-unknown-linux-{gnu,musl}.tar.gz`
-- **macOS**: `octomind-{version}-{x86_64,aarch64}-apple-darwin.tar.gz`
-- **Windows**: `octomind-{version}-x86_64-pc-windows-gnu.zip`
+Download from [GitHub Releases](https://github.com/muvon/octomind/releases):
 
-Extract and place the binary in your `PATH`.
+**Linux:**
+```bash
+# x86_64 GNU libc
+wget https://github.com/muvon/octomind/releases/latest/download/octomind-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf octomind-x86_64-unknown-linux-gnu.tar.gz
+sudo mv octomind /usr/local/bin/
+
+# x86_64 musl (static)
+wget https://github.com/muvon/octomind/releases/latest/download/octomind-x86_64-unknown-linux-musl.tar.gz
+```
+
+**macOS:**
+```bash
+# Intel Macs
+wget https://github.com/muvon/octomind/releases/latest/download/octomind-x86_64-apple-darwin.tar.gz
+
+# Apple Silicon Macs
+wget https://github.com/muvon/octomind/releases/latest/download/octomind-aarch64-apple-darwin.tar.gz
+```
+
+**Windows:**
+```bash
+# Download and extract
+wget https://github.com/muvon/octomind/releases/latest/download/octomind-x86_64-pc-windows-gnu.zip
+```
 
 ## Package Managers
 
-### Homebrew (macOS/Linux)
+### Cargo (Rust Package Manager)
 ```bash
-# Coming soon
-brew install muvon/tap/octomind
-```
+# Install from crates.io (when published)
+cargo install octomind
 
-### Cargo (Build from source)
-```bash
+# Install from Git repository
 cargo install --git https://github.com/muvon/octomind.git
 ```
 
-### Basic Build
-- Use ONLY for development (not needed for normal users)
-- Preferred: `cargo check --message-format=short` (fastest, validates code)
-- Use `cargo build` only if you need to run binaries (debug builds)
-- **NEVER** use `cargo build --release` for development (slow, unnecessary)
-- Do NOT modify configs or run tests that affect global configuration during build. Development instructions are now in INSTRUCTIONS.md.
-### Basic Build
+### Homebrew (Coming Soon)
+```bash
+# Future release
+brew install muvon/tap/octomind
+```
+## Development Setup
+
+### Building from Source
+
+For developers who want to build Octomind from source:
+
 ```bash
 # Clone the repository
 git clone https://github.com/muvon/octomind.git
 cd octomind
 
-# Quick build for development
-make build
+# Fast compilation check (recommended for development)
+cargo check --message-format=short
 
-# Or build manually
+# Fix code quality issues (treat warnings as errors)
+cargo clippy --all-features --all-targets -- -D warnings
+
+# Build debug version (when you need the binary)
+cargo build
+
+# Build release version (for production)
 cargo build --release
+```
 
-# Install to system
-make install
+### Development Workflow
+
+**Daily Development Cycle:**
+```bash
+# 1. Fast syntax/compilation check (PREFERRED)
+cargo check --message-format=short
+
+# 2. Fix all code quality issues
+cargo clippy --all-features --all-targets -- -D warnings
+
+# 3. Build only when needed
+cargo build
+
+# 4. Test your changes
+./target/debug/octomind --version
+```
+
+**Important Development Rules:**
+- **ALWAYS** use `cargo check --message-format=short` for fast validation
+- **NEVER** use `cargo build --release` during development (extremely slow)
+- **ALWAYS** fix clippy warnings (treat as errors)
+- **NEVER** modify system-wide configs or run tests that affect global configuration
+
+### Cross-Platform Building
+
+Octomind supports multiple platforms. For cross-compilation:
+
+```bash
+# Install cross-compilation targets
+rustup target add x86_64-unknown-linux-musl
+rustup target add aarch64-apple-darwin
+rustup target add x86_64-pc-windows-gnu
+
+# Build for specific targets
+cargo build --release --target x86_64-unknown-linux-musl
+cargo build --release --target aarch64-apple-darwin
+cargo build --release --target x86_64-pc-windows-gnu
+```
+
+## API Key Setup
+
+After installation, you need to configure an AI provider API key:
+
+### Supported Providers
+
+Set one or more API keys for the providers you want to use:
+
+```bash
+# Multi-provider access (recommended)
+export OPENROUTER_API_KEY="sk-or-v1-..."
+
+# Direct provider access
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GOOGLE_API_KEY="AIza..."
+export AMAZON_ACCESS_KEY_ID="AKIA..."
+export AMAZON_SECRET_ACCESS_KEY="..."
+export CLOUDFLARE_API_TOKEN="..."
+export DEEPSEEK_API_KEY="sk-..."
+
+# Optional: Web search capability
+export BRAVE_API_KEY="BSA..."
+```
+
+### Provider Details
+
+| Provider | API Key Format | Features |
+|----------|----------------|----------|
+| **OpenRouter** | `sk-or-v1-...` | Multi-provider access, caching, vision models |
+| **OpenAI** | `sk-...` | Direct API, GPT-4o vision, cost calculation |
+| **Anthropic** | `sk-ant-...` | Claude models, caching, Claude 3+ vision |
+| **Google** | `AIza...` | Vertex AI, Gemini 1.5+ vision support |
+| **Amazon** | Access Key + Secret | Bedrock models, AWS integration |
+| **Cloudflare** | Token | Edge AI, fast inference, Llama 3.2 vision |
+| **DeepSeek** | `sk-...` | Cost-effective models, competitive performance |
+
+### Persistent Configuration
+
+Add API keys to your shell profile for persistence:
+
+```bash
+# Add to ~/.bashrc, ~/.zshrc, or ~/.profile
+echo 'export OPENROUTER_API_KEY="your_key_here"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 ## Shell Completions
 
-Octomind includes built-in shell completion support for bash and zsh to improve your command-line experience.
-
-### Generating Completions
+Octomind provides built-in shell completion support:
 
 ```bash
-# Generate bash completion
-octomind completion bash > octomind_completion.bash
+# Generate completions for your shell
+octomind completion bash > ~/.bash_completion.d/octomind
+octomind completion zsh > ~/.zsh/completions/_octomind
 
-# Generate zsh completion
-octomind completion zsh > _octomind
-
-# See all available shells
-octomind completion --help
+# Or install system-wide
+sudo octomind completion bash > /etc/bash_completion.d/octomind
 ```
 
-### Installing Completions
-
-**Automatic Installation:**
-```bash
-# After building the release binary, run the install script
-./scripts/install-completions.sh
-```
-
-**Manual Installation:**
-
-For **Bash**:
-```bash
-# Install to user completion directory
-octomind completion bash > ~/.local/share/bash-completion/completions/octomind
-
-# Or source directly in your ~/.bashrc
-echo 'source <(octomind completion bash)' >> ~/.bashrc
-```
-
-For **Zsh**:
-```bash
-# Install to user completion directory
-mkdir -p ~/.config/zsh/completions
-octomind completion zsh > ~/.config/zsh/completions/_octomind
-
-# Add to your ~/.zshrc if not already present
-echo 'fpath=(~/.config/zsh/completions $fpath)' >> ~/.zshrc
-echo 'autoload -U compinit && compinit' >> ~/.zshrc
-```
-
-### Completion Features
-
-Shell completions provide:
-- **Command completion**: Tab-complete `octomind` subcommands (`session`, `ask`, `config`, etc.)
-- **Option completion**: Complete flags and arguments for each command
-- **File completion**: Automatic file path completion where appropriate
-- **Shell selection**: Complete available shells for the `completion` command
-
-The completions are automatically generated from your CLI structure, so they stay up-to-date with any command changes.
-
-## Cross-Compilation
-
-Octomind includes a comprehensive cross-compilation setup for building static binaries across multiple platforms.
-
-### Supported Platforms
-
-- **Linux**: x86_64 and aarch64 (glibc and musl)
-- **macOS**: x86_64 and Apple Silicon (aarch64)
-- **Windows**: x86_64
-
-### Build System Setup
-
-```bash
-# Install cross-compilation tools
-make setup
-
-# Check your environment
-make check
-
-# Build for all platforms
-make build-all
-
-# Build for specific platforms
-make build-linux      # All Linux targets
-make build-windows    # Windows targets
-make build-macos      # macOS targets (macOS host only)
-
-# Build for specific target
-make x86_64-unknown-linux-musl
-
-# Create distribution archives
-make dist
-```
-
-### Individual Platform Builds
-
-```bash
-# Linux targets (using cross)
-make x86_64-unknown-linux-gnu
-make x86_64-unknown-linux-musl
-make aarch64-unknown-linux-gnu
-make aarch64-unknown-linux-musl
-
-# Windows target (using cross)
-make x86_64-pc-windows-gnu
-
-# macOS targets (native only, requires macOS)
-make x86_64-apple-darwin
-make aarch64-apple-darwin
-```
-
-### Requirements for Cross-Compilation
-
-**All Platforms:**
-- Rust toolchain with cross-compilation targets
-- [cross](https://github.com/cross-rs/cross) tool for Linux/Windows builds
-- Docker or Podman for containerized builds
-
-**Installation:**
-```bash
-# Install targets
-rustup target add x86_64-unknown-linux-gnu
-rustup target add x86_64-unknown-linux-musl
-rustup target add aarch64-unknown-linux-gnu
-rustup target add aarch64-unknown-linux-musl
-rustup target add x86_64-pc-windows-gnu
-rustup target add x86_64-apple-darwin      # macOS only
-rustup target add aarch64-apple-darwin     # macOS only
-
-# Install cross tool
-cargo install cross --git https://github.com/cross-rs/cross
-```
-
-### Static Linking Configuration
-
-All builds use static linking by default for maximum compatibility:
-
-- **Linux**: Uses musl targets for fully static binaries
-- **Windows**: Uses static CRT linking
-- **macOS**: Uses static linking where possible
-
-The build configuration in `Cargo.toml` enables:
-- Link Time Optimization (LTO)
-- Single codegen unit for better optimization
-- Panic abort for smaller binaries
-- Symbol stripping
-
-### GitHub Actions CI/CD
-
-Automated builds are configured for:
-- All platforms on every push/PR
-- Release artifacts on git tags
-- Docker images for containerized deployment
-- Automated security audits and code quality checks
-
-See `.github/workflows/cross-build.yml` for the complete CI configuration.
-
-## Docker Support
-
-Build and run in containers:
-
-```bash
-# Build Docker image
-docker build -t octomind .
-
-# Run in container
-docker run --rm -v $(pwd):/workspace octomind index /workspace
-```
-
-### Build Configuration Files
-
-- **`Makefile`**: Comprehensive build system with all targets
-- **`Cross.toml`**: Configuration for cross-compilation tool
-- **`Dockerfile`**: Multi-stage build for minimal container image
-- **`.github/workflows/cross-build.yml`**: CI/CD pipeline
+**Supported Shells:**
+- Bash
+- Zsh
+- Fish (coming soon)
+- PowerShell (Windows)
 
 ## Verification
 
-After installation, verify Octomind is working:
+After installation, verify Octomind is working correctly:
 
 ```bash
 # Check version
 octomind --version
 
-# Test configuration
-octomind config --validate
+# Verify API key is set
+octomind vars
+
+# Test basic functionality
+octomind config --show
 
 # Start a test session
-octomind session --role=assistant
+octomind session --role assistant
 ```
 
-## Troubleshooting Installation
+### First Run
 
-### Common Issues
+```bash
+# Generate default configuration (optional)
+octomind config
 
-#### Permission Denied
+# Start your first session
+octomind session
+
+# Within the session, try:
+/help                    # Show available commands
+/info                    # Check token usage and costs
+/mcp info               # Check MCP server status
+```
+
+## Configuration
+
+Octomind uses a template-based configuration system with smart defaults:
+
+### Configuration Files
+
+```
+~/.config/octomind/config.toml    # User configuration
+~/.local/share/octomind/sessions/ # Session history
+~/.local/share/octomind/logs/     # Debug logs
+```
+
+### Environment Variables
+
+Any configuration setting can be overridden with environment variables:
+
+```bash
+# System-wide settings
+export OCTOMIND_LOG_LEVEL="debug"
+export OCTOMIND_MODEL="openrouter:anthropic/claude-sonnet-4"
+export OCTOMIND_MAX_TOKENS="8192"
+
+# Role-specific overrides (use double underscores for nested settings)
+export OCTOMIND_ROLES__DEVELOPER__MODEL="openai:gpt-4o"
+export OCTOMIND_ROLES__DEVELOPER__TEMPERATURE="0.1"
+```
+
+## Troubleshooting
+
+### Common Installation Issues
+
+**1. Binary Not Found**
+```bash
+# Check if binary is in PATH
+which octomind
+
+# Add to PATH if needed
+export PATH="$PATH:/usr/local/bin"
+```
+
+**2. Permission Denied**
 ```bash
 # Make binary executable
-chmod +x octomind
+chmod +x /usr/local/bin/octomind
 
 # Or install to user directory
 mkdir -p ~/.local/bin
 mv octomind ~/.local/bin/
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$PATH:~/.local/bin"
 ```
 
-#### Missing Dependencies
+**3. API Key Issues**
 ```bash
-# On Linux, you might need:
-sudo apt-get update
-sudo apt-get install ca-certificates
+# Verify API key is set
+echo $OPENROUTER_API_KEY
 
-# On macOS with Homebrew:
-brew install ca-certificates
+# Test API key validity
+octomind ask "Hello" --model "openrouter:anthropic/claude-haiku"
 ```
 
-#### Cross-compilation Issues
+### Development Issues
+
+**1. Rust/Cargo Problems**
 ```bash
-# Install Docker/Podman for cross-compilation
-# Ubuntu/Debian:
-sudo apt-get install docker.io
-
-# macOS:
-brew install docker
-
-# Check cross tool installation
-cross --version
-```
-
-### Build Issues
-
-#### Rust Version
-```bash
-# Update Rust to latest version
+# Update Rust toolchain
 rustup update
 
-# Check version (needs 1.70+)
+# Check Rust version (need 1.82+)
 rustc --version
-```
 
-#### Cargo Cache Issues
-```bash
-# Clear cargo cache if builds fail
+# Clean build cache
 cargo clean
-rm -rf ~/.cargo/registry/cache
 ```
 
-### Platform-Specific Notes
+**2. Build Failures**
+```bash
+# Fast compilation check
+cargo check --message-format=short
 
-#### Linux
-- Static musl builds are recommended for maximum compatibility
-- glibc builds require compatible system libraries
+# Fix code quality issues
+cargo clippy --all-features --all-targets -- -D warnings
 
-#### macOS
-- Universal binaries support both Intel and Apple Silicon
-- Code signing may be required for distribution
+# Check for missing dependencies
+cargo tree
+```
 
-#### Windows
-- GNU toolchain is used for better compatibility
-- MSVC builds are not currently supported
+**3. Configuration Issues**
+```bash
+# Validate configuration
+octomind config --validate
 
-## Next Steps
+# Reset to defaults
+rm ~/.config/octomind/config.toml
+octomind config
 
-After installation:
+# Check environment variables
+octomind vars
+```
 
-1. **[Configuration Guide](./03-configuration.md)** - Set up providers and roles
-2. **[Provider Setup](./04-providers.md)** - Configure AI models
-3. **[Session Guide](./05-sessions.md)** - Start using interactive sessions
+### Platform-Specific Issues
 
-## Getting Help
+**Linux:**
+- Install `build-essential` for compilation
+- Use musl target for static binaries
+- Check glibc version compatibility
 
-- **Installation Issues**: [GitHub Issues](https://github.com/muvon/octomind/issues)
-- **Build Problems**: Check the troubleshooting section above
-- **Platform Support**: Contact [opensource@muvon.io](mailto:opensource@muvon.io)
+**macOS:**
+- Install Xcode command line tools: `xcode-select --install`
+- Use appropriate target for your architecture (Intel vs Apple Silicon)
+
+**Windows:**
+- Install Visual Studio Build Tools
+- Use WSL for better compatibility
+- Consider using the Linux binary in WSL
+
+### Getting Help
+
+If you encounter issues not covered here:
+
+1. **Check Logs**: Use `/loglevel debug` in sessions for detailed logging
+2. **GitHub Issues**: [Report bugs](https://github.com/muvon/octomind/issues)
+3. **Discussions**: [Community support](https://github.com/muvon/octomind/discussions)
+4. **Documentation**: Review other guides in this manual
+
+---
+
+**Next Steps**: After installation, see the [Overview](./02-overview.md) for core concepts and [Sessions Guide](./05-sessions.md) for usage instructions.

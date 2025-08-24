@@ -2,37 +2,45 @@
 
 **© 2025 Muvon Un Limited** | [Complete Documentation](doc/README.md)
 
-> **Transform your development workflow with AI conversations that understand your codebase**
+> **Session-based AI development assistant with conversational codebase interaction, multimodal vision support, built-in MCP tools, and multi-provider AI integration**
 
-Octomind is an AI-powered development assistant that helps you understand, analyze, and interact with your codebase through natural language conversations. No complex setup, no indexing—just intelligent AI sessions with built-in development tools.
+Octomind is a session-first AI development assistant that transforms how you interact with codebases through natural language conversations. Built on the Model Context Protocol (MCP), it provides seamless integration with development tools, multi-provider AI support, and intelligent cost optimization.
 
 [![asciicast](https://asciinema.org/a/wpZmOSOgFXp8HRzTltncgN7e3.svg)](https://asciinema.org/a/wpZmOSOgFXp8HRzTltncgN7e3)
 
-## ✨ Why Octomind?
+## ✨ Core Features
 
-- 🎯 **Session-First Architecture** - Everything happens in interactive AI conversations
-- 🛠️ **Built-in Development Tools** - File operations, batch editing, code analysis, shell commands via MCP
-- 🌐 **Multi-Provider AI Support** - OpenRouter, OpenAI, Anthropic, Google, Amazon, Cloudflare
-- 🖼️ **Multimodal Vision Support** - Analyze images, screenshots, diagrams with AI across all providers
-- 💰 **Cost Tracking & Optimization** - Real-time usage monitoring with detailed reporting
-- 🔧 **Role-Based Configuration** - Developer (full tools) and Assistant (chat-only) modes
+- 🎯 **Session-First Architecture** - Everything happens in interactive AI conversations with persistent context
+- 🛠️ **Built-in MCP Tools** - File operations, code analysis, shell commands, web search via Model Context Protocol
+- 🌐 **Multi-Provider AI Support** - OpenRouter, OpenAI, Anthropic, Google, Amazon, Cloudflare, DeepSeek
+- 🖼️ **Multimodal Vision Support** - Analyze images, screenshots, diagrams with AI vision capabilities
+- 💰 **Cost Tracking & Optimization** - Real-time usage monitoring, caching, and detailed cost reporting
+- 🔧 **Role-Based Configuration** - Developer (full tools), Assistant (chat-only), and custom roles
+- 🧠 **Smart Session Continuation** - Automatic context management when token limits are reached
+- ⚡ **Layered Processing** - AI pipeline system for complex task decomposition and processing
 
 ## 🚀 Quick Start
 
+### Prerequisites
+- **API Key** from supported AI provider
+
+### Installation
 ```bash
-# Install Octomind
+# One-line install (recommended)
 curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
 
-# Set your AI provider API key
-export OPENROUTER_API_KEY="your_key"
+# Set your AI provider API key (choose one)
+export OPENROUTER_API_KEY="your_key"     # Multi-provider access
+export OPENAI_API_KEY="your_key"         # Direct OpenAI
+export ANTHROPIC_API_KEY="your_key"      # Direct Anthropic
 
-# Start coding with AI
+# Start your first session
 octomind session
 ```
 
 ## 💬 How It Works
 
-Instead of complex command-line tools, simply talk to Octomind:
+Octomind operates through interactive AI sessions with built-in development tools:
 
 ```
 > "How does authentication work in this project?"
@@ -48,15 +56,27 @@ Instead of complex command-line tools, simply talk to Octomind:
 > "What's wrong with this UI layout?"
 [AI analyzes the image, identifies layout issues, suggests CSS fixes]
 
-> "Why is the build failing?"
-[AI checks build errors, analyzes code, suggests fixes]
-
-> agent_context_gatherer(task=\"Analyze the authentication system architecture\")
+> agent_context_gatherer(task="Analyze the authentication system architecture")
 [Routes task to specialized context gathering AI agent with development tools]
 
 > /report
 [Shows: $0.02 spent, 3 requests, 5 tool calls, timing analysis]
 ```
+
+### Built-in MCP Tools
+- **Developer Tools**: `shell()`, `ast_grep()` - Execute commands and search code patterns
+- **Filesystem Tools**: `text_editor()`, `list_files()`, `batch_edit()` - File operations
+- **Web Tools**: `web_search()`, `read_html()` - Web research and content analysis
+- **Agent Tools**: `agent_*()` - Route tasks to specialized AI processing layers
+
+### Session Commands
+- `/help` - Show available commands
+- `/info` - Display token usage and costs
+- `/image <path>` - Attach images for AI analysis
+- `/mcp info` - Check MCP server status
+- `/model <model>` - Switch AI models
+- `/role <role>` - Change role (developer/assistant)
+- `/cache` - Add cache checkpoint for cost optimization
 
 ## 🌐 Supported AI Providers
 
@@ -72,153 +92,171 @@ Instead of complex command-line tools, simply talk to Octomind:
 
 ## 🛠️ Installation & Setup
 
+### Prerequisites
+- **Rust 1.82+** and Cargo
+- **API Key** from supported AI provider
+
 ### Installation Options
 
 ```bash
 # One-line install (recommended)
 curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
 
-# Build from source
-cargo install --git https://github.com/muvon/octomind.git
+# Build from source (for development)
+git clone https://github.com/muvon/octomind.git
+cd octomind
+cargo build --release
 
-# Manual download from releases
-# See: https://github.com/muvon/octomind/releases
+# Install via Cargo (when published)
+cargo install octomind
 ```
 
-### Basic Setup
+### API Key Setup
+
+Set your AI provider API key (choose one or more):
 
 ```bash
-# Set your AI provider API key
-export OPENROUTER_API_KEY="your_key"  # or OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
+# Multi-provider access (recommended)
+export OPENROUTER_API_KEY="sk-or-v1-..."
 
-# Create configuration (optional - uses smart defaults)
+# Direct provider access
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GOOGLE_API_KEY="AIza..."
+export AMAZON_ACCESS_KEY_ID="AKIA..."
+export AMAZON_SECRET_ACCESS_KEY="..."
+export CLOUDFLARE_API_TOKEN="..."
+export DEEPSEEK_API_KEY="sk-..."
+
+# Optional: Web search capability
+export BRAVE_API_KEY="BSA..."
+```
+
+### First Run
+
+```bash
+# Generate default configuration (optional)
 octomind config
 
 # Start your first session
 octomind session
-```
 
-### Essential Commands
-
-```bash
-# Development session (full tools)
-octomind session
-
-# Chat-only session
-octomind session --role=assistant
-
-# Resume previous session
-octomind session --resume my_session
-
-# Use specific model
-octomind session --model "openrouter:anthropic/claude-sonnet-4"
+# Within the session, try:
+/help                    # Show all available commands
+/info                    # Check token usage and costs
+/mcp info               # Check MCP tool status
 ```
 
 ## 🎮 Session Commands
 
-Within any session, use these commands:
-- `/help` - Show available commands and features
-- `/image <path>` - Attach image to your next message (PNG, JPEG, GIF, WebP, BMP)
-- `/model [model]` - View or change current AI model
+Essential commands for interactive sessions:
+
+**Core Commands**
+- `/help` - Show available commands
 - `/info` - Display token usage and costs
-- `/report` - Generate detailed usage report with cost breakdown
-- `/context [filter]` - Display session context with optional filtering (all, assistant, user, tool, large)
-- `/cache` - Mark cache checkpoint for cost savings
-- `/layers` - Toggle layered processing on/off
-- `/run <command>` - Execute configured custom commands
-- `/done` - Finalize task with memorization, comprehensive summarization, and auto-commit
-- `/loglevel [debug|info|none]` - Set log level
-- `/mcp [info|list|full|health|dump|validate]` - MCP server management and debugging
-- `/role [role_name]` - View or change current role
+- `/image <path>` - Attach images for AI analysis
+- `/model [model]` - View or change AI model
+- `/role [role]` - Change role (developer/assistant)
+
+**Context Management**
+- `/cache` - Add cache checkpoint for cost optimization
+- `/context [filter]` - Display session context
+- `/truncate` - Manually truncate context
+- `/done` - Finalize task with memorization
+
+**MCP Tools & Debugging**
+- `/mcp info` - Check MCP server status
+- `/run <command>` - Execute custom commands
+- `/layers` - Toggle layered processing
+- `/loglevel [level]` - Set logging level
+
+**Session Management**
 - `/save` - Save current session
 - `/clear` - Clear terminal screen
-- `/copy` - Copy last assistant response to clipboard
-- `/summarize` - Generate session summary
-- `/truncate` - Manually truncate session context
-- `/exit` - Exit current session
+- `/exit` - Exit session
 
-## 🎯 Context Management Commands
 
-Octomind provides two distinct commands for managing conversation context:
+## 🏗️ Architecture
 
-### `/done` - Task Completion & Finalization
-**Purpose**: Complete and finalize a development task (like `git commit` for conversations)
-- **When to use**: When you've finished a task/feature and want to preserve the work
-- **What it does**:
-  - Creates comprehensive task summary with all file changes and technical details
-  - Uses your current model (preserves quality and context understanding)
-  - Memorizes critical information for future reference
-  - Auto-commits changes with octocode if available
-  - Preserves complete context for task continuation
-- **Result**: Clean session start with rich task summary as context
+**Session-First Design**: Everything happens in interactive AI conversations with persistent context and built-in development tools.
 
+**Core Components:**
+- **MCP Tools**: Built-in servers for development (shell, ast_grep), filesystem (text_editor, batch_edit), web (search, html), and agent routing
+- **Multi-Provider AI**: Seamless switching between OpenRouter, OpenAI, Anthropic, Google, Amazon, Cloudflare, DeepSeek
+- **Role-Based Access**: Developer (full tools), Assistant (chat-only), and custom role configurations
+- **Smart Caching**: Automatic cost optimization with cache markers and intelligent context management
+- **Layered Processing**: AI pipeline system for complex task decomposition and specialized processing
 
 ## 🔧 Configuration
 
-Octomind uses a flexible configuration system with smart defaults. Configuration is optional for basic usage.
-
-**View Configuration Template**: [`config-templates/default.toml`](config-templates/default.toml)
+Octomind uses a template-based configuration system with smart defaults:
 
 ```bash
-# Generate default config
+# Generate default config (optional)
 octomind config
-
-# Validate configuration
-octomind config --validate
 
 # View current settings
 octomind config --show
+
+# Validate configuration
+octomind config --validate
 ```
 
-**Key Configuration Features:**
-- Environment variable precedence for security
-- Role-based configurations (developer/assistant)
-- MCP server registry for tool integration
-- Cost thresholds and performance tuning
+**Configuration Features:**
+- **Template-Based**: All defaults in `config-templates/default.toml`
+- **Environment Overrides**: Any setting can be overridden with `OCTOMIND_*` variables
+- **Role-Based**: Different configurations for developer/assistant/custom roles
+- **MCP Integration**: Built-in and external MCP server configurations
+- **Cost Controls**: Spending thresholds and performance tuning
 
 ## 📖 Documentation
 
 📚 **[Complete Documentation](./doc/README.md)** - Comprehensive guides and references
 
 ### Quick Navigation
-- **[Installation Guide](./doc/01-installation.md)** - Detailed installation methods and building from source
-- **[Overview](./doc/02-overview.md)** - Introduction and core concepts
-- **[Configuration Guide](./doc/03-configuration.md)** - Configuration system, templates, and customization
-- **[AI Providers](./doc/04-providers.md)** - Provider setup, API keys, and model selection
-- **[Sessions Guide](./doc/05-sessions.md)** - Interactive sessions, commands, and workflow
-- **[Advanced Features](./doc/06-advanced.md)** - MCP tools, layered architecture, and extensibility
-- **[Command Layers](./doc/07-command-layers.md)** - Specialized AI helpers and command processing
+- **[Installation Guide](./doc/01-installation.md)** - Setup, prerequisites, and development
+- **[Overview](./doc/02-overview.md)** - Architecture and core concepts
+- **[Configuration Guide](./doc/03-configuration.md)** - Configuration system and customization
+- **[AI Providers](./doc/04-providers.md)** - Provider setup and model selection
+- **[Sessions Guide](./doc/05-sessions.md)** - Interactive sessions and commands
+- **[Advanced Features](./doc/06-advanced.md)** - MCP tools and extensibility
+- **[Command Layers](./doc/07-command-layers.md)** - AI processing pipeline
+- **[MCP Development](./doc/08-mcp-server-development.md)** - Tool development
 
 ## 🚀 Contributing
 
-Contributions are welcome! We appreciate your help in making Octomind better.
+Contributions are welcome! Help make Octomind better for the development community.
+
+**Development Setup:**
+```bash
+git clone https://github.com/muvon/octomind.git
+cd octomind
+cargo check --message-format=short    # Fast compilation check
+cargo clippy --all-features --all-targets -- -D warnings  # Fix code quality
+cargo build                           # Build when needed
+```
 
 **Development Areas:**
 - **AI Providers**: Add new providers in `src/providers/`
-- **MCP Tools**: Extend tool capabilities via MCP server registry
+- **MCP Tools**: Extend built-in tools in `src/mcp/`
+- **Session Features**: Enhance session management in `src/session/`
 - **Documentation**: Improve guides and examples
 
-```bash
-# Development setup
-git clone https://github.com/muvon/octomind
-cd octomind
-cargo build --release
-cargo test
-```
-
-**Requirements:** Rust 1.70+, Cargo, API key from supported providers
+**Requirements:** Rust 1.82+, API key from supported providers
 
 ## 🆘 Troubleshooting
 
 **Common Issues:**
-- **Configuration Errors**: Check system config directory or regenerate with `octomind config`
-- **Missing API Keys**: Set environment variables for your AI provider
+- **Build Errors**: Use `cargo check --message-format=short` for fast syntax checking
+- **Missing API Keys**: Set `OPENROUTER_API_KEY` or provider-specific keys
 - **Invalid Model Format**: Use `provider:model` format (e.g., `openrouter:anthropic/claude-sonnet-4`)
-- **Session Issues**: Use `/loglevel debug` to enable detailed logging
+- **MCP Tool Issues**: Check `/mcp info` for server status
+- **Session Problems**: Use `/loglevel debug` for detailed logging
 
 **Getting Help:**
 - 🐛 **Issues**: [GitHub Issues](https://github.com/muvon/octomind/issues)
 - 📖 **Documentation**: [Complete Documentation](./doc/README.md)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/muvon/octomind/discussions)
 - ✉️ **Email**: [opensource@muvon.io](mailto:opensource@muvon.io)
 
 ## 📞 Support & Contact
