@@ -24,18 +24,23 @@ use std::borrow::Cow::{self, Borrowed, Owned};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Default)]
-struct CommandCompleter {
+struct CommandCompleter<'a> {
 	commands: Vec<String>,
+	config: &'a crate::config::Config,
+	role: &'a str,
 }
 
-impl CommandCompleter {
-	fn new() -> Self {
+impl<'a> CommandCompleter<'a> {
+	fn new(config: &'a crate::config::Config, role: &'a str) -> Self {
 		let commands = crate::session::chat::COMMANDS
 			.iter()
 			.map(|&s| s.to_string())
 			.collect();
-		Self { commands }
+		Self {
+			commands,
+			config,
+			role,
+		}
 	}
 
 	/// Check if the given file extension is a supported image format
@@ -241,7 +246,7 @@ impl CommandCompleter {
 	}
 }
 
-impl Completer for CommandCompleter {
+impl<'a> Completer for CommandCompleter<'a> {
 	type Candidate = Pair;
 
 	fn complete(
@@ -268,6 +273,60 @@ impl Completer for CommandCompleter {
 
 			// For file completion, we want to replace from the start of the file part
 			Ok((prefix_len, filtered_candidates))
+		} else if line.starts_with("/prompt ") {
+			// Handle /prompt command with template name completion
+			let prompt_prefix = "/prompt ";
+			let prefix_len = prompt_prefix.len();
+
+			// Extract the template name part up to cursor position
+			let template_part = if pos > prefix_len {
+				&line[prefix_len..pos]
+			} else {
+				""
+			};
+
+			// Get available prompt templates from config
+			let candidates: Vec<Pair> = self
+				.config
+				.prompts
+				.iter()
+				.filter(|prompt| prompt.name.starts_with(template_part))
+				.map(|prompt| Pair {
+					display: if let Some(ref description) = prompt.description {
+						format!("{} - {}", prompt.name, description)
+					} else {
+						prompt.name.clone()
+					},
+					replacement: prompt.name.clone(),
+				})
+				.collect();
+
+			Ok((prefix_len, candidates))
+		} else if line.starts_with("/run ") {
+			// Handle /run command with command name completion
+			let run_prefix = "/run ";
+			let prefix_len = run_prefix.len();
+
+			// Extract the command name part up to cursor position
+			let command_part = if pos > prefix_len {
+				&line[prefix_len..pos]
+			} else {
+				""
+			};
+
+			// Get available commands for this role
+			let available_commands =
+				crate::session::chat::list_available_commands(self.config, self.role);
+			let candidates: Vec<Pair> = available_commands
+				.iter()
+				.filter(|cmd| cmd.starts_with(command_part))
+				.map(|cmd| Pair {
+					display: cmd.clone(),
+					replacement: cmd.clone(),
+				})
+				.collect();
+
+			Ok((prefix_len, candidates))
 		} else if !line.starts_with('/') {
 			// No completion for non-commands
 			Ok((0, vec![]))
@@ -303,7 +362,7 @@ impl Completer for CommandCompleter {
 }
 
 // We need to implement these traits to make CommandHelper work with rustyline
-impl Hinter for CommandCompleter {
+impl<'a> Hinter for CommandCompleter<'a> {
 	type Hint = String;
 
 	fn hint(&self, line: &str, _pos: usize, _ctx: &rustyline::Context<'_>) -> Option<Self::Hint> {
@@ -316,12 +375,38 @@ impl Hinter for CommandCompleter {
 			return Some(" <path_to_image>".to_string());
 		}
 
+		// Special hint for /prompt command
+		if line == "/prompt" {
+			return Some(" <template_name>".to_string());
+		}
+
+		// Special hint for /run command
+		if line == "/run" {
+			return Some(" <command_name>".to_string());
+		}
+
 		if line.starts_with("/image ") && line.len() > 7 {
 			let file_part = &line[7..]; // "/image ".len() = 7
 			if file_part.is_empty() {
 				return Some("Start typing image file path...".to_string());
 			}
 			return None; // Let filename completer handle this
+		}
+
+		if line.starts_with("/prompt ") && line.len() > 8 {
+			let template_part = &line[8..]; // "/prompt ".len() = 8
+			if template_part.is_empty() {
+				return Some("Start typing prompt template name...".to_string());
+			}
+			return None; // Let template completer handle this
+		}
+
+		if line.starts_with("/run ") && line.len() > 5 {
+			let command_part = &line[5..]; // "/run ".len() = 5
+			if command_part.is_empty() {
+				return Some("Start typing command name...".to_string());
+			}
+			return None; // Let command completer handle this
 		}
 
 		// Look for a command that starts with the current input
@@ -332,7 +417,7 @@ impl Hinter for CommandCompleter {
 	}
 }
 
-impl Highlighter for CommandCompleter {
+impl<'a> Highlighter for CommandCompleter<'a> {
 	fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
 		// Only apply highlighting to commands (lines starting with '/')
 		if line.starts_with('/') {
@@ -358,6 +443,63 @@ impl Highlighter for CommandCompleter {
 				} else {
 					// Just the command part is green
 					return Owned(format!("{} ", image_cmd.green()));
+				}
+			}
+
+			// Special handling for /prompt command with template name
+			if line.starts_with("/prompt ") && line.len() > 8 {
+				let prompt_cmd = "/prompt";
+				let template_part = &line[8..]; // "/prompt ".len() = 8
+
+				if !template_part.is_empty() {
+					// Check if template exists
+					let template_exists = self
+						.config
+						.prompts
+						.iter()
+						.any(|prompt| prompt.name == template_part);
+
+					if template_exists {
+						// Highlight valid template name in bright green
+						return Owned(format!(
+							"{} {}",
+							prompt_cmd.green(),
+							template_part.bright_green()
+						));
+					} else {
+						// Highlight invalid template name in yellow
+						return Owned(format!("{} {}", prompt_cmd.green(), template_part.yellow()));
+					}
+				} else {
+					// Just the command part is green
+					return Owned(format!("{} ", prompt_cmd.green()));
+				}
+			}
+
+			// Special handling for /run command with command name
+			if line.starts_with("/run ") && line.len() > 5 {
+				let run_cmd = "/run";
+				let command_part = &line[5..]; // "/run ".len() = 5
+
+				if !command_part.is_empty() {
+					// Check if command exists for this role
+					let command_exists =
+						crate::session::chat::command_exists(self.config, self.role, command_part);
+
+					if command_exists {
+						// Highlight valid command name in bright green
+						return Owned(format!(
+							"{} {}",
+							run_cmd.green(),
+							command_part.bright_green()
+						));
+					} else {
+						// Highlight invalid command name in yellow
+						return Owned(format!("{} {}", run_cmd.green(), command_part.yellow()));
+					}
+				} else {
+					// Just the command part is green
+					return Owned(format!("{} ", run_cmd.green()));
 				}
 			}
 
@@ -389,28 +531,28 @@ impl Highlighter for CommandCompleter {
 	}
 }
 
-impl Validator for CommandCompleter {}
+impl<'a> Validator for CommandCompleter<'a> {}
 
 // Helper for rustyline
-pub struct CommandHelper {
-	completer: CommandCompleter,
+pub struct CommandHelper<'a> {
+	completer: CommandCompleter<'a>,
 	hinter: Option<HistoryHinter>,
 }
 
-impl CommandHelper {
-	pub fn new() -> Self {
+impl<'a> CommandHelper<'a> {
+	pub fn new(config: &'a crate::config::Config, role: &'a str) -> Self {
 		Self {
-			completer: CommandCompleter::new(),
+			completer: CommandCompleter::new(config, role),
 			hinter: Some(HistoryHinter {}),
 		}
 	}
 }
 
 // Implement Helper trait
-impl Helper for CommandHelper {}
+impl<'a> Helper for CommandHelper<'a> {}
 
 // Implement the required traits for rustyline helper
-impl Completer for CommandHelper {
+impl<'a> Completer for CommandHelper<'a> {
 	type Candidate = Pair;
 
 	fn complete(
@@ -423,7 +565,7 @@ impl Completer for CommandHelper {
 	}
 }
 
-impl Hinter for CommandHelper {
+impl<'a> Hinter for CommandHelper<'a> {
 	type Hint = String;
 
 	fn hint(&self, line: &str, pos: usize, ctx: &rustyline::Context<'_>) -> Option<Self::Hint> {
@@ -437,7 +579,7 @@ impl Hinter for CommandHelper {
 	}
 }
 
-impl Highlighter for CommandHelper {
+impl<'a> Highlighter for CommandHelper<'a> {
 	fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
 		self.completer.highlight(line, pos)
 	}
@@ -451,4 +593,4 @@ impl Highlighter for CommandHelper {
 	}
 }
 
-impl Validator for CommandHelper {}
+impl<'a> Validator for CommandHelper<'a> {}

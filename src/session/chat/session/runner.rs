@@ -956,7 +956,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			if cancellation.is_cancelled() {
 				log_debug!("Cancellation detected during continuation - resetting continuation state and reading user input");
 				chat_session.continuation_pending = false;
-				read_user_input(chat_session.estimated_cost)?
+				read_user_input(chat_session.estimated_cost, &current_config, &role)?
 			} else {
 				log_debug!(
 					"Continuation pending - processing injected summary request automatically"
@@ -970,13 +970,13 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					.map(|msg| InputResult::Text(msg.content.clone()))
 					.unwrap_or_else(|| {
 						log_debug!("Warning: Expected summary request message not found, falling back to user input");
-						read_user_input(chat_session.estimated_cost)
+						read_user_input(chat_session.estimated_cost, &current_config, &role)
 							.unwrap_or(InputResult::Text(String::new()))
 					})
 			}
 		} else {
 			// Read user input with command completion and cost estimation
-			read_user_input(chat_session.estimated_cost)?
+			read_user_input(chat_session.estimated_cost, &current_config, &role)?
 		};
 
 		// Handle the input result with proper error recovery

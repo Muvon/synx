@@ -195,7 +195,11 @@ fn load_history_from_file() -> Result<Vec<String>> {
 }
 
 // Read user input with support for multiline input, command completion, and persistent history
-pub fn read_user_input(estimated_cost: f64) -> Result<InputResult> {
+pub fn read_user_input(
+	estimated_cost: f64,
+	octomind_config: &crate::config::Config,
+	role: &str,
+) -> Result<InputResult> {
 	// Flag to track if Ctrl+G was pressed
 	let add_without_sending = Arc::new(AtomicBool::new(false));
 
@@ -214,7 +218,7 @@ pub fn read_user_input(estimated_cost: f64) -> Result<InputResult> {
 
 	// Add command completion
 	use crate::session::chat_helper::CommandHelper;
-	editor.set_helper(Some(CommandHelper::new()));
+	editor.set_helper(Some(CommandHelper::new(octomind_config, role)));
 
 	// Set up custom key bindings
 	// Ctrl+E: Smart behavior - ONLY accepts hints when available,
