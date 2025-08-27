@@ -361,6 +361,7 @@ impl GenericLayer {
 			continuation_pending: false,      // Initialize continuation state
 			continuation_disabled: false,     // Initialize continuation control flag
 			was_resumed: false,               // Layers are never resumed sessions
+			pending_prompt: None,             // Initialize pending prompt
 		}
 	}
 

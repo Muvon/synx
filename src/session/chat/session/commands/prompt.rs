@@ -91,16 +91,9 @@ prompt = "Please review the code above focusing on best practices and security."
 	// Process the prompt template (support variable substitution if needed)
 	let processed_prompt = process_prompt_template(&prompt_config.prompt, config, role)?;
 
-	// Add the prompt as a user message to the session
-	if let Err(e) = session.add_user_message(&processed_prompt) {
-		return Err(anyhow::anyhow!(
-			"Failed to add prompt message to session: {}",
-			e
-		));
-	}
-
-	// Trigger processing pipeline: mark continuation so main loop processes immediately
-	session.continuation_pending = true;
+	// CRITICAL FIX: Don't add the message here, just store it as pending
+	// The main loop will pick it up and process it as normal user input
+	session.pending_prompt = Some(processed_prompt);
 
 	println!(
 		"{} {}",

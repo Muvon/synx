@@ -974,6 +974,11 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 							.unwrap_or(InputResult::Text(String::new()))
 					})
 			}
+		} else if let Some(prompt_text) = chat_session.pending_prompt.take() {
+			// CRITICAL FIX: Process pending prompt from /prompt command
+			// This allows the prompt to be processed as normal user input
+			log_debug!("Processing pending prompt template as user input");
+			InputResult::Text(prompt_text)
 		} else {
 			// Read user input with command completion and cost estimation
 			read_user_input(chat_session.estimated_cost, &current_config, &role)?

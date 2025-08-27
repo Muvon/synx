@@ -139,6 +139,7 @@ pub struct ChatSession {
 	pub continuation_pending: bool,    // Flag for session continuation state
 	pub continuation_disabled: bool,   // Flag to temporarily disable continuation triggers
 	pub was_resumed: bool, // Flag indicating if this session was resumed from an existing file
+	pub pending_prompt: Option<String>, // Pending prompt text to be processed as user input
 }
 
 /// Parameters for creating a new ChatSession
@@ -229,6 +230,7 @@ impl ChatSession {
 			continuation_pending: false,        // Initialize continuation state
 			continuation_disabled: false,       // Initialize continuation control flag
 			was_resumed: false,                 // This is a new session
+			pending_prompt: None,               // Initialize pending prompt
 		}
 	}
 
@@ -362,6 +364,7 @@ impl ChatSession {
 						continuation_pending: false,        // Initialize continuation state
 						continuation_disabled: false,       // Initialize continuation control flag
 						was_resumed: true,                  // This session was resumed from file
+						pending_prompt: None,               // Initialize pending prompt
 					};
 
 					// Initialize spending threshold checkpoint for loaded sessions
