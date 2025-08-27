@@ -180,8 +180,14 @@ fn extract_file_range(captures: &regex::Captures) -> Option<(String, LineRange)>
 ///
 /// Returns FileContent with the requested lines or error information
 pub fn read_file_lines(filepath: &str, range: &LineRange) -> FileContent {
+	// On Windows, convert forward slashes to backslashes for file operations
+	#[cfg(target_os = "windows")]
+	let normalized_path = filepath.replace('/', "\\");
+	#[cfg(not(target_os = "windows"))]
+	let normalized_path = filepath.to_string();
+
 	// Validate file exists and is readable
-	if !Path::new(filepath).exists() {
+	if !Path::new(&normalized_path).exists() {
 		return FileContent {
 			path: filepath.to_string(),
 			lines: Vec::new(),
@@ -190,7 +196,7 @@ pub fn read_file_lines(filepath: &str, range: &LineRange) -> FileContent {
 		};
 	}
 
-	match read_file_lines_internal(filepath, range) {
+	match read_file_lines_internal(&normalized_path, range) {
 		Ok(lines) => FileContent {
 			path: filepath.to_string(),
 			lines,
