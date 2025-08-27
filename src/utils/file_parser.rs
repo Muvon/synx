@@ -77,12 +77,14 @@ pub struct FileContent {
 pub fn parse_file_references(content: &str) -> HashMap<String, Vec<LineRange>> {
 	let mut file_refs = HashMap::new();
 
-	// Pre-compile regex patterns for efficiency
+	// Pre-compile regex patterns for efficiency - Windows drive letter aware
 	let code_block_pattern =
 		Regex::new(r"```(?:\w+)?\s*\n((?:[^\n`]+:[0-9]+:[0-9]+\s*\n?)+)\s*```").unwrap();
-	let file_pattern = Regex::new(r"^([^:\n]+):(\d+):(\d+)\s*$").unwrap();
-	let general_file_pattern = Regex::new(r"(?:^|\s|-)([^\s\n:]+):(\d+):(\d+)").unwrap();
-	let fallback_pattern = Regex::new(r"([^\s:]+):(\d+):(\d+)").unwrap();
+	// Windows-aware pattern: allows drive letters (C:) followed by path
+	let file_pattern = Regex::new(r"^([A-Za-z]:[^:\n]+|[^:\n]+):(\d+):(\d+)\s*$").unwrap();
+	let general_file_pattern =
+		Regex::new(r"(?:^|\s|-)([A-Za-z]:[^\s\n:]+|[^\s\n:]+):(\d+):(\d+)").unwrap();
+	let fallback_pattern = Regex::new(r"([A-Za-z]:[^\s:]+|[^\s:]+):(\d+):(\d+)").unwrap();
 
 	// First, try to find contexts within code blocks (preferred format)
 	for code_block in code_block_pattern.captures_iter(content) {

@@ -292,8 +292,8 @@ mod tests {
 		// Ensure file is flushed and readable
 		temp_file.flush().expect("Failed to flush temp file");
 
-		// Convert path to use forward slashes for consistency across platforms
-		let temp_path = temp_file.path().to_string_lossy().replace('\\', "/");
+		// Get the path as string - keep original format for Windows compatibility
+		let temp_path = temp_file.path().to_string_lossy().to_string();
 
 		// Test basic context expansion
 		let input = format!(
