@@ -288,7 +288,12 @@ mod tests {
 		writeln!(temp_file, "line 3").expect("Failed to write to temp file");
 		writeln!(temp_file, "line 4").expect("Failed to write to temp file");
 		writeln!(temp_file, "line 5").expect("Failed to write to temp file");
-		let temp_path = temp_file.path().to_string_lossy().to_string();
+
+		// Ensure file is flushed and readable
+		temp_file.flush().expect("Failed to flush temp file");
+
+		// Convert path to use forward slashes for consistency across platforms
+		let temp_path = temp_file.path().to_string_lossy().replace('\\', "/");
 
 		// Test basic context expansion
 		let input = format!(
@@ -297,20 +302,70 @@ mod tests {
 		);
 		let result = expand_context_blocks(&input);
 
+		// Debug output for Windows troubleshooting
+		#[cfg(debug_assertions)]
+		{
+			eprintln!("Input: {}", input);
+			eprintln!("Result: {}", result);
+			eprintln!("Temp path: {}", temp_path);
+		}
+
 		// Should preserve text outside context blocks
-		assert!(result.contains("Some text before"));
-		assert!(result.contains("Some text after"));
+		assert!(
+			result.contains("Some text before"),
+			"Result should contain 'Some text before'. Result: {}",
+			result
+		);
+		assert!(
+			result.contains("Some text after"),
+			"Result should contain 'Some text after'. Result: {}",
+			result
+		);
 
 		// Should have expanded XML content
-		assert!(result.contains("<content path="));
-		assert!(result.contains("lines=\"1:2\""));
-		assert!(result.contains("1: line 1"));
-		assert!(result.contains("2: line 2"));
-		assert!(!result.contains("3: line 3")); // Should not include line 3
+		assert!(
+			result.contains("<content path="),
+			"Result should contain '<content path='. Result: {}",
+			result
+		);
+		assert!(
+			result.contains("lines=\"1:2\""),
+			"Result should contain 'lines=\"1:2\"'. Result: {}",
+			result
+		);
+
+		// Check for line content with more flexible matching (handle different line endings)
+		let has_line1 = result.contains("1: line 1") || result.contains("1: line 1\r");
+		let has_line2 = result.contains("2: line 2") || result.contains("2: line 2\r");
+		let has_line3 = result.contains("3: line 3") || result.contains("3: line 3\r");
+
+		assert!(
+			has_line1,
+			"Result should contain '1: line 1'. Result: {}",
+			result
+		);
+		assert!(
+			has_line2,
+			"Result should contain '2: line 2'. Result: {}",
+			result
+		);
+		assert!(
+			!has_line3,
+			"Result should not contain '3: line 3'. Result: {}",
+			result
+		);
 
 		// Original context tags should be replaced
-		assert!(!result.contains("<context>"));
-		assert!(!result.contains("</context>"));
+		assert!(
+			!result.contains("<context>"),
+			"Result should not contain '<context>'. Result: {}",
+			result
+		);
+		assert!(
+			!result.contains("</context>"),
+			"Result should not contain '</context>'. Result: {}",
+			result
+		);
 
 		// Test multiple context blocks
 		let input_multi = format!(
@@ -322,10 +377,37 @@ mod tests {
 		assert!(result_multi.contains("Text1"));
 		assert!(result_multi.contains("Text2"));
 		assert!(result_multi.contains("Text3"));
-		assert!(result_multi.contains("1: line 1"));
-		assert!(result_multi.contains("3: line 3"));
-		assert!(result_multi.contains("4: line 4"));
-		assert!(!result_multi.contains("2: line 2")); // Should not include line 2
+
+		// Check for line content with flexible matching
+		let multi_has_line1 =
+			result_multi.contains("1: line 1") || result_multi.contains("1: line 1\r");
+		let multi_has_line2 =
+			result_multi.contains("2: line 2") || result_multi.contains("2: line 2\r");
+		let multi_has_line3 =
+			result_multi.contains("3: line 3") || result_multi.contains("3: line 3\r");
+		let multi_has_line4 =
+			result_multi.contains("4: line 4") || result_multi.contains("4: line 4\r");
+
+		assert!(
+			multi_has_line1,
+			"Multi result should contain '1: line 1'. Result: {}",
+			result_multi
+		);
+		assert!(
+			multi_has_line3,
+			"Multi result should contain '3: line 3'. Result: {}",
+			result_multi
+		);
+		assert!(
+			multi_has_line4,
+			"Multi result should contain '4: line 4'. Result: {}",
+			result_multi
+		);
+		assert!(
+			!multi_has_line2,
+			"Multi result should not contain '2: line 2'. Result: {}",
+			result_multi
+		);
 
 		// Test empty context block
 		let input_empty = "Text before <context></context> Text after";
