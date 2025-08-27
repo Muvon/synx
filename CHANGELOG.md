@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.13.0] - 2025-08-27
+
+### 📋 Release Summary
+
+This release adds new session commands and improved task management features, enhancing user interaction and planning capabilities (/run, /prompt, /plan) (61f22cda, e32c88be, 1be66add). Multimodal support and context handling are improved for smoother workflows (c33d653e, 8b3876de, 36263e31). Several bug fixes address Windows path handling, API cost tracking, and tool response errors, improving overall stability and usability (9a9c656e, 71aa15f1, dd410443). Documentation and installation guides have also been updated for better user guidance (d8426784, 9814b74e).
+
+
+### ✨ New Features & Enhancements
+
+- **session**: add completion and hints for /run and /prompt `61f22cda`
+- **utils**: add context block detection and expansion `c33d653e`
+- **chat**: add Ctrl+G to add message without sending `8b3876de`
+- **mcp**: require tasks with title and description `e32c88be`
+- **plan**: add /plan command to display current plan status `1be66add`
+- **truncation**: add global MCP response tokens threshold `36263e31`
+
+### 🔧 Improvements & Optimizations
+
+- **file_parser**: add utilities for file reference extraction and rendering `041b8c46`
+
+### 🐛 Bug Fixes & Stability
+
+- **utils**: preserve Windows drive letters in file path parsing and rendering `9a9c656e`
+- **utils**: normalize file paths on Windows in read_file_lines `92543735`
+- **prompt**: prevent accidental continuation trigger on /prompt command `848f8293`
+- **session**: preserve system message on /run command replace output `d78631c0`
+- **session**: track API call cost immediately after response `71aa15f1`
+- **cargo**: upgrade dependencies to fix cargo audit issues `6a144ece`
+- **fs**: suggest line_replace for ambiguous replacements `3904a5a7`
+- **mcp**: handle error flag in MCP tool responses correctly `dd410443`
+
+### 📚 Documentation & Examples
+
+- **config**: update configuration docs with command groups `d8426784`
+- **utils**: add file parsing and rendering usage instructions `228c86bc`
+- **installation**: rewrite installation guide `9814b74e`
+- **plan**: enhance task description guidelines with examples `23b7934b`
+
+### 🔄 Other Changes
+
+- **file_renderer**: fix Windows test failures by normalizing paths and line endings `e57f5aba`
+- **plan**: fix task format in plan tests after refactor `b829ef4f`
+
+### 📊 Release Summary
+
+**Total commits**: 21 across 5 categories
+
+✨ **6** new features - *Enhanced functionality*
+🔧 **1** improvement - *Better performance & code quality*
+🐛 **8** bug fixes - *Improved stability*
+📚 **4** documentation updates - *Better developer experience*
+🔄 **2** other changes - *Maintenance & tooling*
+
 ## [0.12.0] - 2025-08-18
 
 ### 📋 Release Summary
