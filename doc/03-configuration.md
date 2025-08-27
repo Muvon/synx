@@ -5,47 +5,83 @@
 Octomind uses a hierarchical configuration system that allows for flexible customization while providing sensible defaults. Configuration is stored in system-wide directories and supports role-specific overrides with inheritance patterns.
 
 **Configuration Location:**
-- **macOS/Linux**: `~/.local/share/octomind/config/config.toml`
-- **Windows**: `%LOCALAPPDATA%/octomind/config/config.toml`
+- **macOS/Linux**: `~/.config/octomind/config.toml`
+- **Windows**: `%APPDATA%/octomind/config.toml`
 
 ## Configuration Hierarchy
 
-The configuration system follows a strict, hierarchical priority order:
-1. Environment Variables (Highest Priority)
-2. Configuration File
-3. Default Template Values (Lowest Priority)
+The configuration system follows a template-based approach with environment variable overrides:
+
+1. **Template Defaults** (`config-templates/default.toml`) - All default values and structure
+2. **Environment Variables** - Override any setting with `OCTOMIND_*` prefix
+3. **User Configuration** - Optional user config file for persistent customization
 
 ### Configuration Principles
 
-- **Explicit Configuration**: All settings must be explicitly defined
-- **No Hardcoded Defaults**: Default values are in the configuration template
-- **Environment Variable Precedence**: Environment variables always override file-based settings
-- **Security First**: Sensitive data like API keys are ONLY set via environment variables
+- **Template-Based**: All defaults defined in `config-templates/default.toml`
+- **Environment Override**: Any setting can be overridden with `OCTOMIND_*` variables
+- **Role-Based**: Developer (full tools), Assistant (chat-only), and custom roles
+- **Security First**: API keys are ONLY set via environment variables
 
 ### Role Configuration
 
-Roles now use a simplified, more explicit configuration model:
-- **System-Wide Model**: A single model is used across all roles
-- **Explicit Role Settings**: Each role defines its own specific configuration
-- **Minimal Inheritance**: Roles have minimal default settings
-- **Environment Variable Overrides**: Can modify any configuration setting
+Octomind uses role-based configuration with built-in roles and custom role support:
 
-## Adding Tools, Commands, and Agents
+**Built-in Roles:**
+- **Developer Role**: Full MCP tool access, optimized for development tasks
+- **Assistant Role**: Chat-only mode with limited tool access for general assistance
 
-- Add new tools/commands/agents by editing the config only—no code changes needed
-- **Commands**: Add to `[commands]` section (global or role-specific)
-- **Agents**: Add to `[agents]` and map to layers using AgentConfig (see template)
-- All registration, allowed_tools, and server_refs are config-driven
-- See [`config-templates/default.toml`](../config-templates/default.toml) for structure and examples
+**Custom Roles**: Define specific tool permissions, models, and configurations in the template
 
-### Creating Configuration
+**Environment Overrides**: Use `OCTOMIND_ROLES__ROLENAME__SETTING` format for role-specific overrides
+
+## Configuration System
+
+### Template-Based Configuration
+
+Octomind uses a template-based configuration system where all defaults are defined in `config-templates/default.toml`. This ensures:
+
+- **No Hardcoded Values**: All settings are configurable
+- **Consistent Defaults**: Same defaults across all installations
+- **Easy Customization**: Override any setting via environment variables
+- **Version Control**: Template changes are tracked and documented
+
+### Environment Variable Overrides
+
+Any setting in the template can be overridden using environment variables with the `OCTOMIND_` prefix:
+
 ```bash
-# Create default configuration
+# System-wide settings
+export OCTOMIND_LOG_LEVEL="debug"
+export OCTOMIND_MODEL="openrouter:anthropic/claude-sonnet-4"
+export OCTOMIND_MAX_TOKENS="8192"
+
+# Role-specific overrides (use double underscores for nested settings)
+export OCTOMIND_ROLES__DEVELOPER__MODEL="openai:gpt-4o"
+export OCTOMIND_ROLES__DEVELOPER__TEMPERATURE="0.1"
+
+# Layer overrides
+export OCTOMIND_LAYERS__TASK_REFINER__MODEL="openrouter:anthropic/claude-haiku"
+
+# MCP server overrides
+export OCTOMIND_MCP__SERVERS__OCTOCODE__TIMEOUT_SECONDS="300"
+```
+
+### Configuration Management
+
+```bash
+# Generate default configuration (optional - uses template defaults)
 octomind config
-# Set embedding provider
-octomind config --provider fastembed
-# Configure with validation
+
+# View current configuration
+octomind config --show
+
+# Validate configuration
 octomind config --validate
+
+# Set specific values
+octomind config --model "openrouter:anthropic/claude-sonnet-4"
+octomind config --log-level debug
 ```
 ### Example Configuration File
 

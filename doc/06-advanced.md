@@ -20,13 +20,27 @@ MCP enables AI models to use external tools and services through a standardized 
 - ✅ **Cancellation Support**: Proper handling of user cancellation requests
 - ✅ **Standard Format**: All responses follow MCP standard: `{content: [{type: "text", text: "..."}], isError: true/false}`
 
-### Built-in MCP Tools & Usage Patterns
+### Built-in MCP Tools
 
-- The `plan` tool provides structured, sequential task execution and progress tracking for session-driven workflows.
-- Developer: shell, ast_grep, semantic_search, view_signatures, plan
-- Filesystem: text_editor, list_files, extract_lines
-- Web: web_search, read_html
-- Agent: agent_<name> task routing
+Octomind provides four built-in MCP servers with comprehensive development capabilities:
+
+**Developer Server** (`src/mcp/dev/`):
+- `shell(command="...")` - Execute shell commands with output capture
+- `ast_grep(pattern="...", language="...")` - Search and refactor code using AST patterns
+
+**Filesystem Server** (`src/mcp/fs/`):
+- `text_editor(command="view|create|str_replace|line_replace", path="...")` - File operations
+- `list_files(directory="...", pattern="...")` - Directory listing with filtering
+- `batch_edit(path="...", operations=[...])` - Multiple file operations atomically
+- `extract_lines(from_path="...", from_range=[start, end], append_path="...")` - Extract and move code blocks
+
+**Web Server** (`src/mcp/web/`):
+- `web_search(query="...")` - Search the web using Brave Search API
+- `read_html(sources=["..."])` - Convert HTML content to Markdown
+
+**Agent Server** (`src/mcp/agent/`):
+- `agent_*()` tools - Route tasks to specialized AI processing layers
+- Dynamic tool generation based on configuration
 
 **Tool Invocation:**
 

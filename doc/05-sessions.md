@@ -395,26 +395,44 @@ octomind session --model="anthropic:claude-sonnet-4" -n analysis
 
 During a session, use these commands:
 
-#### Navigation Commands
+#### Session Commands
+
+During a session, use these commands:
+
+## Session Commands
+
+Octomind provides comprehensive session management through built-in commands:
+
+### Core Session Commands
 - `/help` - Show all available commands
+- `/info` - Display token usage and costs
+- `/report` - Generate detailed usage report with cost breakdown
+- `/context [filter]` - Display session context (all, assistant, user, tool, large)
+- `/model [model]` - View or change current AI model
+- `/role [role]` - View or switch session role
+
+### File and Image Operations
+- `/image <path>` - Attach image to next message (PNG, JPEG, GIF, WebP, BMP)
+- `/save` - Save current session
+- `/clear` - Clear terminal screen
+- `/copy` - Copy last assistant response to clipboard
+
+### Context and Memory Management
+- `/cache` - Mark cache checkpoint for cost savings
+- `/summarize` - Generate session summary
+- `/truncate` - Manually truncate session context
+- `/done` - Finalize task with memorization and auto-commit
+
+### Layer and Tool Management
+- `/layers` - Toggle layered processing on/off
+- `/run <command>` - Execute configured custom commands
+- `/mcp [info|list|full|health|dump|validate]` - MCP server management
+
+### System and Session Management
+- `/loglevel [debug|info|none]` - Set log level
 - `/list` - List all sessions
 - `/session [name]` - Switch to another session
-- `/exit` or `/quit` - Exit current session
-
-#### Configuration Commands
-- `/model [model]` - Show/change current model
-- `/role [role]` - Show/switch session role (runtime only, persisted across session resume)
-- `/image <path>` - Attach image to your next message (PNG, JPEG, GIF, WebP, BMP)
-- `/info` - Display token usage and costs
-- `/report` - Generate detailed usage report with cost breakdown per request
-- `/loglevel [debug|info|none]` - Set log level
-
-#### Context Management
-- `/cache` - Mark cache checkpoint for cost optimization
-- `/context [filter]` - Display session context with optional filtering: all, assistant, user, tool, large
-- `/done` - Finalize task with comprehensive summarization, memorization, and auto-commit (task completion)
-- `/clear` - Clear screen
-- `/save` - Save session
+- `/exit` - Exit current session
 
 **Context Management Strategy:**
 - Use `/done` when task is complete (preserves full context with current model + auto-commit)

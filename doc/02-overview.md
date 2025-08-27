@@ -28,7 +28,7 @@ graph TB
     C --> I[Custom Roles<br/>Configurable]
 
     D --> J[Developer Server<br/>shell, ast_grep]
-    D --> K[Filesystem Server<br/>text_editor, batch_edit]
+    D --> K[Filesystem Server<br/>text_editor, batch_edit, extract_lines]
     D --> L[Web Server<br/>web_search, read_html]
     D --> M[Agent Server<br/>Specialized AI routing]
 
@@ -66,6 +66,7 @@ graph TB
 - `text_editor(command="view|create|str_replace", path="...")` - File operations
 - `list_files(directory="...", pattern="...")` - Directory listing with filtering
 - `batch_edit(path="...", operations=[...])` - Multiple file operations atomically
+- `extract_lines(from_path="...", from_range=[start, end], append_path="...")` - Extract and move code blocks
 
 **Web Server** (`src/mcp/web/`):
 - `web_search(query="...")` - Search the web using Brave Search API
@@ -77,7 +78,7 @@ graph TB
 
 ### 3. Multi-Provider AI Support
 
-**Unified Interface** across 7 AI providers with consistent `provider:model` format:
+**Unified Interface** across 8 AI providers with consistent `provider:model` format:
 
 | Provider | Format | Key Features |
 |----------|--------|--------------|

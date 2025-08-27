@@ -4,11 +4,27 @@ This guide explains how to add new built-in MCP servers to Octomind. Use this wh
 
 ## Overview
 
-Octomind has several built-in MCP servers:
-- **developer**: Shell commands, development tools
-- **filesystem**: File operations, directory listing
-- **web**: Web search, HTML conversion
-- **agent**: Task routing to AI layers
+## Built-in MCP Servers
+
+Octomind provides four built-in MCP servers with comprehensive development capabilities:
+
+**Developer Server** (`src/mcp/dev/`):
+- `shell(command="...")` - Execute shell commands with output capture
+- `ast_grep(pattern="...", language="...")` - Search and refactor code using AST patterns
+
+**Filesystem Server** (`src/mcp/fs/`):
+- `text_editor(command="view|create|str_replace|line_replace", path="...")` - File operations
+- `list_files(directory="...", pattern="...")` - Directory listing with filtering
+- `batch_edit(path="...", operations=[...])` - Multiple file operations atomically
+- `extract_lines(from_path="...", from_range=[start, end], append_path="...")` - Extract and move code blocks
+
+**Web Server** (`src/mcp/web/`):
+- `web_search(query="...")` - Search the web using Brave Search API
+- `read_html(sources=["..."])` - Convert HTML content to Markdown
+
+**Agent Server** (`src/mcp/agent/`):
+- `agent_*()` tools - Route tasks to specialized AI processing layers
+- Dynamic tool generation based on configuration
 
 Each server provides a specific category of tools and can be enabled/disabled independently in role configurations.
 

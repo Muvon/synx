@@ -20,13 +20,53 @@ Use the `/run` command followed by the command name:
 /run review
 ```
 
-## Configuration
-## Configuration
-- Register new commands by editing config only; no code needed
-- Commands can be global (`[commands]`) or role-specific (`[developer.commands.<name>]`)
-- Command config must include `name`, `description`, and may specify model, system_prompt, input_mode, server_refs, allowed_tools
-- Input modes: `last`, `all`, `summary`
-- See `config-templates/default.toml` for up-to-date examples
+## Layer System Architecture
+
+Octomind's layer system provides a flexible AI processing pipeline that can be configured for different roles and use cases:
+
+### Built-in Layers
+
+**Task Refiner** (`task_refiner`):
+- Refines and clarifies user requests for better processing
+- Uses lightweight models for cost efficiency
+- Provides initial file guessing and query structuring
+
+**Task Researcher** (`task_researcher`):
+- Comprehensive analysis and research for complex tasks
+- Full MCP tool access for investigation
+- Detailed context gathering and solution planning
+
+### Layer Configuration
+
+Layers are configured in `config-templates/default.toml` with the following structure:
+
+```toml
+[[layers]]
+name = "layer_name"
+description = "Layer description for agents and documentation"
+model = "provider:model"
+max_tokens = 2048
+input_mode = "direct"  # direct, last, all, summary
+output_mode = "direct" # direct, append, replace
+system_prompt = "Layer-specific system prompt"
+
+[layers.layer_name.mcp]
+server_refs = ["filesystem", "developer"]
+allowed_tools = ["text_editor", "shell"]
+```
+
+### Custom Commands
+
+Commands use the same layer infrastructure but operate as standalone utilities:
+
+```bash
+# Execute custom commands without affecting session history
+/run estimate
+/run task_refiner
+/run review
+```
+
+Commands are configured similarly to layers but with additional command-specific settings.
 
 ### Available Input Modes
 
