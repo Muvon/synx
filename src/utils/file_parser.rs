@@ -25,6 +25,20 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::sync::LazyLock;
+
+// Fast context block detection regex - compiled once for performance
+// Uses (?s) flag to match across newlines
+static CONTEXT_BLOCK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+	Regex::new(r"(?s)<context>.*?</context>").expect("Failed to compile context block regex")
+});
+
+/// Extremely fast detection of context blocks in text
+/// Returns true if any complete <context>...</context> blocks are found
+/// This is used as a gate before expensive parsing operations
+pub fn has_context_blocks(text: &str) -> bool {
+	CONTEXT_BLOCK_REGEX.is_match(text)
+}
 
 /// Represents a line range in a file (1-indexed, inclusive)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +272,35 @@ mod tests {
 		let mut file = fs::File::create(&file_path).unwrap();
 		writeln!(file, "{}", content).unwrap();
 		file_path.to_string_lossy().to_string()
+	}
+
+	#[test]
+	fn test_has_context_blocks() {
+		// Test with valid context blocks
+		assert!(has_context_blocks("<context>src/main.rs:1:10</context>"));
+		assert!(has_context_blocks(
+			"Some text <context>file.rs:5:15</context> more text"
+		));
+		assert!(has_context_blocks(
+			"<context>\nsrc/main.rs:1:10\nsrc/lib.rs:20:30\n</context>"
+		));
+
+		// Test multiple context blocks
+		assert!(has_context_blocks(
+			"<context>file1.rs:1:5</context> and <context>file2.rs:10:20</context>"
+		));
+
+		// Test without context blocks
+		assert!(!has_context_blocks("No context blocks here"));
+		assert!(!has_context_blocks("src/main.rs:1:10"));
+		assert!(!has_context_blocks("Some text without context"));
+		assert!(!has_context_blocks(""));
+
+		// Test incomplete/malformed context blocks (should not match)
+		assert!(!has_context_blocks("<context>malformed"));
+		assert!(!has_context_blocks("malformed</context>"));
+		assert!(!has_context_blocks("<context>incomplete"));
+		assert!(!has_context_blocks("incomplete</context>"));
 	}
 
 	#[test]

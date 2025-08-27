@@ -20,8 +20,63 @@
 //! - Handling multiple line ranges per file
 //! - Configurable rendering options
 
-use crate::utils::file_parser::{FileContent, LineRange};
+use crate::utils::file_parser::{
+	parse_file_references, read_multiple_files, FileContent, LineRange,
+};
+use regex::Regex;
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+// Context block extraction regex - compiled once for performance
+// Uses (?s) flag to match across newlines
+static CONTEXT_EXTRACT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+	Regex::new(r"(?s)<context>(.*?)</context>").expect("Failed to compile context extraction regex")
+});
+
+/// Expand context blocks in text by replacing them with rendered file content
+/// Finds all <context>...</context> blocks containing file references (file:1:3),
+/// reads the actual files, renders as XML, and replaces the context block
+pub fn expand_context_blocks(text: &str) -> String {
+	let mut result = text.to_string();
+
+	// Find all context blocks and collect them first to avoid iterator invalidation
+	let matches: Vec<_> = CONTEXT_EXTRACT_REGEX.find_iter(text).collect();
+
+	// Process matches in reverse order to maintain string indices
+	for context_match in matches.iter().rev() {
+		let full_match = context_match.as_str();
+
+		// Extract content inside context tags
+		if let Some(captures) = CONTEXT_EXTRACT_REGEX.captures(full_match) {
+			if let Some(context_content) = captures.get(1) {
+				let file_refs_text = context_content.as_str();
+
+				// Parse file references from context content
+				let file_refs = parse_file_references(file_refs_text);
+
+				if !file_refs.is_empty() {
+					// Read the actual files
+					let file_contents = read_multiple_files(&file_refs);
+
+					// Render as XML (this reads the actual file content)
+					let expanded_content = render_files_as_xml(&file_contents);
+
+					// Replace the context block with expanded XML content
+					let start = context_match.start();
+					let end = context_match.end();
+					result.replace_range(start..end, &expanded_content);
+				} else {
+					// If no valid file references found, remove the empty context block
+					let start = context_match.start();
+					let end = context_match.end();
+					result.replace_range(start..end, "");
+				}
+			}
+		}
+	}
+
+	result
+}
 
 /// Rendering format options
 #[derive(Debug, Clone, PartialEq)]
@@ -219,6 +274,76 @@ mod tests {
 			line_range: LineRange::new(start, end).unwrap(),
 			error: error.map(|s| s.to_string()),
 		}
+	}
+
+	#[test]
+	fn test_expand_context_blocks() {
+		use std::io::Write;
+		use tempfile::NamedTempFile;
+
+		// Create a temporary file for testing
+		let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+		writeln!(temp_file, "line 1").expect("Failed to write to temp file");
+		writeln!(temp_file, "line 2").expect("Failed to write to temp file");
+		writeln!(temp_file, "line 3").expect("Failed to write to temp file");
+		writeln!(temp_file, "line 4").expect("Failed to write to temp file");
+		writeln!(temp_file, "line 5").expect("Failed to write to temp file");
+		let temp_path = temp_file.path().to_string_lossy().to_string();
+
+		// Test basic context expansion
+		let input = format!(
+			"Some text before\n<context>\n{}:1:2\n</context>\nSome text after",
+			temp_path
+		);
+		let result = expand_context_blocks(&input);
+
+		// Should preserve text outside context blocks
+		assert!(result.contains("Some text before"));
+		assert!(result.contains("Some text after"));
+
+		// Should have expanded XML content
+		assert!(result.contains("<content path="));
+		assert!(result.contains("lines=\"1:2\""));
+		assert!(result.contains("1: line 1"));
+		assert!(result.contains("2: line 2"));
+		assert!(!result.contains("3: line 3")); // Should not include line 3
+
+		// Original context tags should be replaced
+		assert!(!result.contains("<context>"));
+		assert!(!result.contains("</context>"));
+
+		// Test multiple context blocks
+		let input_multi = format!(
+			"Text1\n<context>\n{}:1:1\n</context>\nText2\n<context>\n{}:3:4\n</context>\nText3",
+			temp_path, temp_path
+		);
+		let result_multi = expand_context_blocks(&input_multi);
+
+		assert!(result_multi.contains("Text1"));
+		assert!(result_multi.contains("Text2"));
+		assert!(result_multi.contains("Text3"));
+		assert!(result_multi.contains("1: line 1"));
+		assert!(result_multi.contains("3: line 3"));
+		assert!(result_multi.contains("4: line 4"));
+		assert!(!result_multi.contains("2: line 2")); // Should not include line 2
+
+		// Test empty context block
+		let input_empty = "Text before <context></context> Text after";
+		let result_empty = expand_context_blocks(input_empty);
+		assert_eq!(result_empty, "Text before  Text after");
+
+		// Test no context blocks
+		let input_none = "No context blocks here";
+		let result_none = expand_context_blocks(input_none);
+		assert_eq!(result_none, input_none);
+
+		// Test invalid file reference in context
+		let input_invalid = "Text <context>nonexistent.rs:1:5</context> More";
+		let result_invalid = expand_context_blocks(input_invalid);
+		// Should still have the error message in XML format
+		assert!(result_invalid.contains("Text "));
+		assert!(result_invalid.contains(" More"));
+		assert!(result_invalid.contains("error=\"true\""));
 	}
 
 	#[test]

@@ -913,17 +913,47 @@ pub fn get_list_files_function() -> McpFunction {
    - `parse_file_references(content: &str) -> HashMap<String, Vec<LineRange>>` - Parse filepath:start:end patterns
    - `read_file_lines(filepath: &str, range: &LineRange) -> FileContent` - Read specific line ranges
    - `read_multiple_files(file_refs: &HashMap<String, Vec<LineRange>>) -> HashMap<String, Vec<FileContent>>` - Batch processing
+   - `has_context_blocks(text: &str) -> bool` - **NEW**: Fast detection of `<context>` tags using pre-compiled regex
    - Supports code blocks, sections, inline patterns with comprehensive error handling
 2. **File Renderer**: `src/utils/file_renderer.rs` - **XML AND TEXT FORMATS**
    - `render_files_as_xml(file_contents: &HashMap<String, Vec<FileContent>>) -> String` - XML format with escaping
    - `render_files_as_text(file_contents: &HashMap<String, Vec<FileContent>>) -> String` - Traditional text format
    - `render_files_with_options(file_contents, options: &RenderOptions) -> String` - Configurable rendering
+   - `expand_context_blocks(text: &str) -> String` - **NEW**: Expand `<context>file:1:3</context>` to full XML
    - XML format: `<content path="file.rs" lines="10:20">content</content>` with proper escaping
 3. **Integration**: Import and use in any module that needs file content display
    ```rust
-   use crate::utils::file_parser::{parse_file_references, read_multiple_files};
-   use crate::utils::file_renderer::render_files_as_xml;
+   use crate::utils::file_parser::{parse_file_references, read_multiple_files, has_context_blocks};
+   use crate::utils::file_renderer::{render_files_as_xml, expand_context_blocks};
    ```
+
+### Unified Context Protocol
+**NEW FEATURE**: Automatic expansion of file references in layer and agent responses.
+
+**Format**: `<context>src/main.rs:10:20\nsrc/lib.rs:30:40</context>`
+**Output**: Full XML with actual file content
+
+**Where It Works**:
+- ✅ **Layer responses** - Expanded in `src/session/layers/orchestrator.rs`
+- ✅ **MCP agent tools** - Expanded in `src/mcp/agent/functions.rs`
+- ❌ **Main session** - No expansion (not needed)
+- ❌ **Continuation** - Generates full XML directly
+
+**Implementation**:
+```rust
+// Fast detection
+if has_context_blocks(response) {
+    let expanded = expand_context_blocks(response);
+    // Use expanded content
+}
+```
+
+**Key Files**:
+- `src/utils/file_parser.rs` - Detection helper
+- `src/utils/file_renderer.rs` - Expansion processor
+- `src/session/layers/orchestrator.rs` - Layer integration
+- `src/mcp/agent/functions.rs` - Agent integration
+- `src/session/chat/continuation/constants.rs` - Updated prompt format
 
 ## 📋 CRITICAL PATTERNS
 

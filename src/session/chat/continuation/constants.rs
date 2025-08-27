@@ -42,17 +42,17 @@ Exact technical situation right now:
 - Dependencies or prerequisites that are ready/missing
 
 ## REQUIRED FILE CONTEXTS
-CRITICAL: List ALL files needed as context using EXACT format below. This will be automatically parsed to load file contents.
+CRITICAL: List ALL files needed as context using the EXACT format below. These will be automatically expanded to full file content.
 
-**MANDATORY FORMAT - Use code block with exact pattern:**
-```
+**MANDATORY FORMAT - Use context tags with file references:**
+<context>
 filename:startline:endline
 filename:startline:endline
 filename:startline:endline
-```
+</context>
 
 **PARSING REQUIREMENTS:**
-- Each line must be exactly: filepath:number:number
+- Each line inside <context> tags must be exactly: filepath:number:number
 - No spaces around colons
 - Use absolute paths from project root (src/main.rs not ./src/main.rs)
 - Line numbers must be positive integers
@@ -68,17 +68,18 @@ filename:startline:endline
 - Files containing error patterns or debugging areas
 
 **EXAMPLE CORRECT FORMAT:**
-```
+<context>
 src/session/chat/session_continuation.rs:100:200
 src/config/mod.rs:50:100
 tests/integration_test.rs:1:50
-```
+</context>
 
 **WRONG FORMATS (will not be parsed):**
+- Missing <context> tags
 - src/main.rs : 1 : 50 (spaces around colons)
 - ./src/main.rs:1:50 (relative path with ./)
 - src/main.rs lines 1-50 (text description)
-- src/main.rs:1:50, src/lib.rs:1:100 (comma separated)
+- src/main.rs:1:50, src/lib.rs:1:100 (comma separated on same line)
 
 ## IMMEDIATE NEXT STEPS
 Specific actionable steps to continue (in order):

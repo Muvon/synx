@@ -16,6 +16,8 @@ use super::layer_trait::Layer;
 use super::types::GenericLayer;
 use crate::config::Config;
 use crate::session::Session;
+use crate::utils::file_parser::has_context_blocks;
+use crate::utils::file_renderer::expand_context_blocks;
 use anyhow::Result;
 use colored::*;
 use std::io::IsTerminal;
@@ -403,7 +405,17 @@ impl LayeredOrchestrator {
 			};
 
 			// Take the LAST output from this layer and use it as input for the next layer
-			current_input = result.outputs.last().unwrap_or(&String::new()).clone();
+			// UNIFIED CONTEXT PROTOCOL: Expand context blocks before passing to next layer
+			let last_output = result.outputs.last().unwrap_or(&String::new()).clone();
+			current_input = if has_context_blocks(&last_output) {
+				crate::log_debug!(
+					"Expanding context blocks in layer {} output before passing to next layer",
+					layer_name
+				);
+				expand_context_blocks(&last_output)
+			} else {
+				last_output
+			};
 		}
 
 		// Display compact completion summary
@@ -441,8 +453,19 @@ impl LayeredOrchestrator {
 
 			// Check if this output contains assistant response text that should be formatted
 			if !output.trim().is_empty() {
+				// UNIFIED CONTEXT PROTOCOL: Expand context blocks in layer outputs
+				let expanded_output = if has_context_blocks(output) {
+					crate::log_debug!(
+						"Context blocks detected in layer {} output, expanding...",
+						layer_name
+					);
+					expand_context_blocks(output)
+				} else {
+					output.clone()
+				};
+
 				// Display the output with assistant response formatting
-				self.display_formatted_assistant_output(output, layer_name, i + 1);
+				self.display_formatted_assistant_output(&expanded_output, layer_name, i + 1);
 			}
 		}
 	}

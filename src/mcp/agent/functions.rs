@@ -16,6 +16,8 @@
 
 use crate::mcp::{McpFunction, McpToolCall, McpToolResult};
 use crate::session::layers::{GenericLayer, Layer};
+use crate::utils::file_parser::has_context_blocks;
+use crate::utils::file_renderer::expand_context_blocks;
 use anyhow::Result;
 use serde_json::json;
 
@@ -249,7 +251,18 @@ async fn process_layer_as_agent(
 		}
 	};
 
-	Ok((output, agent_costs))
+	// UNIFIED CONTEXT PROTOCOL: Expand context blocks in agent output
+	let final_output = if has_context_blocks(&output) {
+		crate::log_debug!(
+			"Context blocks detected in agent {} output, expanding...",
+			layer_config.name
+		);
+		expand_context_blocks(&output)
+	} else {
+		output
+	};
+
+	Ok((final_output, agent_costs))
 }
 
 // Execute call_llm tool - direct LLM call with runtime parameters
