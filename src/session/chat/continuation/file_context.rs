@@ -14,9 +14,8 @@
 
 // File context parsing and generation for session continuation
 
-use anyhow::Result;
-use regex::Regex;
-use std::path::Path;
+use crate::utils::file_parser::parse_file_references;
+use crate::utils::file_renderer::render_files_as_xml;
 
 /// Collect meaningful user requests from session history for continuation context
 /// Filters out system-generated messages and keeps last 5-7 user requests
@@ -92,192 +91,42 @@ pub fn collect_user_request_history(messages: &[crate::session::Message]) -> Str
 /// Parse file context requirements from AI summary response
 /// Expected format: filename:startline:endline (in code blocks or specific sections)
 pub fn parse_file_contexts(summary_content: &str) -> Vec<(String, usize, usize)> {
+	let file_refs = parse_file_references(summary_content);
+
+	// Convert HashMap to Vec for existing API
 	let mut contexts = Vec::new();
-
-	// Pre-compile regex patterns outside loops
-	let code_block_pattern =
-		Regex::new(r"```(?:\w+)?\s*\n((?:[^\n`]+:[0-9]+:[0-9]+\s*\n?)+)\s*```").unwrap();
-	let file_pattern = Regex::new(r"^([^:\n]+):(\d+):(\d+)\s*$").unwrap();
-	let general_file_pattern = Regex::new(r"(?:^|\s|-)([^\s\n:]+):(\d+):(\d+)").unwrap();
-	let fallback_pattern = Regex::new(r"([^\s:]+):(\d+):(\d+)").unwrap();
-
-	// First, try to find contexts within code blocks (preferred format)
-	for code_block in code_block_pattern.captures_iter(summary_content) {
-		if let Some(block_content) = code_block.get(1) {
-			// Parse each line in the code block
-			for line in block_content.as_str().lines() {
-				let line = line.trim();
-				if let Some(captures) = file_pattern.captures(line) {
-					if let (Some(filename), Some(start_str), Some(end_str)) =
-						(captures.get(1), captures.get(2), captures.get(3))
-					{
-						if let (Ok(start_line), Ok(end_line)) = (
-							start_str.as_str().parse::<usize>(),
-							end_str.as_str().parse::<usize>(),
-						) {
-							let filename = filename.as_str().trim().to_string();
-
-							// Validate line range and filename
-							if start_line > 0
-								&& end_line >= start_line
-								&& end_line <= 10000 && !filename.is_empty()
-							{
-								contexts.push((filename, start_line, end_line));
-							}
-						}
-					}
-				}
-			}
+	for (filepath, ranges) in file_refs {
+		for range in ranges {
+			contexts.push((filepath.clone(), range.start, range.end));
 		}
 	}
 
-	// If no code blocks found, fall back to looking for patterns in REQUIRED FILE CONTEXTS section
-	if contexts.is_empty() {
-		// Look for the specific section header and parse content after it using UTF-8 safe operations
-		if let Some(section_start) = summary_content.find("## REQUIRED FILE CONTEXTS") {
-			// UTF-8 safe: get substring from section start to end
-			let content_after_header = summary_content
-				.chars()
-				.skip(section_start)
-				.collect::<String>();
-
-			// Find the end of this section (next ## header or end of text)
-			let section_end = content_after_header
-				.find("\n## ")
-				.unwrap_or(content_after_header.chars().count());
-
-			// UTF-8 safe: get substring from start to section end
-			let section_content = content_after_header
-				.chars()
-				.take(section_end)
-				.collect::<String>();
-
-			// More flexible pattern for general text (handles paths with spaces/special chars)
-			for captures in general_file_pattern.captures_iter(&section_content) {
-				if let (Some(filename), Some(start_str), Some(end_str)) =
-					(captures.get(1), captures.get(2), captures.get(3))
-				{
-					if let (Ok(start_line), Ok(end_line)) = (
-						start_str.as_str().parse::<usize>(),
-						end_str.as_str().parse::<usize>(),
-					) {
-						let filename = filename.as_str().trim().to_string();
-
-						// Validate line range and filename
-						if start_line > 0
-							&& end_line >= start_line
-							&& end_line <= 10000 && !filename.is_empty()
-						{
-							contexts.push((filename, start_line, end_line));
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Final fallback: look anywhere in the content (most permissive)
-	if contexts.is_empty() {
-		for captures in fallback_pattern.captures_iter(summary_content) {
-			if let (Some(filename), Some(start_str), Some(end_str)) =
-				(captures.get(1), captures.get(2), captures.get(3))
-			{
-				if let (Ok(start_line), Ok(end_line)) = (
-					start_str.as_str().parse::<usize>(),
-					end_str.as_str().parse::<usize>(),
-				) {
-					let filename = filename.as_str().to_string();
-
-					// Validate line range
-					if start_line > 0 && end_line >= start_line && end_line <= 10000 {
-						contexts.push((filename, start_line, end_line));
-					}
-				}
-			}
-		}
-	}
-
-	// Remove duplicates while preserving order
-	let mut unique_contexts = Vec::new();
-	for context in contexts {
-		if !unique_contexts.contains(&context) {
-			unique_contexts.push(context);
-		}
-	}
-
-	// Limit to maximum 10 file contexts for performance
-	unique_contexts.truncate(10);
-	unique_contexts
+	contexts
 }
 
-/// Read file content for specified line ranges with 1-indexed line numbers
-fn read_file_context(filepath: &str, start_line: usize, end_line: usize) -> Result<String> {
-	use std::fs;
-	use std::io::{BufRead, BufReader};
-
-	// Validate file exists and is readable
-	if !Path::new(filepath).exists() {
-		return Ok(format!("// File not found: {}", filepath));
-	}
-
-	let file = fs::File::open(filepath)?;
-	let reader = BufReader::new(file);
-	let mut result = String::new();
-
-	result.push_str(&format!(
-		"=== {} (lines {}-{}) ===\n",
-		filepath, start_line, end_line
-	));
-
-	for (line_num, line_result) in reader.lines().enumerate() {
-		let line_number = line_num + 1; // Convert to 1-indexed
-
-		if line_number < start_line {
-			continue;
-		}
-
-		if line_number > end_line {
-			break;
-		}
-
-		match line_result {
-			Ok(line_content) => {
-				result.push_str(&format!("{}: {}\n", line_number, line_content));
-			}
-			Err(_) => {
-				result.push_str(&format!("{}: // Error reading line\n", line_number));
-			}
-		}
-	}
-
-	result.push('\n');
-	Ok(result)
-}
-
-/// Generate file context content from parsed file requirements
+/// Generate file context content from parsed file requirements in XML format
 pub fn generate_file_context_content(file_contexts: &[(String, usize, usize)]) -> String {
 	if file_contexts.is_empty() {
 		return "No specific file context requested.".to_string();
 	}
 
-	let mut context_content = String::new();
-	context_content.push_str("FILE CONTEXT:\n\n");
+	// Convert to new format and use XML renderer
+	use crate::utils::file_parser::{read_file_lines, LineRange};
+	use std::collections::HashMap;
+
+	let mut file_contents = HashMap::new();
 
 	for (filepath, start_line, end_line) in file_contexts {
-		match read_file_context(filepath, *start_line, *end_line) {
-			Ok(file_content) => {
-				context_content.push_str(&file_content);
-			}
-			Err(e) => {
-				context_content.push_str(&format!(
-					"=== {} (lines {}-{}) ===\n// Error reading file: {}\n\n",
-					filepath, start_line, end_line, e
-				));
-			}
+		if let Some(range) = LineRange::new(*start_line, *end_line) {
+			let content = read_file_lines(filepath, &range);
+			file_contents
+				.entry(filepath.clone())
+				.or_insert_with(Vec::new)
+				.push(content);
 		}
 	}
 
-	context_content
+	render_files_as_xml(&file_contents)
 }
 #[cfg(test)]
 mod tests {
@@ -297,9 +146,11 @@ config/settings.toml:10:20
 
 		let contexts = parse_file_contexts(summary);
 		assert_eq!(contexts.len(), 3);
-		assert_eq!(contexts[0], ("src/main.rs".to_string(), 1, 50));
-		assert_eq!(contexts[1], ("src/lib.rs".to_string(), 100, 150));
-		assert_eq!(contexts[2], ("config/settings.toml".to_string(), 10, 20));
+
+		// Since HashMap iteration order is not guaranteed, check that all expected items are present
+		assert!(contexts.contains(&("src/main.rs".to_string(), 1, 50)));
+		assert!(contexts.contains(&("src/lib.rs".to_string(), 100, 150)));
+		assert!(contexts.contains(&("config/settings.toml".to_string(), 10, 20)));
 	}
 
 	#[test]
@@ -316,8 +167,8 @@ Continue with implementation...
 
 		let contexts = parse_file_contexts(summary);
 		assert_eq!(contexts.len(), 2);
-		assert_eq!(contexts[0], ("src/session/mod.rs".to_string(), 200, 300));
-		assert_eq!(contexts[1], ("tests/integration.rs".to_string(), 1, 100));
+		assert!(contexts.contains(&("src/session/mod.rs".to_string(), 200, 300)));
+		assert!(contexts.contains(&("tests/integration.rs".to_string(), 1, 100)));
 	}
 
 	#[test]
@@ -328,8 +179,8 @@ We need to look at src/core.rs:50:100 and also check lib/utils.rs:1:25 for the i
 
 		let contexts = parse_file_contexts(summary);
 		assert_eq!(contexts.len(), 2);
-		assert_eq!(contexts[0], ("src/core.rs".to_string(), 50, 100));
-		assert_eq!(contexts[1], ("lib/utils.rs".to_string(), 1, 25));
+		assert!(contexts.contains(&("src/core.rs".to_string(), 50, 100)));
+		assert!(contexts.contains(&("lib/utils.rs".to_string(), 1, 25)));
 	}
 
 	#[test]
@@ -351,19 +202,13 @@ tests/integration_test.rs:1:50
 
 		let contexts = parse_file_contexts(summary);
 		assert_eq!(contexts.len(), 3);
-		assert_eq!(
-			contexts[0],
-			(
-				"src/session/chat/session_continuation.rs".to_string(),
-				100,
-				200
-			)
-		);
-		assert_eq!(contexts[1], ("src/config/mod.rs".to_string(), 50, 100));
-		assert_eq!(
-			contexts[2],
-			("tests/integration_test.rs".to_string(), 1, 50)
-		);
+		assert!(contexts.contains(&(
+			"src/session/chat/session_continuation.rs".to_string(),
+			100,
+			200
+		)));
+		assert!(contexts.contains(&("src/config/mod.rs".to_string(), 50, 100)));
+		assert!(contexts.contains(&("tests/integration_test.rs".to_string(), 1, 50)));
 	}
 
 	#[test]
