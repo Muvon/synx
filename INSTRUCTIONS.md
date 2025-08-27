@@ -908,6 +908,23 @@ pub fn get_list_files_function() -> McpFunction {
 4. **State management**: `src/session/chat/session/core.rs` - ChatSession continuation state
 5. **Configuration**: `config-templates/default.toml` - `max_session_tokens_threshold` field (0=disabled)
 
+### Use File Parsing and Rendering Utilities
+1. **File Parser**: `src/utils/file_parser.rs` - **REUSABLE ACROSS CODEBASE**
+   - `parse_file_references(content: &str) -> HashMap<String, Vec<LineRange>>` - Parse filepath:start:end patterns
+   - `read_file_lines(filepath: &str, range: &LineRange) -> FileContent` - Read specific line ranges
+   - `read_multiple_files(file_refs: &HashMap<String, Vec<LineRange>>) -> HashMap<String, Vec<FileContent>>` - Batch processing
+   - Supports code blocks, sections, inline patterns with comprehensive error handling
+2. **File Renderer**: `src/utils/file_renderer.rs` - **XML AND TEXT FORMATS**
+   - `render_files_as_xml(file_contents: &HashMap<String, Vec<FileContent>>) -> String` - XML format with escaping
+   - `render_files_as_text(file_contents: &HashMap<String, Vec<FileContent>>) -> String` - Traditional text format
+   - `render_files_with_options(file_contents, options: &RenderOptions) -> String` - Configurable rendering
+   - XML format: `<content path="file.rs" lines="10:20">content</content>` with proper escaping
+3. **Integration**: Import and use in any module that needs file content display
+   ```rust
+   use crate::utils::file_parser::{parse_file_references, read_multiple_files};
+   use crate::utils::file_renderer::render_files_as_xml;
+   ```
+
 ## 📋 CRITICAL PATTERNS
 
 ### MCP Tool Error Handling Pattern
@@ -1038,7 +1055,11 @@ octomind/
 │   │   ├── cloudflare.rs          # Cloudflare Workers AI
 │   │   └── deepseek.rs            # DeepSeek implementation
 │   └── utils/                     # Utility modules
-│       └── mod.rs                 # Common utilities
+│       ├── mod.rs                 # Common utilities exports
+│       ├── file_parser.rs         # File reference parsing utilities
+│       ├── file_renderer.rs       # XML/text file content rendering
+│       ├── glob.rs                # Glob pattern utilities
+│       └── truncation.rs          # Text truncation utilities
 ├── config-templates/              # Configuration templates
 │   └── default.toml               # ALL default settings & structure
 ├── doc/                          # Comprehensive documentation
