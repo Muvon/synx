@@ -14,6 +14,7 @@
 
 // User input handling module
 
+use crate::session::history::{append_to_session_history_file, load_session_history_from_file};
 use anyhow::Result;
 use colored::*;
 use rustyline::error::ReadlineError;
@@ -21,10 +22,8 @@ use rustyline::{
 	Cmd, ConditionalEventHandler, Event, EventHandler, KeyEvent, Modifiers, RepeatCount,
 };
 use rustyline::{CompletionType, Config as RustylineConfig, EditMode, Editor};
-use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Result of user input operation
 #[derive(Debug)]
@@ -81,118 +80,8 @@ impl ConditionalEventHandler for CtrlGHandler {
 		Some(Cmd::AcceptLine)
 	}
 }
-use std::path::PathBuf;
 
 use crate::log_info;
-
-// Global mutex for history file operations to prevent race conditions
-lazy_static::lazy_static! {
-	static ref HISTORY_MUTEX: Mutex<()> = Mutex::new(());
-}
-
-// Get the history file path
-fn get_history_file_path() -> Result<PathBuf> {
-	// Use system-wide data directory
-	let data_dir = crate::directories::get_octomind_data_dir()?;
-	Ok(data_dir.join("history"))
-}
-
-// Encode a string for safe storage in history file
-// Handles backslashes and newlines properly to avoid conflicts
-fn encode_history_line(line: &str) -> String {
-	line.chars()
-		.map(|c| match c {
-			'\\' => "\\\\".to_string(),
-			'\n' => "\\n".to_string(),
-			c => c.to_string(),
-		})
-		.collect()
-}
-
-// Decode a string from history file back to original form
-// Reverses the encoding done by encode_history_line
-fn decode_history_line(encoded: &str) -> String {
-	let mut result = String::new();
-	let mut chars = encoded.chars().peekable();
-
-	while let Some(c) = chars.next() {
-		if c == '\\' {
-			match chars.peek() {
-				Some('\\') => {
-					chars.next(); // consume the second backslash
-					result.push('\\');
-				}
-				Some('n') => {
-					chars.next(); // consume the 'n'
-					result.push('\n');
-				}
-				_ => {
-					// Invalid escape sequence, just keep the backslash
-					result.push(c);
-				}
-			}
-		} else {
-			result.push(c);
-		}
-	}
-
-	result
-}
-
-// Append a single line to history file in thread-safe manner
-// Encodes newlines to preserve multiline entries as single history records
-fn append_to_history_file(line: &str) -> Result<()> {
-	let _lock = HISTORY_MUTEX.lock().unwrap();
-	let history_path = get_history_file_path()?;
-
-	// Ensure file exists with version marker
-	if !history_path.exists() {
-		let mut file = OpenOptions::new()
-			.create(true)
-			.truncate(true)
-			.write(true)
-			.open(&history_path)?;
-		file.flush()?;
-	}
-
-	let mut file = OpenOptions::new()
-		.create(true)
-		.append(true)
-		.open(&history_path)?;
-
-	let encoded_line = encode_history_line(line);
-	writeln!(file, "{}", encoded_line)?;
-	file.flush()?;
-
-	Ok(())
-}
-
-// Load history from file, handling concurrent access safely
-// Decodes newlines to restore multiline entries as single history records
-fn load_history_from_file() -> Result<Vec<String>> {
-	let _lock = HISTORY_MUTEX.lock().unwrap();
-	let history_path = get_history_file_path()?;
-
-	if !history_path.exists() {
-		return Ok(Vec::new());
-	}
-
-	let file = std::fs::File::open(&history_path)?;
-	let reader = BufReader::new(file);
-
-	let mut history = Vec::new();
-	for line in reader.lines() {
-		let line = line?;
-		if line.trim().is_empty() || line.starts_with("#") {
-			continue; // Skip empty lines and comments
-		}
-
-		let decoded_line = decode_history_line(&line);
-		history.push(decoded_line);
-	}
-
-	Ok(history)
-}
 
 // Read user input with support for multiline input, command completion, and persistent history
 pub fn read_user_input(
@@ -276,15 +165,15 @@ pub fn read_user_input(
 		})),
 	);
 
-	// Load persistent history using our safe method
-	match load_history_from_file() {
+	// Load persistent history using role-based system
+	match load_session_history_from_file(role) {
 		Ok(history_lines) => {
 			for line in history_lines {
 				let _ = editor.add_history_entry(line);
 			}
 		}
 		Err(e) => {
-			log_info!("Could not load history: {}", e);
+			log_info!("Could not load history for role '{}': {}", role, e);
 		}
 	}
 
@@ -306,11 +195,15 @@ pub fn read_user_input(
 			// Add to in-memory history (auto_add_history is true, but we also save to file)
 			let _ = editor.add_history_entry(line.clone());
 
-			// Append to persistent file using thread-safe append-only method
+			// Append to persistent file using role-based thread-safe method
 			// This includes ALL inputs - both regular inputs and commands starting with '/'
-			if let Err(e) = append_to_history_file(&line) {
+			if let Err(e) = append_to_session_history_file(role, &line) {
 				// Don't fail if history can't be saved, just log it
-				log_info!("Could not append to history file: {}", e);
+				log_info!(
+					"Could not append to history file for role '{}': {}",
+					role,
+					e
+				);
 			}
 
 			// Log user input only if it's not a command (doesn't start with '/')
@@ -344,104 +237,5 @@ pub fn read_user_input(
 			println!("Error: {:?}", err);
 			Ok(InputResult::Text(String::new()))
 		}
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-	use std::io::Write;
-
-	#[test]
-	fn test_multiline_history_encoding_decoding() {
-		// Test data with various edge cases
-		let test_cases = vec![
-			"Simple single line",
-			"Line with\nmultiple\nlines",
-			"Line with \\backslash",
-			"Line with \\n literal",
-			"Complex case:\nLine 1\nLine 2 with \\backslash\nLine 3",
-			"Edge case: \\\\n (backslash followed by literal n)",
-			"", // Empty line
-		];
-
-		for original in test_cases {
-			// Test encoding and decoding using our new functions
-			let encoded = encode_history_line(original);
-			let decoded = decode_history_line(&encoded);
-
-			assert_eq!(
-				original, decoded,
-				"Encoding/decoding failed for: {:?}",
-				original
-			);
-		}
-	}
-
-	#[test]
-	fn test_complete_history_workflow() -> Result<()> {
-		use std::env;
-		use std::fs;
-
-		// Create a temporary file for testing complete workflow
-		let temp_dir = env::temp_dir();
-		let temp_file_path = temp_dir.join("octomind_test_complete_history");
-
-		// Clean up any existing test file
-		let _ = fs::remove_file(&temp_file_path);
-
-		// Test multiline input using the actual append function logic
-		let multiline_input = "This is line 1\nThis is line 2\nThis is line 3";
-
-		// Simulate append_to_history_file workflow
-		{
-			// Create file with version marker (simulate first append)
-			let mut file = OpenOptions::new()
-				.create(true)
-				.truncate(true)
-				.write(true)
-				.open(&temp_file_path)?;
-			file.flush()?;
-
-			// Append encoded multiline entry
-			let mut file = OpenOptions::new().append(true).open(&temp_file_path)?;
-			let encoded = encode_history_line(multiline_input);
-			writeln!(file, "{}", encoded)?;
-			file.flush()?;
-		}
-
-		// Simulate load_history_from_file workflow
-		let loaded_history = {
-			let file = std::fs::File::open(&temp_file_path)?;
-			let reader = BufReader::new(file);
-
-			let mut history = Vec::new();
-			for line in reader.lines() {
-				let line = line?;
-				if line.trim().is_empty() || line.starts_with("#") {
-					continue; // Skip empty lines and comments
-				}
-
-				let decoded = decode_history_line(&line);
-				history.push(decoded);
-			}
-			history
-		};
-
-		// Clean up test file
-		let _ = fs::remove_file(&temp_file_path);
-
-		// Verify the multiline input was preserved as a single entry
-		assert_eq!(
-			loaded_history.len(),
-			1,
-			"Should have exactly one history entry"
-		);
-		assert_eq!(
-			loaded_history[0], multiline_input,
-			"Multiline content should be preserved exactly"
-		);
-
-		Ok(())
 	}
 }

@@ -231,10 +231,9 @@ impl ConditionalEventHandler for AskSmartCtrlEHandler {
 	}
 }
 
-// Get the ask-specific history file path (separate from session history)
+// Get the ask-specific history file path (in organized history directory)
 fn get_ask_history_file_path() -> Result<PathBuf> {
-	let data_dir = octomind::directories::get_octomind_data_dir()?;
-	Ok(data_dir.join("ask_history"))
+	crate::session::history::get_ask_history_file_path()
 }
 
 // Encode/decode functions for ask history (same as session but separate)

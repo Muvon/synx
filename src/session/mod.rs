@@ -19,6 +19,7 @@ pub mod cancellation; // Cancellation management
 pub mod chat; // Chat session logic
 mod chat_helper; // Chat command completion
 pub mod helper_functions; // Helper functions for layers and other components
+pub mod history; // Role-based history management
 pub mod image; // Image processing and attachment utilities
 pub mod layers; // Layered architecture implementation
 pub mod logger; // Request/response logging utilities
