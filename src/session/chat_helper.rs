@@ -43,6 +43,56 @@ impl<'a> CommandCompleter<'a> {
 		}
 	}
 
+	/// Get available context filters for /context command
+	fn get_context_filters() -> Vec<&'static str> {
+		vec!["all", "assistant", "user", "tool", "large"]
+	}
+
+	/// Get available MCP subcommands for /mcp command
+	fn get_mcp_subcommands() -> Vec<&'static str> {
+		vec!["list", "info", "full", "health", "dump", "validate"]
+	}
+
+	/// Get available cache subcommands for /cache command
+	fn get_cache_subcommands() -> Vec<&'static str> {
+		vec!["stats", "clear", "threshold"]
+	}
+
+	/// Get available log levels for /loglevel command
+	fn get_log_levels() -> Vec<&'static str> {
+		vec!["none", "info", "debug"]
+	}
+
+	/// Get available roles for /role command
+	fn get_available_roles(&self) -> Vec<String> {
+		self.config.roles.iter().map(|r| r.name.clone()).collect()
+	}
+
+	/// Check if a context filter is valid
+	fn is_valid_context_filter(filter: &str) -> bool {
+		Self::get_context_filters().contains(&filter)
+	}
+
+	/// Check if an MCP subcommand is valid
+	fn is_valid_mcp_subcommand(subcommand: &str) -> bool {
+		Self::get_mcp_subcommands().contains(&subcommand)
+	}
+
+	/// Check if a cache subcommand is valid
+	fn is_valid_cache_subcommand(subcommand: &str) -> bool {
+		Self::get_cache_subcommands().contains(&subcommand)
+	}
+
+	/// Check if a log level is valid
+	fn is_valid_log_level(level: &str) -> bool {
+		Self::get_log_levels().contains(&level)
+	}
+
+	/// Check if a role is valid
+	fn is_valid_role(&self, role: &str) -> bool {
+		self.config.roles.iter().any(|r| r.name == role)
+	}
+
 	/// Check if the given file extension is a supported image format
 	fn is_image_file(path: &str) -> bool {
 		let supported_extensions = [
@@ -327,6 +377,117 @@ impl<'a> Completer for CommandCompleter<'a> {
 				.collect();
 
 			Ok((prefix_len, candidates))
+		} else if line.starts_with("/context ") {
+			// Handle /context command with filter completion
+			let context_prefix = "/context ";
+			let prefix_len = context_prefix.len();
+
+			// Extract the filter part up to cursor position
+			let filter_part = if pos > prefix_len {
+				&line[prefix_len..pos]
+			} else {
+				""
+			};
+
+			let candidates: Vec<Pair> = Self::get_context_filters()
+				.iter()
+				.filter(|filter| filter.starts_with(filter_part))
+				.map(|filter| Pair {
+					display: filter.to_string(),
+					replacement: filter.to_string(),
+				})
+				.collect();
+
+			Ok((prefix_len, candidates))
+		} else if line.starts_with("/mcp ") {
+			// Handle /mcp command with subcommand completion
+			let mcp_prefix = "/mcp ";
+			let prefix_len = mcp_prefix.len();
+
+			// Extract the subcommand part up to cursor position
+			let subcommand_part = if pos > prefix_len {
+				&line[prefix_len..pos]
+			} else {
+				""
+			};
+
+			let candidates: Vec<Pair> = Self::get_mcp_subcommands()
+				.iter()
+				.filter(|subcommand| subcommand.starts_with(subcommand_part))
+				.map(|subcommand| Pair {
+					display: subcommand.to_string(),
+					replacement: subcommand.to_string(),
+				})
+				.collect();
+
+			Ok((prefix_len, candidates))
+		} else if line.starts_with("/cache ") {
+			// Handle /cache command with subcommand completion
+			let cache_prefix = "/cache ";
+			let prefix_len = cache_prefix.len();
+
+			// Extract the subcommand part up to cursor position
+			let subcommand_part = if pos > prefix_len {
+				&line[prefix_len..pos]
+			} else {
+				""
+			};
+
+			let candidates: Vec<Pair> = Self::get_cache_subcommands()
+				.iter()
+				.filter(|subcommand| subcommand.starts_with(subcommand_part))
+				.map(|subcommand| Pair {
+					display: subcommand.to_string(),
+					replacement: subcommand.to_string(),
+				})
+				.collect();
+
+			Ok((prefix_len, candidates))
+		} else if line.starts_with("/loglevel ") {
+			// Handle /loglevel command with level completion
+			let loglevel_prefix = "/loglevel ";
+			let prefix_len = loglevel_prefix.len();
+
+			// Extract the level part up to cursor position
+			let level_part = if pos > prefix_len {
+				&line[prefix_len..pos]
+			} else {
+				""
+			};
+
+			let candidates: Vec<Pair> = Self::get_log_levels()
+				.iter()
+				.filter(|level| level.starts_with(level_part))
+				.map(|level| Pair {
+					display: level.to_string(),
+					replacement: level.to_string(),
+				})
+				.collect();
+
+			Ok((prefix_len, candidates))
+		} else if line.starts_with("/role ") {
+			// Handle /role command with role name completion
+			let role_prefix = "/role ";
+			let prefix_len = role_prefix.len();
+
+			// Extract the role part up to cursor position
+			let role_part = if pos > prefix_len {
+				&line[prefix_len..pos]
+			} else {
+				""
+			};
+
+			let candidates: Vec<Pair> = self
+				.get_available_roles()
+				.iter()
+				.filter(|role| role.starts_with(role_part))
+				.map(|role| Pair {
+					display: role.clone(),
+					replacement: role.clone(),
+				})
+				.collect();
+
+			Ok((prefix_len, candidates))
 		} else if !line.starts_with('/') {
 			// No completion for non-commands
 			Ok((0, vec![]))
@@ -385,6 +546,36 @@ impl<'a> Hinter for CommandCompleter<'a> {
 			return Some(" <command_name>".to_string());
 		}
 
+		// Special hint for /context command
+		if line == "/context" {
+			return Some(" [all|assistant|user|tool|large]".to_string());
+		}
+
+		// Special hint for /mcp command
+		if line == "/mcp" {
+			return Some(" [list|info|full|health|dump|validate]".to_string());
+		}
+
+		// Special hint for /cache command
+		if line == "/cache" {
+			return Some(" [stats|clear|threshold]".to_string());
+		}
+
+		// Special hint for /loglevel command
+		if line == "/loglevel" {
+			return Some(" [none|info|debug]".to_string());
+		}
+
+		// Special hint for /role command
+		if line == "/role" {
+			return Some(" <role_name>".to_string());
+		}
+
+		// Special hint for /model command
+		if line == "/model" {
+			return Some(" <model_name>".to_string());
+		}
+
 		if line.starts_with("/image ") && line.len() > 7 {
 			let file_part = &line[7..]; // "/image ".len() = 7
 			if file_part.is_empty() {
@@ -407,6 +598,58 @@ impl<'a> Hinter for CommandCompleter<'a> {
 				return Some("Start typing command name...".to_string());
 			}
 			return None; // Let command completer handle this
+		}
+
+		if line.starts_with("/context ") && line.len() > 9 {
+			let filter_part = &line[9..]; // "/context ".len() = 9
+			if filter_part.is_empty() {
+				return Some("all|assistant|user|tool|large".to_string());
+			}
+			return None; // Let completer handle this
+		}
+
+		if line.starts_with("/mcp ") && line.len() > 5 {
+			let subcommand_part = &line[5..]; // "/mcp ".len() = 5
+			if subcommand_part.is_empty() {
+				return Some("list|info|full|health|dump|validate".to_string());
+			}
+			return None; // Let completer handle this
+		}
+
+		if line.starts_with("/cache ") && line.len() > 7 {
+			let subcommand_part = &line[7..]; // "/cache ".len() = 7
+			if subcommand_part.is_empty() {
+				return Some("stats|clear|threshold".to_string());
+			}
+			return None; // Let completer handle this
+		}
+
+		if line.starts_with("/loglevel ") && line.len() > 10 {
+			let level_part = &line[10..]; // "/loglevel ".len() = 10
+			if level_part.is_empty() {
+				return Some("none|info|debug".to_string());
+			}
+			return None; // Let completer handle this
+		}
+
+		if line.starts_with("/role ") && line.len() > 6 {
+			let role_part = &line[6..]; // "/role ".len() = 6
+			if role_part.is_empty() {
+				let roles = self.get_available_roles();
+				if !roles.is_empty() {
+					return Some(roles.join("|"));
+				}
+				return Some("Start typing role name...".to_string());
+			}
+			return None; // Let completer handle this
+		}
+
+		if line.starts_with("/model ") && line.len() > 7 {
+			let model_part = &line[7..]; // "/model ".len() = 7
+			if model_part.is_empty() {
+				return Some("Start typing model name...".to_string());
+			}
+			return None; // Let completer handle this
 		}
 
 		// Look for a command that starts with the current input
@@ -500,6 +743,140 @@ impl<'a> Highlighter for CommandCompleter<'a> {
 				} else {
 					// Just the command part is green
 					return Owned(format!("{} ", run_cmd.green()));
+				}
+			}
+
+			// Special handling for /context command with filter
+			if line.starts_with("/context ") && line.len() > 9 {
+				let context_cmd = "/context";
+				let filter_part = &line[9..]; // "/context ".len() = 9
+
+				if !filter_part.is_empty() {
+					if Self::is_valid_context_filter(filter_part) {
+						// Highlight valid filter in bright green
+						return Owned(format!(
+							"{} {}",
+							context_cmd.green(),
+							filter_part.bright_green()
+						));
+					} else {
+						// Highlight invalid filter in yellow
+						return Owned(format!("{} {}", context_cmd.green(), filter_part.yellow()));
+					}
+				} else {
+					// Just the command part is green
+					return Owned(format!("{} ", context_cmd.green()));
+				}
+			}
+
+			// Special handling for /mcp command with subcommand
+			if line.starts_with("/mcp ") && line.len() > 5 {
+				let mcp_cmd = "/mcp";
+				let subcommand_part = &line[5..]; // "/mcp ".len() = 5
+
+				if !subcommand_part.is_empty() {
+					if Self::is_valid_mcp_subcommand(subcommand_part) {
+						// Highlight valid subcommand in bright green
+						return Owned(format!(
+							"{} {}",
+							mcp_cmd.green(),
+							subcommand_part.bright_green()
+						));
+					} else {
+						// Highlight invalid subcommand in yellow
+						return Owned(format!("{} {}", mcp_cmd.green(), subcommand_part.yellow()));
+					}
+				} else {
+					// Just the command part is green
+					return Owned(format!("{} ", mcp_cmd.green()));
+				}
+			}
+
+			// Special handling for /cache command with subcommand
+			if line.starts_with("/cache ") && line.len() > 7 {
+				let cache_cmd = "/cache";
+				let subcommand_part = &line[7..]; // "/cache ".len() = 7
+
+				if !subcommand_part.is_empty() {
+					if Self::is_valid_cache_subcommand(subcommand_part) {
+						// Highlight valid subcommand in bright green
+						return Owned(format!(
+							"{} {}",
+							cache_cmd.green(),
+							subcommand_part.bright_green()
+						));
+					} else {
+						// Highlight invalid subcommand in yellow
+						return Owned(format!(
+							"{} {}",
+							cache_cmd.green(),
+							subcommand_part.yellow()
+						));
+					}
+				} else {
+					// Just the command part is green
+					return Owned(format!("{} ", cache_cmd.green()));
+				}
+			}
+
+			// Special handling for /loglevel command with level
+			if line.starts_with("/loglevel ") && line.len() > 10 {
+				let loglevel_cmd = "/loglevel";
+				let level_part = &line[10..]; // "/loglevel ".len() = 10
+
+				if !level_part.is_empty() {
+					if Self::is_valid_log_level(level_part) {
+						// Highlight valid level in bright green
+						return Owned(format!(
+							"{} {}",
+							loglevel_cmd.green(),
+							level_part.bright_green()
+						));
+					} else {
+						// Highlight invalid level in yellow
+						return Owned(format!("{} {}", loglevel_cmd.green(), level_part.yellow()));
+					}
+				} else {
+					// Just the command part is green
+					return Owned(format!("{} ", loglevel_cmd.green()));
+				}
+			}
+
+			// Special handling for /role command with role name
+			if line.starts_with("/role ") && line.len() > 6 {
+				let role_cmd = "/role";
+				let role_part = &line[6..]; // "/role ".len() = 6
+
+				if !role_part.is_empty() {
+					if self.is_valid_role(role_part) {
+						// Highlight valid role in bright green
+						return Owned(format!("{} {}", role_cmd.green(), role_part.bright_green()));
+					} else {
+						// Highlight invalid role in yellow
+						return Owned(format!("{} {}", role_cmd.green(), role_part.yellow()));
+					}
+				} else {
+					// Just the command part is green
+					return Owned(format!("{} ", role_cmd.green()));
+				}
+			}
+
+			// Special handling for /model command with model name
+			if line.starts_with("/model ") && line.len() > 7 {
+				let model_cmd = "/model";
+				let model_part = &line[7..]; // "/model ".len() = 7
+
+				if !model_part.is_empty() {
+					// For model names, we can't easily validate them, so just highlight in bright_green
+					// since any string could be a valid model name
+					return Owned(format!(
+						"{} {}",
+						model_cmd.green(),
+						model_part.bright_green()
+					));
+				} else {
+					// Just the command part is green
+					return Owned(format!("{} ", model_cmd.green()));
 				}
 			}
 
