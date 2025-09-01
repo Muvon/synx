@@ -69,9 +69,77 @@ fn get_role_mutex(role: &str) -> std::sync::MutexGuard<'static, ()> {
 	unsafe { (*mutex_ref).lock().unwrap() }
 }
 
+/// Migrate old global history file to role-based system
+fn migrate_legacy_history_if_needed(role: &str) -> Result<()> {
+	// Only migrate for developer role to avoid duplicating history across roles
+	if role != "developer" {
+		return Ok(());
+	}
+
+	let history_dir = get_history_dir()?;
+	let legacy_history = history_dir.parent().unwrap().join("history");
+	let role_history_path = get_session_history_file_path(role)?;
+
+	// Check if legacy global history file exists and role-specific file doesn't exist yet
+	if legacy_history.exists() && legacy_history.is_file() && !role_history_path.exists() {
+		crate::log_debug!(
+			"Migrating legacy global history to role-based system for role: {}",
+			role
+		);
+
+		// Read legacy history
+		let legacy_content = fs::read_to_string(&legacy_history)
+			.with_context(|| format!("Failed to read legacy history file: {:?}", legacy_history))?;
+
+		// Create new role-specific history file with version marker
+		let mut role_file = OpenOptions::new()
+			.create(true)
+			.truncate(true)
+			.write(true)
+			.open(&role_history_path)
+			.with_context(|| {
+				format!(
+					"Failed to create role history file: {:?}",
+					role_history_path
+				)
+			})?;
+
+		writeln!(role_file, "# OCTOMIND_HISTORY_VERSION=1")?;
+
+		// Process and migrate each line from legacy file
+		for line in legacy_content.lines() {
+			if !line.trim().is_empty() {
+				// Encode newlines to preserve multiline entries as single history records
+				let encoded_line = line.replace("\\", "\\\\").replace("\n", "\\n");
+				writeln!(role_file, "{}", encoded_line)?;
+			}
+		}
+
+		role_file.flush()?;
+
+		// Rename legacy file to prevent future conflicts
+		let backup_path = history_dir.parent().unwrap().join("history.migrated");
+		fs::rename(&legacy_history, &backup_path).with_context(|| {
+			format!("Failed to rename legacy history file to: {:?}", backup_path)
+		})?;
+
+		crate::log_debug!(
+			"Successfully migrated legacy history to: {:?}",
+			role_history_path
+		);
+		crate::log_debug!("Legacy file backed up to: {:?}", backup_path);
+	}
+
+	Ok(())
+}
+
 /// Load history from a role-specific file
 pub fn load_session_history_from_file(role: &str) -> Result<Vec<String>> {
 	let _lock = get_role_mutex(role);
+
+	// Migrate legacy history if needed (only for developer role)
+	migrate_legacy_history_if_needed(role)?;
+
 	let history_path = get_session_history_file_path(role)?;
 
 	if !history_path.exists() {
