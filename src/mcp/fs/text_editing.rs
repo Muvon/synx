@@ -284,7 +284,7 @@ pub async fn str_replace_spec(
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			"No match found for replacement. Please check your text and try again. Make sure you are not escaping \\\\t, \\\\n or similiar and pass raw content.".to_string(),
+			"No match found for replacement. Please check your text and try again. Make sure you are not escaping \\\\t, \\\\n or similiar and pass raw content. Alternatively, use line_replace when you know exactly which line to replace.".to_string(),
 		));
 	}
 	if occurrences > 1 {
