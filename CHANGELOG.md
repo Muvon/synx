@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.14.0] - 2025-09-16
+
+### 📋 Release Summary
+
+This release adds enhanced command hinting and completion, along with migration support for legacy session history, improving user workflow and continuity (bc3f31b5, 19e4057c). Pricing for DeepSeek has been updated to unified rates effective September 5, 2025 (f40aadca). Additionally, improvements to session history management and clearer error messages enhance overall usability and reliability (3c0afe96, b0d90a0e).
+
+
+### ✨ New Features & Enhancements
+
+- **session**: add hinting and completion for mor commands (/context, /mcp, /cache, /loglevel, /role, /model) `bc3f31b5`
+- **deepseek**: update pricing to unified rates starting Sep 5, 2025 `f40aadca`
+- **session**: add migration from legacy global history file `19e4057c`
+
+### 🔧 Improvements & Optimizations
+
+- **history**: implement role-based session history system `3c0afe96`
+
+### 🐛 Bug Fixes & Stability
+
+- **text_editing**: improve str_replace error message guidance `b0d90a0e`
+
+### 📊 Release Summary
+
+**Total commits**: 5 across 3 categories
+
+✨ **3** new features - *Enhanced functionality*
+🔧 **1** improvement - *Better performance & code quality*
+🐛 **1** bug fix - *Improved stability*
+
 ## [0.13.0] - 2025-08-27
 
 ### 📋 Release Summary
