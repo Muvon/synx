@@ -31,7 +31,26 @@ pub fn get_history_dir() -> Result<PathBuf> {
 	let data_dir = crate::directories::get_octomind_data_dir()?;
 	let history_dir = data_dir.join("history");
 
-	// Ensure history directory exists
+	// Check if legacy history file exists BEFORE creating directory
+	// This handles the case where old version had "history" as a file
+	let legacy_history_file = data_dir.join("history");
+	if legacy_history_file.exists() && legacy_history_file.is_file() {
+		// Legacy file exists - we'll handle migration later, but first rename it
+		// to avoid conflicts when creating the directory
+		let backup_path = data_dir.join("history.legacy");
+		fs::rename(&legacy_history_file, &backup_path).with_context(|| {
+			format!(
+				"Failed to rename legacy history file from {:?} to {:?}",
+				legacy_history_file, backup_path
+			)
+		})?;
+		crate::log_debug!(
+			"Renamed legacy history file to: {:?} (will be migrated on first use)",
+			backup_path
+		);
+	}
+
+	// Now ensure history directory exists
 	if !history_dir.exists() {
 		fs::create_dir_all(&history_dir)
 			.with_context(|| format!("Failed to create history directory: {:?}", history_dir))?;
@@ -76,20 +95,20 @@ fn migrate_legacy_history_if_needed(role: &str) -> Result<()> {
 		return Ok(());
 	}
 
-	let history_dir = get_history_dir()?;
-	let legacy_history = history_dir.parent().unwrap().join("history");
+	let data_dir = crate::directories::get_octomind_data_dir()?;
+	let legacy_backup = data_dir.join("history.legacy");
 	let role_history_path = get_session_history_file_path(role)?;
 
-	// Check if legacy global history file exists and role-specific file doesn't exist yet
-	if legacy_history.exists() && legacy_history.is_file() && !role_history_path.exists() {
+	// Check if legacy backup exists and role-specific file doesn't exist yet
+	if legacy_backup.exists() && legacy_backup.is_file() && !role_history_path.exists() {
 		crate::log_debug!(
 			"Migrating legacy global history to role-based system for role: {}",
 			role
 		);
 
 		// Read legacy history
-		let legacy_content = fs::read_to_string(&legacy_history)
-			.with_context(|| format!("Failed to read legacy history file: {:?}", legacy_history))?;
+		let legacy_content = fs::read_to_string(&legacy_backup)
+			.with_context(|| format!("Failed to read legacy history file: {:?}", legacy_backup))?;
 
 		// Create new role-specific history file with version marker
 		let mut role_file = OpenOptions::new()
@@ -117,17 +136,20 @@ fn migrate_legacy_history_if_needed(role: &str) -> Result<()> {
 
 		role_file.flush()?;
 
-		// Rename legacy file to prevent future conflicts
-		let backup_path = history_dir.parent().unwrap().join("history.migrated");
-		fs::rename(&legacy_history, &backup_path).with_context(|| {
-			format!("Failed to rename legacy history file to: {:?}", backup_path)
+		// Rename legacy backup to mark as migrated
+		let migrated_path = data_dir.join("history.migrated");
+		fs::rename(&legacy_backup, &migrated_path).with_context(|| {
+			format!(
+				"Failed to rename legacy backup file to: {:?}",
+				migrated_path
+			)
 		})?;
 
 		crate::log_debug!(
 			"Successfully migrated legacy history to: {:?}",
 			role_history_path
 		);
-		crate::log_debug!("Legacy file backed up to: {:?}", backup_path);
+		crate::log_debug!("Legacy file marked as migrated: {:?}", migrated_path);
 	}
 
 	Ok(())
