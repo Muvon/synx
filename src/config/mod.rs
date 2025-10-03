@@ -136,6 +136,9 @@ pub struct Config {
 	// Custom instructions file name (relative to project root)
 	pub custom_instructions_file_name: String,
 
+	// Custom constraints file name (relative to project root)
+	pub custom_constraints_file_name: String,
+
 	// System-wide configuration settings (not role-specific)
 	pub mcp_response_warning_threshold: usize,
 	pub mcp_response_tokens_threshold: usize,

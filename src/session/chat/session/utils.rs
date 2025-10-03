@@ -133,3 +133,51 @@ pub async fn get_initial_messages(
 
 	Ok(initial_messages)
 }
+
+/// Append constraints from file to user input if file exists
+/// Returns the input with constraints appended in <constraints>...</constraints> tags
+/// If file doesn't exist or is empty, returns input unchanged
+pub fn append_constraints_if_exists(
+	input: &str,
+	constraints_filename: &str,
+	current_dir: &std::path::Path,
+) -> String {
+	// If constraints filename is empty, return input unchanged
+	if constraints_filename.trim().is_empty() {
+		return input.to_string();
+	}
+
+	// Build path to constraints file
+	let constraints_path = current_dir.join(constraints_filename);
+
+	// If file doesn't exist, return input unchanged
+	if !constraints_path.exists() {
+		return input.to_string();
+	}
+
+	// Try to read constraints file
+	match std::fs::read_to_string(&constraints_path) {
+		Ok(constraints_content) => {
+			let trimmed_constraints = constraints_content.trim();
+			// If file is empty, return input unchanged
+			if trimmed_constraints.is_empty() {
+				return input.to_string();
+			}
+
+			// Append constraints in XML tags
+			format!(
+				"{}\n\n<constraints>\n{}\n</constraints>",
+				input.trim_end(),
+				trimmed_constraints
+			)
+		}
+		Err(e) => {
+			log_debug!(
+				"Failed to read constraints file {}: {}",
+				constraints_filename,
+				e
+			);
+			input.to_string()
+		}
+	}
+}

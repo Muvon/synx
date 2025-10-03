@@ -880,6 +880,9 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	let (mut chat_session, config_for_role, role, mut first_message_processed) =
 		setup_and_initialize_session(args, config).await?;
 
+	// Get current directory for file operations
+	let current_dir = std::env::current_dir()?;
+
 	// Setup system prompt and cache using helper function (BEFORE showing interactive prompts)
 	setup_system_prompt_and_cache(&mut chat_session, &config_for_role, &role, true).await?;
 
@@ -1383,7 +1386,14 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		// - layers_modified_session = true: Layers added messages to session → Skip (avoid duplicates)
 		// - layers_modified_session = false: Layers didn't add messages → Add user message (needed for conversation)
 		if !chat_session.continuation_pending && !layers_modified_session {
-			chat_session.add_user_message(&final_input)?;
+			// Append constraints if configured
+			let final_input_with_constraints =
+				crate::session::chat::session::utils::append_constraints_if_exists(
+					&final_input,
+					&current_config.custom_constraints_file_name,
+					&current_dir,
+				);
+			chat_session.add_user_message(&final_input_with_constraints)?;
 		}
 
 		// Create operation context for tracking
@@ -1533,6 +1543,9 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 
 	crate::config::set_thread_config(&current_config);
 
+	// Get current directory for file operations
+	let current_dir = std::env::current_dir()?;
+
 	// Process the single input (same logic as interactive session)
 	let mut input = initial_input.to_string();
 	let mut operation_rx = cancellation.new_operation();
@@ -1632,7 +1645,14 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	let user_message_index = chat_session.session.messages.len();
 	let layers_enabled = current_config.get_enable_layers(&role);
 	if !layers_enabled {
-		chat_session.add_user_message(&input)?;
+		// Append constraints if configured
+		let input_with_constraints =
+			crate::session::chat::session::utils::append_constraints_if_exists(
+				&input,
+				&current_config.custom_constraints_file_name,
+				&current_dir,
+			);
+		chat_session.add_user_message(&input_with_constraints)?;
 	}
 
 	// Prepare for API call using helper function

@@ -34,6 +34,13 @@ max_tokens = 16384
 # Set to empty string to disable: custom_instructions_file_name = ""
 custom_instructions_file_name = "INSTRUCTIONS.md"
 
+# Custom constraints file name (relative to project root)
+# This file content will be automatically appended to EACH user request in <constraints>...</constraints> tags
+# Works in both interactive sessions and non-interactive commands (ask/run)
+# If the file doesn't exist, user requests are sent unchanged (no error)
+# Set to empty string to disable: custom_constraints_file_name = ""
+custom_constraints_file_name = "CONSTRAINTS.md"
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PERFORMANCE & LIMITS
 # Configure thresholds and performance-related settings
