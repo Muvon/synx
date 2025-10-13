@@ -37,6 +37,7 @@ use tokio::sync::watch;
 type SessionParams = (
 	Option<String>, // name
 	Option<String>, // resume
+	bool,           // resume_recent
 	Option<String>, // model
 	Option<u32>,    // max_tokens
 	Option<f32>,    // temperature (None = use role config)
@@ -74,6 +75,9 @@ fn extract_session_params<T: std::fmt::Debug>(args: &T, _config: &Config) -> Ses
 	} else {
 		None
 	};
+
+	// Get resume_recent
+	let resume_recent = args_str.contains("resume_recent: true");
 
 	// Get role
 	let role = if args_str.contains("role: \"") {
@@ -114,6 +118,7 @@ fn extract_session_params<T: std::fmt::Debug>(args: &T, _config: &Config) -> Ses
 	(
 		name,
 		resume,
+		resume_recent,
 		model,
 		max_tokens,
 		temperature,
@@ -128,7 +133,7 @@ async fn setup_and_initialize_session<T: std::fmt::Debug>(
 	config: &Config,
 ) -> Result<(ChatSession, Config, String, bool)> {
 	// Extract session parameters
-	let (name, resume, model, max_tokens, temperature, role, max_retries) =
+	let (name, resume, resume_recent, model, max_tokens, temperature, role, max_retries) =
 		extract_session_params(args, config);
 
 	// Get role config for defaults
@@ -165,6 +170,9 @@ To fix this issue
 	}
 	if let Some(resume) = resume {
 		session_params = session_params.with_resume(resume);
+	}
+	if resume_recent {
+		session_params = session_params.with_resume_recent(true);
 	}
 	if let Some(model) = model.clone() {
 		session_params = session_params.with_model(model);

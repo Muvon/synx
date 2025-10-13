@@ -500,6 +500,63 @@ pub fn list_available_sessions() -> Result<Vec<(String, SessionInfo)>, anyhow::E
 	Ok(sessions)
 }
 
+// Find the most recent session for a specific project directory
+// This works by checking the session name which includes the project basename
+pub fn find_most_recent_session_for_project(
+	project_dir: &Path,
+) -> Result<Option<String>, anyhow::Error> {
+	let sessions_dir = get_sessions_dir()?;
+
+	if !sessions_dir.exists() {
+		return Ok(None);
+	}
+
+	// Get the basename of the current project directory
+	let project_basename = project_dir
+		.file_name()
+		.and_then(|n| n.to_str())
+		.unwrap_or("");
+
+	if project_basename.is_empty() {
+		return Ok(None);
+	}
+
+	let mut matching_sessions: Vec<(String, u64)> = Vec::new();
+
+	for entry in std_fs::read_dir(sessions_dir)? {
+		let entry = entry?;
+		let path = entry.path();
+
+		if path.is_file() && path.extension().is_some_and(|ext| ext == "jsonl") {
+			let name = path
+				.file_stem()
+				.and_then(|s| s.to_str())
+				.unwrap_or_default();
+
+			// Session name format: YYMMDD-HHMMSS-basename-uuid
+			// Check if the session name contains the project basename
+			if name.contains(project_basename) {
+				// Get file modification time for sorting
+				if let Ok(metadata) = std_fs::metadata(&path) {
+					if let Ok(modified) = metadata.modified() {
+						if let Ok(duration) =
+							modified.duration_since(std::time::SystemTime::UNIX_EPOCH)
+						{
+							matching_sessions.push((name.to_string(), duration.as_secs()));
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Sort by modification time (newest first)
+	matching_sessions.sort_by(|a, b| b.1.cmp(&a.1));
+
+	// Return the most recent session name
+	Ok(matching_sessions.first().map(|(name, _)| name.clone()))
+}
+
 /// Check if there are incomplete tool calls that need cleanup
 ///
 /// A tool call sequence is incomplete if:

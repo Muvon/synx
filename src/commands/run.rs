@@ -29,6 +29,10 @@ pub struct RunArgs {
 	#[arg(long, short)]
 	pub resume: Option<String>,
 
+	/// Resume the most recent session for the current project directory
+	#[arg(long)]
+	pub resume_recent: bool,
+
 	/// Use a specific model instead of the one configured in config (runtime only, not saved)
 	#[arg(long)]
 	pub model: Option<String>,
@@ -55,6 +59,7 @@ impl RunArgs {
 		super::SessionArgs {
 			name: self.name.clone(),
 			resume: self.resume.clone(),
+			resume_recent: self.resume_recent,
 			model: self.model.clone(),
 			temperature: self.temperature,
 			max_tokens: self.max_tokens,

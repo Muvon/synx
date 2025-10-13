@@ -33,6 +33,8 @@ pub struct SessionInitParams<'a> {
 	pub name: Option<String>,
 	/// Optional session ID to resume
 	pub resume: Option<String>,
+	/// Resume the most recent session for the current project
+	pub resume_recent: bool,
 	/// Optional model override
 	pub model: Option<String>,
 	/// Optional temperature override
@@ -53,6 +55,7 @@ impl<'a> SessionInitParams<'a> {
 		Self {
 			name: None,
 			resume: None,
+			resume_recent: false,
 			model: None,
 			temperature: None,
 			max_tokens: None,
@@ -71,6 +74,12 @@ impl<'a> SessionInitParams<'a> {
 	/// Set session to resume
 	pub fn with_resume(mut self, resume: String) -> Self {
 		self.resume = Some(resume);
+		self
+	}
+
+	/// Set resume recent flag
+	pub fn with_resume_recent(mut self, resume_recent: bool) -> Self {
+		self.resume_recent = resume_recent;
 		self
 	}
 
@@ -238,10 +247,43 @@ impl ChatSession {
 	pub async fn initialize(params: SessionInitParams<'_>) -> Result<Self> {
 		let sessions_dir = get_sessions_dir()?;
 
+		// Handle resume_recent flag
+		let effective_resume = if params.resume_recent {
+			// Get current working directory
+			let current_dir = std::env::current_dir()?;
+
+			// Find the most recent session for this project
+			match crate::session::find_most_recent_session_for_project(&current_dir)? {
+				Some(session_name) => {
+					use colored::*;
+					println!(
+						"{}",
+						format!(
+							"✓ Found recent session for current project: {}",
+							session_name
+						)
+						.bright_green()
+					);
+					Some(session_name)
+				}
+				None => {
+					use colored::*;
+					println!(
+						"{}",
+						"⚠ No recent session found for current project. Creating new session."
+							.yellow()
+					);
+					None
+				}
+			}
+		} else {
+			params.resume.clone()
+		};
+
 		// Determine session name
 		let session_name = if let Some(name_arg) = &params.name {
 			name_arg.clone()
-		} else if let Some(resume_name) = &params.resume {
+		} else if let Some(resume_name) = &effective_resume {
 			resume_name.clone()
 		} else {
 			// Generate a name using the new format
@@ -273,7 +315,7 @@ impl ChatSession {
 		};
 
 		// Check if we should load or create a session
-		let should_resume = if params.resume.is_some() {
+		let should_resume = if effective_resume.is_some() {
 			// Explicit resume request - session MUST exist
 			if !session_file.exists() {
 				return Err(anyhow::anyhow!(
