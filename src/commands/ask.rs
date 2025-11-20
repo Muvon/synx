@@ -506,7 +506,7 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 		})
 		.await?;
 		print_response(&response.content, args.raw, config);
-		return Ok(());
+		Ok(())
 	} else {
 		// Interactive multimode - no argument provided and stdin is a terminal
 		println!(
@@ -581,7 +581,7 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 			}
 		}
 
-		return Ok(());
+		Ok(())
 	}
 }
 

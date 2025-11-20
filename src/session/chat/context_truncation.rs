@@ -392,7 +392,7 @@ mod tests {
 
 	#[test]
 	fn test_tool_sequence_identification() {
-		let messages = vec![
+		let messages = [
 			create_test_message("user", "Hello", None, None, None),
 			create_test_message(
 				"assistant",
