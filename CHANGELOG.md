@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.15.0] - 2025-11-21
+
+### 📋 Release Summary
+
+This release adds the ability to resume recent sessions and include custom constraints in user inputs, enhancing workflow flexibility (fae183ed, be8c2bd2). It also integrates new AI models, Claude Sonnet 4.5 and GPT-5-Codex, expanding the assistant's capabilities (07a67cc2). Several fixes improve session history migration and command handling, while updates streamline dependencies and provider management for a more reliable experience (7c58af9a, f02967dd, 777bb6d3, 1953a4df).
+
+
+### ✨ New Features & Enhancements
+
+- **session**: add --resume-recent flag to resume latest session `fae183ed`
+- **session**: add support for appending custom constraints to user input `be8c2bd2`
+- **models**: add support for Claude Sonnet 4.5 and GPT-5-Codex `07a67cc2`
+
+### 🔧 Improvements & Optimizations
+
+- **providers**: unify providers via octolib and remove legacy code `1953a4df`
+
+### 🐛 Bug Fixes & Stability
+
+- **commands**: remove redundant return statements in ask.rs `7c58af9a`
+- **session**: handle legacy history file migration correctly `f02967dd`
+
+### 🔄 Other Changes
+
+- **deps**: remove unused dependencies and clean Cargo.lock `777bb6d3`
+- **rust**: update toolchain and dependencies `31ec325e`
+
+### 📊 Release Summary
+
+**Total commits**: 8 across 4 categories
+
+✨ **3** new features - *Enhanced functionality*
+🔧 **1** improvement - *Better performance & code quality*
+🐛 **2** bug fixes - *Improved stability*
+🔄 **2** other changes - *Maintenance & tooling*
+
 ## [0.14.0] - 2025-09-16
 
 ### 📋 Release Summary
