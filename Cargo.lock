@@ -1652,7 +1652,8 @@ dependencies = [
 [[package]]
 name = "octolib"
 version = "0.1.0"
-source = "git+https://github.com/muvon/octolib.git?rev=5c84ab4797b4768ed024afb59bfee0f185512f47#5c84ab4797b4768ed024afb59bfee0f185512f47"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4007dc59ba45a1abc5adf242244a3896777acd1a1a5990aa9230ce4614ecc3d"
 dependencies = [
  "anyhow",
  "async-trait",
