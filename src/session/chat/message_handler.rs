@@ -40,8 +40,10 @@ impl MessageHandler {
 								id: tool_use.id,
 								name: tool_use.name,
 								arguments: tool_use.input,
+								meta: None, // Anthropic doesn't use meta
 							})
 							.collect();
+
 						Some(serde_json::to_value(&generic_calls).unwrap_or_default())
 					}
 					octolib::ProviderToolCalls::OpenAI { tool_calls }
@@ -63,14 +65,16 @@ impl MessageHandler {
 									}
 								};
 								octolib::GenericToolCall {
-									id: tc.id,
-									name: tc.function.name,
+									id: tc.id.clone(),
+									name: tc.function.name.clone(),
 									arguments,
+									meta: None, // Meta is handled at message level in octolib
 								}
 							})
 							.collect();
 						Some(serde_json::to_value(&generic_calls).unwrap_or_default())
 					}
+
 					octolib::ProviderToolCalls::Generic { calls } => {
 						Some(serde_json::to_value(&calls).unwrap_or_default())
 					}

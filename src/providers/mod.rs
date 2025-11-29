@@ -303,6 +303,7 @@ fn convert_to_generic_tool_calls(
 						id: id.to_string(),
 						name: name.to_string(),
 						arguments,
+						meta: None, // Preserve meta from session if present
 					});
 				} else {
 					panic!("Invalid OpenAI tool call format - missing required fields");
