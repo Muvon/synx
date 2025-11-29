@@ -56,7 +56,15 @@ pub async fn process_continuation_response(
 			.bold()
 	);
 	println!("{}", "─".repeat(50).dimmed());
-	print_assistant_response(response_content, config, role);
+
+	// Debug: Check if response content is empty
+	if response_content.trim().is_empty() {
+		crate::log_debug!("WARNING: Empty response content in continuation summary");
+		println!("{}", "(No summary provided by AI)".dimmed());
+	} else {
+		crate::log_debug!("Response content length: {} chars", response_content.len());
+		print_assistant_response(response_content, config, role);
+	}
 	println!();
 
 	// Log continuation processing (less visible to user)
