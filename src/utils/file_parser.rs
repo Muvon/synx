@@ -68,7 +68,8 @@ pub struct FileContent {
 
 /// Parse file references from text content
 ///
-/// Supports multiple formats:
+/// Supports multiple formats (in priority order):
+/// - Context tags: <context>filepath:start:end</context> (PREFERRED)
 /// - Code blocks: ```\nfilepath:start:end\n```
 /// - Section headers: ## REQUIRED FILE CONTEXTS
 /// - Inline references: filepath:start:end
@@ -78,26 +79,50 @@ pub fn parse_file_references(content: &str) -> HashMap<String, Vec<LineRange>> {
 	let mut file_refs = HashMap::new();
 
 	// Pre-compile regex patterns for efficiency - Windows drive letter aware
+	let context_tag_pattern = Regex::new(r"(?s)<context>(.*?)</context>").unwrap();
 	let code_block_pattern =
 		Regex::new(r"```(?:\w+)?\s*\n((?:[^\n`]+:[0-9]+:[0-9]+\s*\n?)+)\s*```").unwrap();
 	// Windows-aware pattern: allows drive letters (C:) followed by path
-	let file_pattern = Regex::new(r"^([A-Za-z]:[^:\n]+|[^:\n]+):(\d+):(\d+)\s*$").unwrap();
+	let file_pattern = Regex::new(r"^([A-Za-z]:[^\n]+|[^\n]+):(\d+):(\d+)\s*$").unwrap();
 	let general_file_pattern =
 		Regex::new(r"(?:^|\s|-)([A-Za-z]:[^\s\n:]+|[^\s\n:]+):(\d+):(\d+)").unwrap();
 	let fallback_pattern = Regex::new(r"([A-Za-z]:[^\s:]+|[^\s:]+):(\d+):(\d+)").unwrap();
 
-	// First, try to find contexts within code blocks (preferred format)
-	for code_block in code_block_pattern.captures_iter(content) {
-		if let Some(block_content) = code_block.get(1) {
-			// Parse each line in the code block
+	// PRIORITY 1: Try to find contexts within <context> tags (NEW preferred format)
+	for context_block in context_tag_pattern.captures_iter(content) {
+		if let Some(block_content) = context_block.get(1) {
+			// Parse each line in the context block
 			for line in block_content.as_str().lines() {
 				let line = line.trim();
+				if line.is_empty() {
+					continue;
+				}
 				if let Some(captures) = file_pattern.captures(line) {
 					if let Some((filepath, range)) = extract_file_range(&captures) {
 						file_refs
 							.entry(filepath)
 							.or_insert_with(Vec::new)
 							.push(range);
+					}
+				}
+			}
+		}
+	}
+
+	// PRIORITY 2: Try to find contexts within code blocks (legacy format)
+	if file_refs.is_empty() {
+		for code_block in code_block_pattern.captures_iter(content) {
+			if let Some(block_content) = code_block.get(1) {
+				// Parse each line in the code block
+				for line in block_content.as_str().lines() {
+					let line = line.trim();
+					if let Some(captures) = file_pattern.captures(line) {
+						if let Some((filepath, range)) = extract_file_range(&captures) {
+							file_refs
+								.entry(filepath)
+								.or_insert_with(Vec::new)
+								.push(range);
+						}
 					}
 				}
 			}
@@ -475,5 +500,75 @@ src/main.rs:5:15
 		assert_eq!(refs["src/main.rs"].len(), 2); // Duplicates removed
 		assert_eq!(refs["src/main.rs"][0], LineRange { start: 1, end: 10 });
 		assert_eq!(refs["src/main.rs"][1], LineRange { start: 5, end: 15 });
+	}
+
+	#[test]
+	fn test_parse_context_tags() {
+		let content = r#"
+## REQUIRED FILE CONTEXTS
+<context>
+src/session/chat/continuation.rs:100:200
+src/config/mod.rs:50:100
+tests/integration_test.rs:1:50
+</context>
+        "#;
+
+		let refs = parse_file_references(content);
+		assert_eq!(refs.len(), 3);
+		assert_eq!(
+			refs["src/session/chat/continuation.rs"][0],
+			LineRange {
+				start: 100,
+				end: 200
+			}
+		);
+		assert_eq!(
+			refs["src/config/mod.rs"][0],
+			LineRange {
+				start: 50,
+				end: 100
+			}
+		);
+		assert_eq!(
+			refs["tests/integration_test.rs"][0],
+			LineRange { start: 1, end: 50 }
+		);
+	}
+
+	#[test]
+	fn test_parse_context_tags_priority() {
+		// Context tags should take priority over code blocks
+		let content = r#"
+<context>
+src/main.rs:1:10
+</context>
+
+```
+src/lib.rs:20:30
+```
+        "#;
+
+		let refs = parse_file_references(content);
+		// Should only parse context tags, not code blocks
+		assert_eq!(refs.len(), 1);
+		assert!(refs.contains_key("src/main.rs"));
+		assert!(!refs.contains_key("src/lib.rs"));
+	}
+
+	#[test]
+	fn test_parse_context_tags_with_empty_lines() {
+		let content = r#"
+<context>
+src/main.rs:1:10
+
+src/lib.rs:20:30
+
+</context>
+        "#;
+
+		let refs = parse_file_references(content);
+		assert_eq!(refs.len(), 2);
+		assert_eq!(refs["src/main.rs"][0], LineRange { start: 1, end: 10 });
+		assert_eq!(refs["src/lib.rs"][0], LineRange { start: 20, end: 30 });
 	}
 }

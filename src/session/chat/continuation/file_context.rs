@@ -225,4 +225,41 @@ src/test.rs:1:20000
 		// Should filter out invalid ranges (start=0, end<start, end>10000)
 		assert_eq!(contexts.len(), 0);
 	}
+
+	#[test]
+	fn test_parse_file_contexts_with_context_tags() {
+		let summary = r#"
+## REQUIRED FILE CONTEXTS
+<context>
+src/session/chat/continuation.rs:100:200
+src/config/mod.rs:50:100
+tests/integration_test.rs:1:50
+</context>
+		"#;
+
+		let contexts = parse_file_contexts(summary);
+		assert_eq!(contexts.len(), 3);
+		assert!(contexts.contains(&("src/session/chat/continuation.rs".to_string(), 100, 200)));
+		assert!(contexts.contains(&("src/config/mod.rs".to_string(), 50, 100)));
+		assert!(contexts.contains(&("tests/integration_test.rs".to_string(), 1, 50)));
+	}
+
+	#[test]
+	fn test_parse_file_contexts_context_tags_priority() {
+		// Context tags should take priority over code blocks
+		let summary = r#"
+<context>
+src/main.rs:1:10
+</context>
+
+```
+src/lib.rs:20:30
+```
+		"#;
+
+		let contexts = parse_file_contexts(summary);
+		// Should only parse context tags, not code blocks
+		assert_eq!(contexts.len(), 1);
+		assert!(contexts.contains(&("src/main.rs".to_string(), 1, 10)));
+	}
 }
