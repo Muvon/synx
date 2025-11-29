@@ -98,17 +98,12 @@ async fn handle_connection(
 	sessions: Arc<Mutex<HashMap<String, ChatSession>>>,
 ) -> Result<()> {
 	// Accept WebSocket connection with compression enabled
-	let ws_stream = tokio_tungstenite::accept_async_with_config(
-		stream,
-		Some(tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
-			// Enable per-message deflate compression
-			max_message_size: Some(10 * 1024 * 1024), // 10MB max message size
-			max_frame_size: Some(10 * 1024 * 1024),   // 10MB max frame size
-			accept_unmasked_frames: false,
-			..Default::default()
-		}),
-	)
-	.await?;
+	let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+		.max_message_size(Some(10 * 1024 * 1024)) // 10MB max message size
+		.max_frame_size(Some(10 * 1024 * 1024)) // 10MB max frame size
+		.accept_unmasked_frames(false);
+
+	let ws_stream = tokio_tungstenite::accept_async_with_config(stream, Some(ws_config)).await?;
 	log_info!("WebSocket handshake completed for {}", peer_addr);
 
 	let (mut ws_sender, mut ws_receiver) = ws_stream.split();
@@ -678,6 +673,6 @@ async fn send_message(
 		msg.message_type,
 		json.len()
 	);
-	ws_sender.send(Message::Text(json)).await?;
+	ws_sender.send(Message::text(json)).await?;
 	Ok(())
 }
