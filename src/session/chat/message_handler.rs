@@ -28,57 +28,12 @@ impl MessageHandler {
 			return Some(tool_calls.clone());
 		}
 
-		// Use the type-safe tool call extraction
+		// Use octolib's conversion method for provider-specific formats
 		match octolib::ProviderToolCalls::extract_from_exchange(exchange) {
 			Ok(Some(provider_calls)) => {
-				// Convert to unified GenericToolCall format
-				match provider_calls {
-					octolib::ProviderToolCalls::Anthropic { content } => {
-						let generic_calls: Vec<octolib::GenericToolCall> = content
-							.into_iter()
-							.map(|tool_use| octolib::GenericToolCall {
-								id: tool_use.id,
-								name: tool_use.name,
-								arguments: tool_use.input,
-								meta: None, // Anthropic doesn't use meta
-							})
-							.collect();
-
-						Some(serde_json::to_value(&generic_calls).unwrap_or_default())
-					}
-					octolib::ProviderToolCalls::OpenAI { tool_calls }
-					| octolib::ProviderToolCalls::OpenRouter { tool_calls }
-					| octolib::ProviderToolCalls::DeepSeek { tool_calls } => {
-						let generic_calls: Vec<octolib::GenericToolCall> = tool_calls
-							.into_iter()
-							.map(|tc| {
-								let arguments = if tc.function.arguments.trim().is_empty() {
-									serde_json::json!({})
-								} else {
-									match serde_json::from_str::<serde_json::Value>(
-										&tc.function.arguments,
-									) {
-										Ok(json_args) => json_args,
-										Err(_) => {
-											serde_json::json!({"raw_arguments": tc.function.arguments})
-										}
-									}
-								};
-								octolib::GenericToolCall {
-									id: tc.id.clone(),
-									name: tc.function.name.clone(),
-									arguments,
-									meta: None, // Meta is handled at message level in octolib
-								}
-							})
-							.collect();
-						Some(serde_json::to_value(&generic_calls).unwrap_or_default())
-					}
-
-					octolib::ProviderToolCalls::Generic { calls } => {
-						Some(serde_json::to_value(&calls).unwrap_or_default())
-					}
-				}
+				// Convert to unified GenericToolCall format using octolib
+				let generic_calls = provider_calls.to_generic_tool_calls();
+				Some(serde_json::to_value(&generic_calls).unwrap_or_default())
 			}
 			Ok(None) => None,
 			Err(_) => None, // No fallback - unified format is mandatory
