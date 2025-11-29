@@ -882,12 +882,109 @@ pub fn get_list_files_function() -> McpFunction {
 3. **Configure**: Set input_mode, output_mode, MCP access
 
 ### Add New Session Command
-1. **Constant**: Add to `src/session/chat/commands.rs` and update COMMANDS array count
-2. **Handler**: Create `src/session/chat/session/commands/[name].rs` with handle_[name]() function
-3. **Module**: Add `mod [name];` to `src/session/chat/session/commands/mod.rs`
-4. **Routing**: Add command to process_command match statement
-5. **Help**: Update handle_unknown_command() help text
-6. **Persistence** (optional): Add to SessionRuntimeState and apply_command_to_runtime_state()
+
+**CRITICAL**: Follow the CommandOutput architecture pattern for proper CLI/WebSocket support.
+
+**Architecture Overview**:
+- Commands return `CommandResult::HandledWithOutput(CommandOutput)` with structured data
+- `CommandOutput` enum has variants for each command type
+- Display logic is in `display_cli()` method, NOT in command handlers
+- WebSocket mode uses `to_json()` for structured output
+
+**Implementation Steps**:
+
+1. **Add CommandOutput Variant** in `src/session/chat/session/commands/mod.rs`:
+   ```rust
+   #[derive(Debug, Serialize)]
+   #[serde(tag = "command_type")]
+   pub enum CommandOutput {
+       // ... existing variants
+       MyCommand {
+           data: String,
+           success: bool,
+           // Include all data needed for display
+       },
+   }
+   ```
+
+2. **Create Handler** in `src/session/chat/session/commands/mycommand.rs`:
+   ```rust
+   pub fn handle_mycommand(
+       session: &ChatSession,
+       config: &Config,
+       params: &[&str],
+   ) -> Result<CommandResult> {
+       // Execute business logic
+       let data = process_command_logic(params)?;
+
+       // Return data, NO printing here!
+       Ok(CommandResult::HandledWithOutput(CommandOutput::MyCommand {
+           data,
+           success: true,
+       }))
+   }
+   ```
+
+3. **Add Display Function** in `src/session/chat/session/commands/display.rs`:
+   ```rust
+   pub fn display_mycommand(output: &CommandOutput, config: &Config) {
+       if let CommandOutput::MyCommand { data, success } = output {
+           if *success {
+               println!("{}", data.bright_green());
+           } else {
+               println!("{}", data.bright_red());
+           }
+       }
+   }
+   ```
+
+4. **Add Display Routing** in `src/session/chat/session/commands/mod.rs`:
+   ```rust
+   pub fn display_cli(&self, session: &ChatSession, config: &Config) {
+       match self {
+           // ... existing cases
+           Self::MyCommand { .. } => display::display_mycommand(self, config),
+       }
+   }
+   ```
+
+5. **Add Command Constant** in `src/session/chat/commands.rs`:
+   ```rust
+   pub const MYCOMMAND_COMMAND: &str = "/mycommand";
+   pub const COMMANDS: [&str; N] = [..., MYCOMMAND_COMMAND]; // Update count
+   ```
+
+6. **Add Module** in `src/session/chat/session/commands/mod.rs`:
+   ```rust
+   mod mycommand;
+   ```
+
+7. **Add Routing** in command processing match statement
+
+8. **Update Help** in `display_help()` function
+
+**CRITICAL RULES**:
+- ❌ **NEVER** print directly in command handlers (no `println!`, no markdown rendering)
+- ✅ **ALWAYS** return `CommandOutput` with all data needed for display
+- ✅ **ALWAYS** put display logic in `display_*()` functions in `display.rs`
+- ✅ **ALWAYS** handle both CLI and WebSocket modes via `display_cli()` and `to_json()`
+
+**Example of WRONG Pattern**:
+```rust
+// ❌ BAD - Printing in handler
+pub fn handle_mycommand() -> Result<CommandResult> {
+    println!("Result: {}", data);  // WRONG!
+    Ok(CommandResult::Handled)
+}
+```
+
+**Example of CORRECT Pattern**:
+```rust
+// ✅ GOOD - Return data, display in display.rs
+pub fn handle_mycommand() -> Result<CommandResult> {
+    Ok(CommandResult::HandledWithOutput(CommandOutput::MyCommand { data }))
+}
+```
 
 ### Add New Custom Command
 1. **Config**: Add to template `[[commands]]` section (same as layer config)

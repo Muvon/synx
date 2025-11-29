@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 
 pub fn handle_list(
 	session: &ChatSession,
-	config: &Config,
+	_config: &Config,
 	params: &[&str],
 ) -> Result<CommandResult> {
 	// Parse optional page parameter
@@ -185,23 +185,8 @@ pub fn handle_list(
 			markdown_content.push_str("## Session Management\n\n");
 			markdown_content.push_str("- Switch to session: `/session <session_name>`\n");
 
-			// Render using markdown renderer if enabled
-			if config.enable_markdown_rendering {
-				let theme = config.markdown_theme.parse().unwrap_or_default();
-				let renderer = crate::session::chat::markdown::MarkdownRenderer::with_theme(theme);
-				match renderer.render_and_print(&markdown_content) {
-					Ok(_) => {
-						// Successfully rendered as markdown
-					}
-					Err(_) => {
-						// Fallback to plain text if markdown rendering fails
-						display_plain(&markdown_content);
-					}
-				}
-			} else {
-				// Use plain text rendering
-				display_plain(&markdown_content);
-			}
+			// Don't render here - let display_cli handle it to avoid double printing
+			// The markdown_content is passed to CommandOutput::List for display_cli to render
 
 			Ok(CommandResult::HandledWithOutput(CommandOutput::List {
 				sessions: sessions_json,
@@ -216,15 +201,4 @@ pub fn handle_list(
 			context: None,
 		})),
 	}
-}
-
-/// Display markdown as plain text (fallback)
-fn display_plain(markdown_content: &str) {
-	// Convert markdown to plain text for fallback
-	let plain_text = markdown_content
-		.replace("# ", "")
-		.replace("## ", "")
-		.replace("**", "")
-		.replace("*", "");
-	println!("{}", plain_text);
 }

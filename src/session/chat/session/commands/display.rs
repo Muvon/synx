@@ -785,9 +785,8 @@ allowed_tools = []"#
 							}
 						}
 					} else if let Some(true) = data.get("success").and_then(|v| v.as_bool()) {
-						println!();
-						println!("{}", "Command result:".bright_green());
-						// Result is already printed by the command executor
+						// Result is already printed by the command executor (print_assistant_response in handle_run)
+						// No additional output needed here
 					}
 				}
 				_ => {}
@@ -868,4 +867,41 @@ pub fn display_session(output: &CommandOutput) {
 			println!("{}", "You are already in this session.".blue());
 		}
 	}
+}
+
+pub fn display_list(output: &CommandOutput, config: &Config) {
+	if let CommandOutput::List {
+		plain_text: Some(markdown_content),
+		..
+	} = output
+	{
+		// Render using markdown renderer if enabled
+		if config.enable_markdown_rendering {
+			let theme = config.markdown_theme.parse().unwrap_or_default();
+			let renderer = crate::session::chat::markdown::MarkdownRenderer::with_theme(theme);
+			match renderer.render_and_print(markdown_content) {
+				Ok(_) => {
+					// Successfully rendered as markdown
+				}
+				Err(_) => {
+					// Fallback to plain text if markdown rendering fails
+					display_plain_list(markdown_content);
+				}
+			}
+		} else {
+			// Use plain text rendering
+			display_plain_list(markdown_content);
+		}
+	}
+}
+
+/// Display markdown as plain text (fallback for list command)
+fn display_plain_list(markdown_content: &str) {
+	// Convert markdown to plain text for fallback
+	let plain_text = markdown_content
+		.replace("# ", "")
+		.replace("## ", "")
+		.replace("**", "")
+		.replace("*", "");
+	println!("{}", plain_text);
 }

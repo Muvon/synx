@@ -223,11 +223,8 @@ impl CommandOutput {
 			Self::Image { .. } => display::display_image(self),
 			Self::Prompt { .. } => display::display_prompt(self),
 			Self::Done { .. } => display::display_done(self),
-			Self::List { plain_text, .. } => {
-				if let Some(text) = plain_text {
-					println!("{}", text);
-				}
-			}
+			Self::List { .. } => display::display_list(self, config),
+
 			Self::Run { .. } => display::display_run(self),
 			Self::Mcp { .. } => display::display_mcp(self),
 			Self::Report { .. } => display::display_report(self, config),
