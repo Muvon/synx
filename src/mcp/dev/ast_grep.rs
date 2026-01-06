@@ -303,21 +303,28 @@ pub async fn execute_ast_grep_command(call: &McpToolCall) -> Result<McpToolResul
 	// Add paths if specified, otherwise default to current directory
 	let actual_file_paths = match expanded_paths_result {
 		Ok(expanded_paths) => {
-			if expanded_paths.is_empty() && paths.is_some() {
-				// If no files found after expansion, fall back to current directory
-				crate::log_debug!("No files found after glob expansion, using current directory");
-				cmd.arg(".");
-				vec![".".to_string()]
-			} else if expanded_paths.is_empty() {
-				// No paths specified at all, use current directory
-				cmd.arg(".");
-				vec![".".to_string()]
-			} else {
-				// Add all expanded paths
-				for path in &expanded_paths {
-					cmd.arg(path);
+			match (expanded_paths.is_empty(), &paths) {
+				(true, Some(provided_paths)) => {
+					// If paths were explicitly provided but no files found, return error
+					let paths_str = provided_paths.join(", ");
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						format!("No files found matching the specified paths: [{}]. Please verify the file paths exist and are not in ignored directories.", paths_str),
+					));
 				}
-				expanded_paths
+				(true, None) => {
+					// No paths specified at all, use current directory
+					cmd.arg(".");
+					vec![".".to_string()]
+				}
+				(false, _) => {
+					// Add all expanded paths
+					for path in &expanded_paths {
+						cmd.arg(path);
+					}
+					expanded_paths
+				}
 			}
 		}
 		Err(e) => {
