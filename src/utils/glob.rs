@@ -51,24 +51,35 @@ pub fn expand_glob_patterns_filtered(
 		// Try to find a base directory from patterns with absolute paths
 		let mut extracted_base = None;
 		for pattern in patterns {
-			if pattern.starts_with('/') {
+			// Check if this is an absolute path (Unix: starts with '/', Windows: starts with drive letter or UNC)
+			let is_absolute = pattern.starts_with('/')
+				|| (cfg!(windows)
+					&& (
+						// Windows drive letter: C:\, D:\, etc.
+						(pattern.len() >= 3 && pattern.chars().nth(1) == Some(':') && (pattern.chars().nth(2) == Some('\\') || pattern.chars().nth(2) == Some('/')))
+					// Windows UNC path: \\server\share
+					|| pattern.starts_with("\\\\")
+					));
+
+			if is_absolute {
 				// Extract the base directory from absolute path pattern
-				// For patterns like "/path/to/dir/**/*.rs", extract "/path/to/dir"
+				// For patterns like "/path/to/dir/**/*.rs" or "C:\path\to\dir\**\*.rs", extract the base directory
 				if let Some(glob_start) = pattern.find("**") {
 					// Get everything before the **
 					let base = &pattern[..glob_start];
-					// Remove trailing slash if present
-					let base = base.trim_end_matches('/');
+					// Remove trailing slash/backslash if present
+					let base = base.trim_end_matches('/').trim_end_matches('\\');
 					if !base.is_empty() {
 						extracted_base = Some(base.to_string());
 						break;
 					}
 				} else if let Some(glob_start) = pattern.find('*') {
-					// For patterns like "/path/to/*.rs", extract "/path/to"
+					// For patterns like "/path/to/*.rs" or "C:\path\to\*.rs", extract the directory
 					let base = &pattern[..glob_start];
-					// Get the directory part
-					if let Some(last_slash) = base.rfind('/') {
-						let base = &base[..last_slash];
+					// Get the directory part (handle both / and \ separators)
+					let last_separator = base.rfind('/').or_else(|| base.rfind('\\'));
+					if let Some(last_sep) = last_separator {
+						let base = &base[..last_sep];
 						if !base.is_empty() {
 							extracted_base = Some(base.to_string());
 							break;
