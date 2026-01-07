@@ -393,12 +393,6 @@ octomind session --model="anthropic:claude-sonnet-4" -n analysis
 
 ### Session Commands
 
-During a session, use these commands:
-
-#### Session Commands
-
-During a session, use these commands:
-
 ## Session Commands
 
 Octomind provides comprehensive session management through built-in commands:
@@ -427,6 +421,8 @@ Octomind provides comprehensive session management through built-in commands:
 - `/layers` - Toggle layered processing on/off
 - `/run <command>` - Execute configured custom commands
 - `/mcp [info|list|full|health|dump|validate]` - MCP server management
+- `/prompt <text>` - Add a system prompt to current session
+- `/plan` - Show current plan status (uses plan tool)
 
 ### System and Session Management
 - `/loglevel [debug|info|none]` - Set log level

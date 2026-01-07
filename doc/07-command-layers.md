@@ -46,8 +46,9 @@ name = "layer_name"
 description = "Layer description for agents and documentation"
 model = "provider:model"
 max_tokens = 2048
-input_mode = "direct"  # direct, last, all, summary
-output_mode = "direct" # direct, append, replace
+temperature = 0.7
+input_mode = "last"   # last, all, summary
+output_mode = "none"  # none, append, replace, last, restart
 system_prompt = "Layer-specific system prompt"
 
 [layers.layer_name.mcp]
@@ -70,11 +71,23 @@ Commands are configured similarly to layers but with additional command-specific
 
 ### Available Input Modes
 
+Layers and commands support different input modes that control how data is passed between processing stages:
+
 - **`last`** (case-insensitive): Gets the last assistant response from session context - perfect for analyzing previous AI responses
 - **`all`**: Uses the entire conversation history with proper formatting
 - **`summary`**: Uses a summarized version of the conversation to save tokens
 
-**Note**: Input modes are now case-insensitive, so `"Last"`, `"last"`, `"LAST"` all work the same way.
+**Note**: Input modes are case-insensitive, so `"Last"`, `"last"`, `"LAST"` all work the same way.
+
+### Available Output Modes
+
+Output modes control how the layer's output affects the session:
+
+- **`none`**: Don't modify session (intermediate layer like task_refiner) - layer output is returned directly
+- **`append`**: Add output as new message to session
+- **`replace`**: Replace entire session with output (reducer functionality)
+- **`last`**: Append only the last response to session (ignore multiple outputs)
+- **`restart`**: Replace session with only the last response (fresh start with last message)
 
 ### Smart Context Processing
 

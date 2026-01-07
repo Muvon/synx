@@ -6,25 +6,37 @@ This guide explains how to add new built-in MCP servers to Octomind. Use this wh
 
 ## Built-in MCP Servers
 
-Octomind provides four built-in MCP servers with comprehensive development capabilities:
+Octomind provides **five** built-in MCP servers with comprehensive development capabilities:
 
 **Developer Server** (`src/mcp/dev/`):
-- `shell(command="...")` - Execute shell commands with output capture
-- `ast_grep(pattern="...", language="...")` - Search and refactor code using AST patterns
+- `shell(command="...", background=false)` - Execute shell commands with output capture, foreground/background execution
+- `ast_grep(pattern="...", language="...", rewrite="...", ...)` - Search and refactor code using AST patterns
+- `plan(command="start|step|next|list|done|reset", ...)` - Structured task management with progress tracking
 
 **Filesystem Server** (`src/mcp/fs/`):
-- `text_editor(command="view|create|str_replace|line_replace", path="...")` - File operations
-- `list_files(directory="...", pattern="...")` - Directory listing with filtering
+- `text_editor(command="view|create|str_replace|insert|line_replace|undo_edit|view_many", path="...", ...)` - Comprehensive file operations
+- `list_files(directory="...", pattern="...", content="...", ...)` - Directory listing with filtering and content search
 - `batch_edit(path="...", operations=[...])` - Multiple file operations atomically
-- `extract_lines(from_path="...", from_range=[start, end], append_path="...")` - Extract and move code blocks
+- `extract_lines(from_path="...", from_range=[start, end], append_path="...", append_line=N)` - Extract and move code blocks
+- `semantic_search(query="...", ...)` - Semantic code search by describing functionality
+- `view_signatures(files=[...])` - Extract function signatures and class definitions
+- `graphrag(operation="...", ...)` - Relationship-aware code analysis
+
+**Memory Server** (`src/mcp/memory/`):
+- `memorize(title="...", content="...", ...)` - Store important information for future reference
+- `remember(query="...", limit=5, ...)` - Search and retrieve stored memories
+- `forget(confirm=true, query="...", ...)` - Permanently remove specific memories
 
 **Web Server** (`src/mcp/web/`):
-- `web_search(query="...")` - Search the web using Brave Search API
-- `read_html(sources=["..."])` - Convert HTML content to Markdown
+- `web_search(query="...", count=20, ...)` - Search the web using Brave Search API
+- `image_search(query="...", count=50, ...)` - Search for images with metadata
+- `video_search(query="...", count=20, ...)` - Search for videos with duration info
+- `news_search(query="...", count=20, ...)` - Search for news articles
+- `read_html(sources=[...])` - Convert HTML content to Markdown format
 
 **Agent Server** (`src/mcp/agent/`):
-- `agent_*()` tools - Route tasks to specialized AI processing layers
-- Dynamic tool generation based on configuration
+- `agent_*()` tools - Route tasks to configured AI layers for specialized processing
+- `call_llm(prompt="...", model="...", system="...", temperature=0.7)` - Direct LLM call with runtime parameters
 
 Each server provides a specific category of tools and can be enabled/disabled independently in role configurations.
 
@@ -36,13 +48,15 @@ Add a new built-in MCP server when you have:
 - Functionality that doesn't fit well in existing servers
 
 ## Step-by-Step Implementation
-1. Add your server type to the `McpServerType` enum in `src/config/mcp.rs`
-2. Update server config helpers in the same file
-3. Register tool routing and error handling in `src/mcp/mod.rs` (never return Err, always MCP error)
-4. Add config-driven registration and allowed_tools patterns
-5. Validate parameters using MCP-compliant patterns
-6. Never add fallback or default tool logic for missing config
-7. See [src/mcp/*/functions.rs] for examples
+
+1. Create server module structure (`src/mcp/<server_name>/`)
+2. Add your server type to the `McpServerType` enum in `src/config/mcp.rs`
+3. Update server config helpers in the same file
+4. Register tool routing and error handling in `src/mcp/mod.rs` (never return Err, always MCP error)
+5. Add config-driven registration and allowed_tools patterns
+6. Validate parameters using MCP-compliant patterns
+7. Never add fallback or default tool logic for missing config
+8. See [src/mcp/*/functions.rs] for examples
 
 ### 2. Update Server Config Helper Methods
 

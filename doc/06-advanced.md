@@ -25,22 +25,34 @@ MCP enables AI models to use external tools and services through a standardized 
 Octomind provides four built-in MCP servers with comprehensive development capabilities:
 
 **Developer Server** (`src/mcp/dev/`):
-- `shell(command="...")` - Execute shell commands with output capture
-- `ast_grep(pattern="...", language="...")` - Search and refactor code using AST patterns
+- `shell(command="...", background=false)` - Execute shell commands with output capture, foreground/background execution
+- `ast_grep(pattern="...", language="...", rewrite="...", ...)` - Search and refactor code using AST patterns
+- `plan(command="start|step|next|list|done|reset", ...)` - Structured task management with progress tracking
 
 **Filesystem Server** (`src/mcp/fs/`):
-- `text_editor(command="view|create|str_replace|line_replace", path="...")` - File operations
-- `list_files(directory="...", pattern="...")` - Directory listing with filtering
+- `text_editor(command="view|create|str_replace|insert|line_replace|undo_edit|view_many", path="...", ...)` - Comprehensive file operations
+- `list_files(directory="...", pattern="...", content="...", ...)` - Directory listing with filtering and content search
 - `batch_edit(path="...", operations=[...])` - Multiple file operations atomically
-- `extract_lines(from_path="...", from_range=[start, end], append_path="...")` - Extract and move code blocks
+- `extract_lines(from_path="...", from_range=[start, end], append_path="...", append_line=N)` - Extract and move code blocks
+- `semantic_search(query="...", ...)` - Semantic code search using descriptive queries
+- `view_signatures(files=[...])` - Extract function signatures and class definitions
+- `graphrag(operation="...", ...)` - Advanced relationship-aware code analysis
+
+**Memory Server** (`src/mcp/memory/`):
+- `memorize(title="...", content="...", ...)` - Store important information for future reference
+- `remember(query="...", limit=5, ...)` - Search and retrieve stored memories
+- `forget(confirm=true, query="...", ...)` - Permanently remove specific memories
 
 **Web Server** (`src/mcp/web/`):
-- `web_search(query="...")` - Search the web using Brave Search API
-- `read_html(sources=["..."])` - Convert HTML content to Markdown
+- `web_search(query="...", count=20, ...)` - Search the web using Brave Search API
+- `image_search(query="...", count=50, ...)` - Search for images with metadata
+- `video_search(query="...", count=20, ...)` - Search for videos with duration info
+- `news_search(query="...", count=20, ...)` - Search for news articles
+- `read_html(sources=[...])` - Convert HTML content to Markdown format
 
 **Agent Server** (`src/mcp/agent/`):
-- `agent_*()` tools - Route tasks to specialized AI processing layers
-- Dynamic tool generation based on configuration
+- `agent_*()` tools - Route tasks to configured AI layers for specialized processing
+- `call_llm(prompt="...", model="...", system="...", temperature=0.7)` - Direct LLM call with runtime parameters
 
 **Tool Invocation:**
 
@@ -57,21 +69,21 @@ The `plan` tool enables interactive, step-by-step task management inside Octomin
 
 **Commands & Parameters:**
 - `command` (string, required): One of the following commands:
-  - **start**: Begin a new plan
+  - **`start`**: Begin a new plan
     - `title` (string, required): Plan title
-    - `tasks` (array of strings, required): List of subtasks/steps
-  - **step**: Add progress or notes to current step
+    - `tasks` (array of objects, required): List of subtasks with `title` and `description` fields
+  - **`step`**: Add progress or notes to current step
     - `content` (string, required): Progress detail
-  - **next**: Mark current step as complete and advance
+  - **`next`**: Mark current step as complete and advance
     - `content` (string, required): Completion summary
-  - **list**: Show all steps with completion status
-  - **done**: Mark plan as complete and trigger session cleanup
+  - **`list`**: Show all steps with completion status
+  - **`done`**: Mark plan as complete and trigger session cleanup
     - `content` (string, optional): Final summary
-  - **reset**: Abort and clear current plan
+  - **`reset`**: Abort and clear current plan
 
 **Usage Example:**
 ```json
-{"command": "start", "title": "Implement Feature X", "tasks": ["Design API", "Write tests", "Implement logic"]}
+{"command": "start", "title": "Implement Feature X", "tasks": [{"title": "Design API", "description": "Create API endpoints"}, {"title": "Write tests", "description": "Unit and integration tests"}, {"title": "Implement logic", "description": "Core functionality"}]}
 {"command": "step", "content": "Started API design..."}
 {"command": "next", "content": "API designed, moving to tests"}
 {"command": "list"}
@@ -100,6 +112,11 @@ See `src/mcp/dev/plan/` for code, and test integration in `src/session/chat/sess
 **Adding a Tool/Server:**
 - Add your tool/server in config and code (see [08-mcp-server-development.md](./08-mcp-server-development.md))
 - Always use config for registration, server_refs, allowed_tools
+
+#### shell — Shell Command Execution
+
+Execute shell commands with output capture, foreground/background execution:
+
 ```json
 // Foreground execution (default)
 {"command": "ls -la"}
@@ -115,6 +132,11 @@ See `src/mcp/dev/plan/` for code, and test integration in `src/session/chat/sess
 **Parameters:**
 - `command` (string, required): The shell command to execute
 - `background` (boolean, default: false): Run command in background and return PID instead of waiting for completion
+
+**Key Features:**
+- Working directory: All commands execute from the current working directory
+- Background mode: Returns process PID for later termination with `kill <pid>`
+- Output control: Large outputs are controlled by `mcp_response_tokens_threshold` setting
 
 **ast_grep** - Search and refactor code using AST patterns with ast-grep (sg)
 - **Structural search**: Use AST patterns instead of regex for precise code matching
@@ -141,6 +163,76 @@ See `src/mcp/dev/plan/` for code, and test integration in `src/session/chat/sess
 - `json_output` (boolean, default: false): Get output in JSON format
 - `context` (integer, default: 0): Number of lines of context to show around matches
 - `update_all` (boolean, default: false): Apply rewrites to all matches without confirmation
+- `update_all` (boolean, default: false): Apply rewrites to all matches without confirmation
+
+#### semantic_search — Semantic Code Search
+
+Search codebase using semantic search to find relevant code snippets by describing what the code does, not exact symbol names:
+
+```json
+// Find authentication patterns
+{"query": ["user authentication flow", "login validation", "jwt token handling"]}
+
+// Find database patterns
+{"query": ["database connection pooling", "query result caching"], "max_results": 5}
+```
+
+**Parameters:**
+- `query` (string or array, required): Descriptive search terms about functionality (not symbol names)
+- `max_results` (integer, default: 3): Maximum number of results to return
+- `mode` (string, default: "all"): Scope of search - "code", "text", "docs", or "all"
+- `language` (string, optional): Filter by programming language
+- `detail_level` (string, default: "partial"): "signatures", "partial", or "full"
+- `threshold` (number, 0.0-1.0): Similarity threshold for results
+
+**Best Practices:**
+- Use descriptive phrases about functionality: "user authentication" not "login_user"
+- Multiple related terms improve results: ["database patterns", "query optimization"]
+- Use "signatures" mode for quick overview, "full" for complete implementations
+
+#### view_signatures — Extract Code Structure
+
+Extract and view function signatures, class definitions, and other meaningful code structures:
+
+```json
+{"files": ["src/main.rs", "src/lib.rs"]}
+{"files": ["**/*.py"], "max_tokens": 2000}
+```
+
+**Parameters:**
+- `files` (array, required): File paths or glob patterns to analyze
+- `max_tokens` (integer, default: 2000): Maximum tokens in output before truncation
+
+**Supported Languages:**
+Rust, JavaScript, TypeScript, Python, Go, C++, PHP, Ruby, Bash, JSON, CSS, Svelte, Markdown
+
+#### graphrag — Relationship-Aware Code Analysis
+
+Advanced GraphRAG operations for understanding code relationships and architecture:
+
+```json
+{"operation": "search", "query": "How does user authentication flow through the system?"}
+{"operation": "get-node", "node_id": "src/main.rs"}
+{"operation": "get-relationships", "node_id": "src/auth/mod.rs"}
+{"operation": "find-path", "source_id": "src/main.rs", "target_id": "src/db/mod.rs"}
+{"operation": "overview", "max_depth": 3}
+```
+
+**Parameters:**
+- `operation` (string, required): "search", "get-node", "get-relationships", "find-path", or "overview"
+- `query` (string, required for search): Semantic query about code functionality
+- `node_id` (string, required for get-node/get-relationships): File path or file/symbol path
+- `source_id` (string, required for find-path): Starting node identifier
+- `target_id` (string, required for find-path): Target node identifier
+- `max_depth` (integer, default: 3): Maximum path depth for find-path/overview
+- `max_tokens` (integer, default: 2000): Maximum tokens allowed in output
+
+**Use Cases:**
+- `search`: Find files by describing what they do
+- `get-node`: Get detailed information about a specific file or symbol
+- `get-relationships`: See what components depend on or are related to a file
+- `find-path`: Trace connection paths between two components
+- `overview`: Get graph statistics and structure
 
 **Pattern Syntax Examples:**
 
@@ -160,15 +252,23 @@ See `src/mcp/dev/plan/` for code, and test integration in `src/session/chat/sess
 - Functions: `fn $NAME($ARGS) { $$$ }`
 - Structs: `struct $NAME { $$$ }`
 
-**agent** - Route tasks to configured AI layers for specialized processing
-- **Task delegation**: Route complex tasks to specialized AI agents
-- **Layer integration**: Uses the same configuration system as commands and layers
-- **Tool access**: Agents can use MCP tools based on their configuration
+#### Memory Tools (type: "builtin")
+- **memorize**: Store important information, insights, or context for future reference
+- **remember**: Search and retrieve stored memories using semantic search
+- **forget**: Permanently remove specific memories
 
 #### Filesystem Tools (type: "builtin")
 - **text_editor**: Read, write, edit files with multiple operations (view, create, str_replace, insert, line_replace, undo_edit, view_many, batch_edit)
 - **extract_lines**: Extract lines from source file and append to target file without modifying source (perfect for refactoring)
 - **list_files**: Browse directory structures with pattern matching and content search
+- **semantic_search**: Search codebase using semantic search to find relevant code snippets by describing functionality
+- **view_signatures**: Extract and view function signatures, class definitions, and other meaningful code structures
+- **graphrag**: Advanced relationship-aware GraphRAG operations for code analysis (search, get-node, get-relationships, find-path, overview)
+
+#### Memory Tools (type: "builtin")
+- **memorize**: Store important information, insights, or context for future reference with title, content, importance, and tags
+- **remember**: Search and retrieve stored memories using semantic search with limit and memory_type filters
+- **forget**: Permanently remove specific memories by ID or query matching
 
 #### Web Tools (type: "builtin")
 - **web_search**: Search the web using Brave Search API with configurable parameters
@@ -392,6 +492,27 @@ Each agent tool has the same parameter structure:
 - **Tool Access**: Agents can use MCP tools based on their MCP configuration
 - **Required Description**: Description field is required and used as MCP function description
 - **Flexible**: Easy to add new specialized agents with complete layer configuration
+
+#### call_llm - Direct LLM Call Tool
+
+The `call_llm` tool enables direct LLM calls with runtime parameters, bypassing agent configuration:
+
+**Parameters:**
+- `prompt` (string, required): The input/prompt to process
+- `model` (string, required): Model in 'provider:model' format (e.g., 'openai:gpt-4o', 'openrouter:anthropic/claude-3.5-sonnet')
+- `system` (string, required): System prompt for the LLM
+- `temperature` (number, optional): Temperature for randomness (0.0-2.0, default: 0.7)
+
+**Usage Examples:**
+```json
+// Basic call
+{"prompt": "Explain quantum computing", "model": "openai:gpt-4o", "system": "You are a helpful assistant"}
+
+// With temperature for creative output
+{"prompt": "Write a poem", "model": "openrouter:anthropic/claude-3.5-sonnet", "system": "You are a creative writer", "temperature": 1.2}
+```
+
+**Note:** Response size is controlled by global `mcp_response_tokens_threshold` setting.
 
 ### Text Editor Tool Reference
 

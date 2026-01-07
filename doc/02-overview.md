@@ -59,22 +59,34 @@ graph TB
 **Built-in MCP Servers** provide comprehensive development capabilities:
 
 **Developer Server** (`src/mcp/dev/`):
-- `shell(command="...")` - Execute shell commands with output capture
-- `ast_grep(pattern="...", language="...")` - Search and refactor code using AST patterns
+- `shell(command="...", background=false)` - Execute shell commands with output capture, foreground/background execution
+- `ast_grep(pattern="...", language="...", rewrite="...", ...)` - Search and refactor code using AST patterns
+- `plan(command="start|step|next|list|done|reset", ...)` - Structured task management with progress tracking
 
 **Filesystem Server** (`src/mcp/fs/`):
-- `text_editor(command="view|create|str_replace", path="...")` - File operations
-- `list_files(directory="...", pattern="...")` - Directory listing with filtering
+- `text_editor(command="view|create|str_replace|insert|line_replace|undo_edit|view_many", path="...", ...)` - File operations
+- `list_files(directory="...", pattern="...", content="...", ...)` - Directory listing with filtering and content search
 - `batch_edit(path="...", operations=[...])` - Multiple file operations atomically
-- `extract_lines(from_path="...", from_range=[start, end], append_path="...")` - Extract and move code blocks
+- `extract_lines(from_path="...", from_range=[start, end], append_path="...", append_line=N)` - Extract and move code blocks
+- `semantic_search(query="...", ...)` - Semantic code search using descriptive queries about functionality
+- `view_signatures(files=[...])` - Extract function signatures and class definitions from files
+- `graphrag(operation="search|get-node|get-relationships|find-path|overview", ...)` - Advanced relationship-aware code analysis
+
+**Memory Server** (`src/mcp/memory/`):
+- `memorize(title="...", content="...", ...)` - Store important information for future reference
+- `remember(query="...", limit=5, ...)` - Search and retrieve stored memories using semantic search
+- `forget(confirm=true, query="...", ...)` - Permanently remove specific memories
 
 **Web Server** (`src/mcp/web/`):
-- `web_search(query="...")` - Search the web using Brave Search API
-- `read_html(sources=["..."])` - Convert HTML content to Markdown
+- `web_search(query="...", count=20, ...)` - Search the web using Brave Search API
+- `image_search(query="...", count=50, ...)` - Search for images with metadata and thumbnails
+- `video_search(query="...", count=20, ...)` - Search for videos with duration and creator info
+- `news_search(query="...", count=20, ...)` - Search for news articles with publication dates
+- `read_html(sources=[...])` - Convert HTML content to Markdown format
 
 **Agent Server** (`src/mcp/agent/`):
-- `agent_*()` tools - Route tasks to specialized AI processing layers
-- Dynamic tool generation based on configuration
+- `agent_*()` tools - Route tasks to configured AI layers for specialized processing
+- `call_llm(prompt="...", model="...", system="...", temperature=0.7)` - Direct LLM call with runtime parameters
 
 ### 3. Multi-Provider AI Support
 

@@ -19,11 +19,12 @@ use colored::Colorize;
 
 /// Display thinking block in CLI with proper formatting (matching tool display style)
 pub fn display_thinking(thinking: &ThinkingBlock) {
-	let title = "thinking".bright_cyan();
-	let separator_length = 70.max(title.len() + 4);
+	let title = " thinking ".bright_cyan();
+	let separator_length = 40.max(title.len() + 4);
 	let dashes = "─".repeat(separator_length - title.len());
 	let separator = format!("──{}{}──", title, dashes.dimmed());
 
 	println!("{}", separator);
 	println!("{}", thinking.content.dimmed());
+	println!("{}", separator);
 }
