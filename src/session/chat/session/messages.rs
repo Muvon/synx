@@ -253,8 +253,7 @@ impl ChatSession {
 			cached: false,
 			tool_call_id: Some(tool_call_id.to_string()),
 			name: Some(tool_name.to_string()),
-			tool_calls: None,
-			images: None,
+			..Default::default()
 		};
 
 		// Add message to session

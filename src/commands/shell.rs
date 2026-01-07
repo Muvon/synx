@@ -169,10 +169,7 @@ pub async fn execute(args: &ShellArgs, config: &Config) -> Result<()> {
 				.unwrap_or_default()
 				.as_secs(),
 			cached: false,
-			tool_call_id: None,
-			name: None,
-			tool_calls: None,
-			images: None,
+			..Default::default()
 		},
 		Message {
 			role: "user".to_string(),
@@ -182,10 +179,7 @@ pub async fn execute(args: &ShellArgs, config: &Config) -> Result<()> {
 				.unwrap_or_default()
 				.as_secs(),
 			cached: false,
-			tool_call_id: None,
-			name: None,
-			tool_calls: None,
-			images: None,
+			..Default::default()
 		},
 	];
 

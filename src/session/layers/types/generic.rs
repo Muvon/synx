@@ -50,10 +50,7 @@ impl GenericLayer {
 				.unwrap_or_default()
 				.as_secs(),
 			cached: should_cache,
-			tool_call_id: None,
-			name: None,
-			tool_calls: None,
-			images: None,
+			..Default::default()
 		});
 
 		// Prepare input based on input_mode using the trait's prepare_input method
@@ -68,10 +65,7 @@ impl GenericLayer {
 				.unwrap_or_default()
 				.as_secs(),
 			cached: false,
-			tool_call_id: None,
-			name: None,
-			tool_calls: None,
-			images: None,
+			..Default::default()
 		});
 
 		messages
@@ -182,12 +176,12 @@ impl GenericLayer {
 							};
 
 							let should_continue = crate::session::chat::response::tool_result_processor::check_should_continue(
-								&crate::providers::ProviderResponse {
-									content: current_content.clone(),
-									exchange: current_exchange.clone(),
-									tool_calls: current_tool_calls_param.clone(),
-									finish_reason: current_exchange.response.get("choices")
-										.and_then(|c| c.get(0))
+						&crate::providers::ProviderResponse {
+								content: current_content.clone(),
+								exchange: current_exchange.clone(),
+								tool_calls: current_tool_calls_param.clone(),
+								thinking: None,
+								finish_reason: current_exchange.response.get("choices")
 										.and_then(|choice| choice.get("finish_reason"))
 										.and_then(|fr| fr.as_str())
 										.map(|s| s.to_string()),
@@ -219,12 +213,12 @@ impl GenericLayer {
 						// Use finish_reason logic here too
 						let more_tools = crate::mcp::parse_tool_calls(&current_content);
 						let should_continue = crate::session::chat::response::tool_result_processor::check_should_continue(
-							&crate::providers::ProviderResponse {
-								content: current_content.clone(),
-								exchange: current_exchange.clone(),
-								tool_calls: None, // No direct tool calls in this case
-								finish_reason: current_exchange.response.get("choices")
-									.and_then(|c| c.get(0))
+					&crate::providers::ProviderResponse {
+							content: current_content.clone(),
+							exchange: current_exchange.clone(),
+							tool_calls: None, // No direct tool calls in this case
+							thinking: None,
+							finish_reason: current_exchange.response.get("choices")
 									.and_then(|choice| choice.get("finish_reason"))
 									.and_then(|fr| fr.as_str())
 									.map(|s| s.to_string()),
@@ -316,10 +310,8 @@ impl GenericLayer {
 				.unwrap_or_default()
 				.as_secs(),
 			cached: false,
-			tool_call_id: None,
-			name: None,
 			tool_calls: original_tool_calls,
-			images: None,
+			..Default::default()
 		};
 
 		// Add the assistant message to the session
@@ -402,8 +394,7 @@ impl GenericLayer {
 				cached: false,
 				tool_call_id: Some(tool_result.tool_id.clone()),
 				name: Some(tool_result.tool_name.clone()),
-				tool_calls: None,
-				images: None,
+				..Default::default()
 			});
 		}
 
@@ -560,6 +551,7 @@ impl Layer for GenericLayer {
 						content: output.clone(),
 						exchange: exchange.clone(),
 						tool_calls: direct_tool_calls.clone(),
+						thinking: None,
 						finish_reason: finish_reason.clone(),
 					},
 					config,

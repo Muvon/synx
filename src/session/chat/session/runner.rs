@@ -675,8 +675,9 @@ pub async fn execute_api_call_and_process_response(
 					role,
 					operation_rx_for_response.clone(),
 				)
+				.with_thinking(response.thinking)
 				.with_interactive(is_interactive),
-			) // Pass through interactive mode
+			) // Pass through interactive mode and thinking
 			.await;
 
 			if let Err(e) = process_result {

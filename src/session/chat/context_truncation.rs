@@ -337,10 +337,7 @@ pub async fn perform_smart_full_summarization(
 			.unwrap_or_default()
 			.as_secs(),
 		cached: true, // Mark for caching
-		tool_call_id: None,
-		name: None,
-		tool_calls: None,
-		images: None,
+		..Default::default()
 	};
 	new_messages.push(summary_msg);
 

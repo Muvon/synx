@@ -85,10 +85,7 @@ pub async fn get_initial_messages(
 			.unwrap_or_default()
 			.as_secs(),
 		cached: false,
-		tool_calls: None,
-		tool_call_id: None,
-		name: None,
-		images: None,
+		..Default::default()
 	};
 	initial_messages.push(welcome_msg);
 
@@ -114,10 +111,7 @@ pub async fn get_initial_messages(
 						.unwrap_or_default()
 						.as_secs(),
 					cached: false,
-					tool_calls: None,
-					tool_call_id: None,
-					name: None,
-					images: None,
+					..Default::default()
 				};
 				initial_messages.push(instructions_msg);
 

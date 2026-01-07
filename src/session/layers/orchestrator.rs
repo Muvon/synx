@@ -372,10 +372,7 @@ impl LayeredOrchestrator {
 								.unwrap_or_default()
 								.as_secs(),
 							cached: false,
-							tool_calls: None,
-							tool_call_id: None,
-							name: None,
-							images: None,
+							..Default::default()
 						};
 						final_messages.push(output_msg);
 					}

@@ -77,6 +77,9 @@ pub enum MessageType {
 
 	/// Status/info message (non-critical)
 	Status,
+
+	/// AI thinking/reasoning content (separate from assistant response)
+	Thinking,
 }
 
 impl ClientMessage {

@@ -20,7 +20,9 @@ pub mod tool_result_processor;
 use super::{CostTracker, MessageHandler, ToolProcessor};
 use crate::config::Config;
 use crate::log_debug;
+use crate::providers::ThinkingBlock;
 use crate::session::chat::assistant_output::print_assistant_response;
+use crate::session::chat::display_thinking;
 use crate::session::chat::session::ChatSession;
 use crate::session::chat::session_continuation;
 use crate::session::ProviderExchange;
@@ -32,6 +34,7 @@ pub struct ResponseProcessingParams<'a> {
 	pub content: String,
 	pub exchange: ProviderExchange,
 	pub tool_calls: Option<Vec<crate::mcp::McpToolCall>>,
+	pub thinking: Option<ThinkingBlock>,
 	pub finish_reason: Option<String>,
 	pub chat_session: &'a mut ChatSession,
 	pub config: &'a Config,
@@ -56,6 +59,7 @@ impl<'a> ResponseProcessingParams<'a> {
 			content,
 			exchange,
 			tool_calls,
+			thinking: None,
 			finish_reason,
 			chat_session,
 			config,
@@ -63,6 +67,12 @@ impl<'a> ResponseProcessingParams<'a> {
 			operation_cancelled,
 			is_interactive: true, // Default to true for backward compatibility
 		}
+	}
+
+	/// Set thinking block
+	pub fn with_thinking(mut self, thinking: Option<ThinkingBlock>) -> Self {
+		self.thinking = thinking;
+		self
 	}
 
 	/// Set whether this is an interactive session (controls console output)
@@ -89,11 +99,19 @@ fn log_response_debug(
 // Helper function to handle final response when no tool calls are present
 fn handle_final_response(
 	content: &str,
+	thinking: &Option<ThinkingBlock>,
 	chat_session: &mut ChatSession,
 	config: &Config,
 	role: &str,
 	is_interactive: bool,
 ) -> Result<()> {
+	// Display thinking first if present
+	if is_interactive {
+		if let Some(ref thinking_block) = thinking {
+			display_thinking(thinking_block);
+		}
+	}
+
 	// CRITICAL: Add the assistant message to the session for continuation logic to work
 	// This was removed in the recent commit but is needed for proper session state
 	chat_session.add_assistant_message(content, None, config, role)?;
@@ -230,10 +248,8 @@ fn add_assistant_message_with_tool_calls(
 			.unwrap_or_default()
 			.as_secs(),
 		cached: false,
-		tool_call_id: None,
-		name: None,
 		tool_calls: original_tool_calls, // Store the original tool_calls for proper reconstruction
-		images: None,
+		..Default::default()
 	};
 
 	// Add the assistant message to the session
@@ -303,6 +319,9 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 	// Initialize tool processor
 	let mut tool_processor = ToolProcessor::new();
 
+	// Track if thinking has been displayed (to avoid displaying twice)
+	let mut thinking_displayed = false;
+
 	// Process original content first, then any follow-up tool calls
 	let mut current_content = params.content.clone();
 	let mut current_exchange = params.exchange;
@@ -320,6 +339,14 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 				resolve_tool_calls(&mut current_tool_calls_param, &current_content);
 
 			if !current_tool_calls.is_empty() {
+				// Display thinking first if present and not yet displayed - ONLY in interactive mode
+				if params.is_interactive && !thinking_displayed {
+					if let Some(ref thinking_block) = params.thinking {
+						display_thinking(thinking_block);
+						thinking_displayed = true;
+					}
+				}
+
 				// Display the content to the user FIRST (before adding to session) - ONLY in interactive mode
 				if params.is_interactive {
 					print_assistant_response(&current_content, params.config, params.role);
@@ -470,8 +497,15 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 	}
 
 	// Handle final response using helper function (only when no continuation is pending)
+	// Pass thinking only if it hasn't been displayed yet (in tool call loop)
+	let thinking_for_final = if thinking_displayed {
+		None
+	} else {
+		params.thinking.clone()
+	};
 	handle_final_response(
 		&current_content,
+		&thinking_for_final,
 		params.chat_session,
 		params.config,
 		params.role,

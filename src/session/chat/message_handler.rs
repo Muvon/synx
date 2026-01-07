@@ -58,10 +58,8 @@ impl MessageHandler {
 				.unwrap_or_default()
 				.as_secs(),
 			cached: false,
-			tool_call_id: None,
-			name: None,
 			tool_calls: original_tool_calls, // Store the original tool_calls for proper reconstruction
-			images: None,
+			..Default::default()
 		};
 
 		// Add the assistant message to the session

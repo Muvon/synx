@@ -100,8 +100,7 @@ impl ToolProcessor {
 						cached: false,
 						tool_call_id: Some(tool_call.tool_id.clone()),
 						name: Some(tool_call.tool_name.clone()),
-						tool_calls: None,
-						images: None,
+						..Default::default()
 					};
 
 					chat_session.session.messages.push(tool_message);
@@ -134,8 +133,7 @@ impl ToolProcessor {
 						cached: false,
 						tool_call_id: Some(tool_call.tool_id.clone()),
 						name: Some(tool_call.tool_name.clone()),
-						tool_calls: None,
-						images: None,
+						..Default::default()
 					};
 
 					chat_session.session.messages.push(tool_message);

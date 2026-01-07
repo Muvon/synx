@@ -34,10 +34,7 @@ pub fn inject_summary_request(params: &mut ContinuationParams) -> Result<()> {
 			.unwrap_or_default()
 			.as_secs(),
 		cached: false,
-		tool_calls: None,
-		tool_call_id: None,
-		name: None,
-		images: None,
+		..Default::default()
 	};
 
 	params.chat_session.session.messages.push(summary_message);

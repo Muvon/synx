@@ -48,10 +48,7 @@ impl LayerProcessor {
 				.unwrap_or_default()
 				.as_secs(),
 			cached: should_cache, // Only cache if model supports it
-			tool_call_id: None,   // No tool_call_id for system messages
-			name: None,           // No name for system messages
-			tool_calls: None,     // No tool_calls for system messages
-			images: None,         // No images for system messages
+			..Default::default()
 		});
 
 		// Prepare input based on input_mode using the trait's prepare_input method
@@ -66,10 +63,7 @@ impl LayerProcessor {
 				.unwrap_or_default()
 				.as_secs(),
 			cached: false,
-			tool_call_id: None, // No tool_call_id for user messages
-			name: None,         // No name for user messages
-			tool_calls: None,   // No tool_calls for user messages
-			images: None,       // No images for user messages
+			..Default::default()
 		});
 
 		messages
@@ -220,10 +214,7 @@ impl Layer for LayerProcessor {
 							.unwrap_or_default()
 							.as_secs(),
 						cached: false,
-						tool_call_id: None, // No tool_call_id for assistant messages
-						name: None,         // No name for assistant messages
-						tool_calls: None,   // No tool_calls for assistant messages
-						images: None,       // No images for assistant messages
+						..Default::default()
 					});
 
 					// Add each tool result as a tool message in standard OpenRouter format
@@ -239,8 +230,7 @@ impl Layer for LayerProcessor {
 							cached: false,
 							tool_call_id: Some(tool_result.tool_id.clone()), // Include the tool_call_id
 							name: Some(tool_result.tool_name.clone()),       // Include the tool name
-							tool_calls: None,                                // No tool_calls for tool messages
-							images: None,                                    // No images for tool messages
+							..Default::default()
 						});
 					}
 

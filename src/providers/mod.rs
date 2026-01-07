@@ -29,7 +29,7 @@ pub use octolib::llm::{
 };
 
 // Re-export some octolib types directly
-pub use octolib::llm::{ProviderExchange, TokenUsage};
+pub use octolib::llm::{ProviderExchange, ThinkingBlock, TokenUsage};
 
 // Define Octomind-specific ProviderResponse that uses McpToolCall
 #[derive(Debug, Clone)]
@@ -37,6 +37,7 @@ pub struct ProviderResponse {
 	pub content: String,
 	pub exchange: ProviderExchange,
 	pub tool_calls: Option<Vec<crate::mcp::McpToolCall>>,
+	pub thinking: Option<ThinkingBlock>,
 	pub finish_reason: Option<String>,
 }
 
@@ -336,6 +337,7 @@ pub fn convert_response_from_octolib(response: octolib::llm::ProviderResponse) -
 		content: response.content,
 		exchange: response.exchange,
 		tool_calls,
+		thinking: response.thinking,
 		finish_reason: response.finish_reason,
 	}
 }

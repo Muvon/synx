@@ -293,6 +293,7 @@ pub async fn execute_command_layer(
 					tool_call_id: None,
 					name: None,
 					images: None,
+					..Default::default()
 				};
 				final_messages.push(output_msg);
 			}

@@ -160,6 +160,8 @@ pub struct Message {
 	pub tool_calls: Option<serde_json::Value>, // For assistant messages: original tool calls from API response
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub images: Option<Vec<crate::session::image::ImageAttachment>>, // For messages with image attachments
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub thinking: Option<serde_json::Value>, // For assistant messages: thinking/reasoning content
 }
 
 fn default_cache_marker() -> bool {
@@ -171,6 +173,22 @@ fn current_timestamp() -> u64 {
 		.duration_since(UNIX_EPOCH)
 		.unwrap_or_default()
 		.as_secs()
+}
+
+impl Default for Message {
+	fn default() -> Self {
+		Self {
+			role: String::new(),
+			content: String::new(),
+			timestamp: current_timestamp(),
+			cached: false,
+			tool_call_id: None,
+			name: None,
+			tool_calls: None,
+			images: None,
+			thinking: None,
+		}
+	}
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -283,11 +301,8 @@ impl Session {
 				.duration_since(UNIX_EPOCH)
 				.unwrap_or_default()
 				.as_secs(),
-			cached: false,      // Default to not cached
-			tool_call_id: None, // Default to no tool_call_id
-			name: None,         // Default to no name
-			tool_calls: None,   // Default to no tool_calls
-			images: None,       // Default to no images
+			cached: false,
+			..Default::default()
 		};
 
 		self.messages.push(message.clone());
@@ -825,11 +840,9 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 							role: "assistant".to_string(),
 							content: "".to_string(), // Empty content for tool call messages
 							tool_calls: Some(serde_json::Value::Array(pending_tool_calls.clone())),
-							tool_call_id: None,
-							name: None,
-							images: None,
 							timestamp: message.timestamp,
 							cached: false,
+							..Default::default()
 						};
 
 						if restoration_point_found {
