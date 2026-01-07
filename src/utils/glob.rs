@@ -41,7 +41,44 @@ pub fn expand_glob_patterns_filtered(
 	base_dir: Option<&str>,
 ) -> Result<Vec<String>> {
 	let mut expanded_paths = Vec::new();
-	let search_dir = base_dir.unwrap_or(".");
+
+	// Determine the search directory
+	// If base_dir is provided, use it
+	// Otherwise, try to extract base directory from the first glob pattern with absolute path
+	let search_dir = if let Some(dir) = base_dir {
+		dir.to_string()
+	} else {
+		// Try to find a base directory from patterns with absolute paths
+		let mut extracted_base = None;
+		for pattern in patterns {
+			if pattern.starts_with('/') {
+				// Extract the base directory from absolute path pattern
+				// For patterns like "/path/to/dir/**/*.rs", extract "/path/to/dir"
+				if let Some(glob_start) = pattern.find("**") {
+					// Get everything before the **
+					let base = &pattern[..glob_start];
+					// Remove trailing slash if present
+					let base = base.trim_end_matches('/');
+					if !base.is_empty() {
+						extracted_base = Some(base.to_string());
+						break;
+					}
+				} else if let Some(glob_start) = pattern.find('*') {
+					// For patterns like "/path/to/*.rs", extract "/path/to"
+					let base = &pattern[..glob_start];
+					// Get the directory part
+					if let Some(last_slash) = base.rfind('/') {
+						let base = &base[..last_slash];
+						if !base.is_empty() {
+							extracted_base = Some(base.to_string());
+							break;
+						}
+					}
+				}
+			}
+		}
+		extracted_base.unwrap_or_else(|| ".".to_string())
+	};
 
 	crate::log_debug!(
 		"Expanding {} glob patterns from directory '{}': {:?}",
@@ -51,7 +88,7 @@ pub fn expand_glob_patterns_filtered(
 	);
 
 	// Build ignore walker that respects .gitignore and excludes dotfiles
-	let mut builder = WalkBuilder::new(search_dir);
+	let mut builder = WalkBuilder::new(&search_dir);
 	builder
 		.hidden(false) // Don't automatically skip hidden files (we'll filter manually)
 		.git_ignore(true) // Respect .gitignore files
@@ -60,6 +97,11 @@ pub fn expand_glob_patterns_filtered(
 		.require_git(false) // Don't require git repository
 		.follow_links(false) // Don't follow symlinks
 		.max_depth(None); // No depth limit
+
+	// Determine if we should apply dotfile filtering
+	// Skip dotfile filtering if the search directory itself contains dot components
+	// (e.g., when searching in temp directories like /var/folders/.../T/.tmpXXX/)
+	let should_filter_dotfiles = !is_dotfile_or_in_dot_directory(&search_dir);
 
 	// Collect all files first, then apply glob filtering
 	let walker = builder.build();
@@ -75,10 +117,20 @@ pub fn expand_glob_patterns_filtered(
 					continue;
 				}
 
-				// Skip dotfiles and files in dot directories
 				let path_str = path.to_string_lossy();
-				if is_dotfile_or_in_dot_directory(&path_str) {
-					continue;
+
+				// Skip dotfiles and files in dot directories only if we're not already in a dot directory
+				if should_filter_dotfiles {
+					// Get the relative path from search_dir to check for dot components
+					let relative_path = if let Ok(rel) = path.strip_prefix(&search_dir) {
+						rel.to_string_lossy().to_string()
+					} else {
+						path_str.to_string()
+					};
+
+					if is_dotfile_or_in_dot_directory(&relative_path) {
+						continue;
+					}
 				}
 
 				all_files.push(path_str.to_string());
