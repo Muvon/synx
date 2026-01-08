@@ -1463,9 +1463,9 @@ mod tests {
 			name: None,
 			tool_calls,
 			images: None,
+			thinking: None,
 		}
 	}
-
 	#[test]
 	fn test_has_incomplete_tool_calls_complete_sequence() {
 		// Test complete tool call sequence: assistant -> tool_calls -> tool_response

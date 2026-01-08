@@ -856,10 +856,12 @@ impl ChatSession {
 		}
 
 		// Render using existing markdown renderer
+		// This is for assistant message display, no thinking block
 		crate::session::chat::assistant_output::print_assistant_response(
 			&markdown_content,
 			config,
 			"assistant", // role parameter for markdown rendering
+			&None,
 		);
 
 		println!();

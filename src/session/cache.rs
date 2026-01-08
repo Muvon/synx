@@ -865,6 +865,7 @@ mod tests {
 				name: None,
 				tool_calls: None,
 				images: None,
+				thinking: None,
 			},
 			Message {
 				role: "user".to_string(),
@@ -875,6 +876,7 @@ mod tests {
 				name: None,
 				tool_calls: None,
 				images: None,
+				thinking: None,
 			},
 		];
 

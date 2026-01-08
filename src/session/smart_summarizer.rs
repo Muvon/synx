@@ -398,7 +398,8 @@ mod tests {
 				tool_call_id: None,
 				name: None,
 				tool_calls: None,
-			images: None,
+				images: None,
+				thinking: None,
 			},
 			Message {
 				role: "assistant".to_string(),
@@ -408,7 +409,8 @@ mod tests {
 				tool_call_id: None,
 				name: None,
 				tool_calls: None,
-			images: None,
+				images: None,
+				thinking: None,
 			},
 		];
 

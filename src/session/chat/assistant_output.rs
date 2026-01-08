@@ -15,27 +15,59 @@
 // Assistant response output and formatting
 
 use crate::config::Config;
+use crate::providers::ThinkingBlock;
 use crate::session::chat::markdown::{is_markdown_content, MarkdownRenderer};
 use colored::Colorize;
 
+/// Check if assistant content was already displayed in thinking block
+/// Returns the content to display (either full content or trimmed content)
+pub fn get_content_to_display(content: &str, thinking: &Option<ThinkingBlock>) -> String {
+	if let Some(ref thinking_block) = thinking {
+		// Check if thinking content is a prefix of the full content
+		// If so, skip the thinking portion and only show the response portion
+		if content.starts_with(&thinking_block.content) {
+			let after_thinking = &content[thinking_block.content.len()..];
+			// Skip leading whitespace/newlines
+			let trimmed = after_thinking.trim_start().to_string();
+			if trimmed.is_empty() {
+				// All content was thinking, nothing to display
+				return String::new();
+			}
+			return trimmed;
+		}
+	}
+	content.to_string()
+}
+
 // Helper function to print content with optional markdown rendering
-pub fn print_assistant_response(content: &str, config: &Config, _role: &str) {
-	if config.enable_markdown_rendering && is_markdown_content(content) {
+pub fn print_assistant_response(
+	content: &str,
+	config: &Config,
+	_role: &str,
+	thinking: &Option<ThinkingBlock>,
+) {
+	let content_to_display = get_content_to_display(content, thinking);
+
+	if content_to_display.is_empty() {
+		return;
+	}
+
+	if config.enable_markdown_rendering && is_markdown_content(&content_to_display) {
 		// Use markdown rendering with theme from config
 		let theme = config.markdown_theme.parse().unwrap_or_default();
 		let renderer = MarkdownRenderer::with_theme(theme);
-		match renderer.render_and_print(content) {
+		match renderer.render_and_print(&content_to_display) {
 			Ok(_) => {
 				// Successfully rendered as markdown
 			}
 			Err(e) => {
 				// Fallback to plain text if markdown rendering fails
 				crate::log_debug!("{}: {}", "Warning: Markdown rendering failed".yellow(), e);
-				println!("{}", content.bright_green());
+				println!("{}", content_to_display.bright_green());
 			}
 		}
 	} else {
 		// Use plain text with color
-		println!("{}", content.bright_green());
+		println!("{}", content_to_display.bright_green());
 	}
 }

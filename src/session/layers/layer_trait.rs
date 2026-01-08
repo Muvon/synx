@@ -396,16 +396,14 @@ pub trait Layer {
 					session
 						.messages
 						.iter()
-						.filter(|m| m.role == "assistant")
-						.next_back()
+						.rfind(|m| m.role == "assistant")
 						.map(|m| m.content.clone())
 						.unwrap_or_else(|| {
 							// Fallback: if no assistant messages, get last user message
 							session
 								.messages
 								.iter()
-								.filter(|m| m.role == "user")
-								.next_back()
+								.rfind(|m| m.role == "user")
 								.map(|m| m.content.clone())
 								.unwrap_or_else(|| "No previous messages found".to_string())
 						})
@@ -414,8 +412,7 @@ pub trait Layer {
 					let last_assistant = session
 						.messages
 						.iter()
-						.filter(|m| m.role == "assistant")
-						.next_back()
+						.rfind(|m| m.role == "assistant")
 						.map(|m| {
 							format!(
 								"Previous response:\n{}\n\nCurrent input:\n{}",

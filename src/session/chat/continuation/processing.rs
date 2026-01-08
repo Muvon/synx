@@ -63,7 +63,8 @@ pub async fn process_continuation_response(
 		println!("{}", "(No summary provided by AI)".dimmed());
 	} else {
 		crate::log_debug!("Response content length: {} chars", response_content.len());
-		print_assistant_response(response_content, config, role);
+		// Continuation summaries don't have thinking blocks
+		print_assistant_response(response_content, config, role, &None);
 	}
 	println!();
 

@@ -71,8 +71,7 @@ pub async fn handle_run(
 			.session
 			.messages
 			.iter()
-			.filter(|m| m.role == "user")
-			.next_back()
+			.rfind(|m| m.role == "user")
 			.map(|m| m.content.clone())
 			.unwrap_or_else(|| "No recent user input found".to_string())
 	};
@@ -149,7 +148,8 @@ pub async fn handle_run(
 		Ok(result) => {
 			println!();
 			// Use markdown-aware printing for command results
-			print_assistant_response(&result, config, role);
+			// Command results don't have thinking blocks
+			print_assistant_response(&result, config, role, &None);
 			println!();
 
 			Ok(CommandResult::HandledWithOutput(CommandOutput::Run {

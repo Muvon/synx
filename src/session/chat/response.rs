@@ -117,8 +117,9 @@ fn handle_final_response(
 	chat_session.add_assistant_message(content, None, config, role)?;
 
 	// Print assistant response with color ONLY in interactive mode
+	// Pass thinking to skip content already shown in thinking block
 	if is_interactive {
-		print_assistant_response(content, config, role);
+		print_assistant_response(content, config, role, thinking);
 	}
 
 	// Display cost line only for non-interactive mode or specific scenarios
@@ -348,8 +349,14 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 				}
 
 				// Display the content to the user FIRST (before adding to session) - ONLY in interactive mode
+				// Pass thinking to skip content already shown in thinking block
 				if params.is_interactive {
-					print_assistant_response(&current_content, params.config, params.role);
+					print_assistant_response(
+						&current_content,
+						params.config,
+						params.role,
+						&params.thinking,
+					);
 				}
 
 				// Display tool parameters upfront (headers will be shown per-tool during execution) - ONLY in interactive mode
