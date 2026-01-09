@@ -302,7 +302,7 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 
 	// Configure the command based on the operation type
 	// Only do content search if content is actually provided and non-empty (not just whitespace)
-	let has_content = content.as_ref().map_or(false, |c| !c.trim().is_empty());
+	let has_content = content.as_ref().is_some_and(|c| !c.trim().is_empty());
 	let (output_type, is_content_search) = if has_content {
 		// Content search: search for content within files
 		let content_pattern = content.as_ref().unwrap();
