@@ -301,8 +301,11 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 	}
 
 	// Configure the command based on the operation type
-	let (output_type, is_content_search) = if let Some(ref content_pattern) = content {
+	// Only do content search if content is actually provided and non-empty (not just whitespace)
+	let has_content = content.as_ref().map_or(false, |c| !c.trim().is_empty());
+	let (output_type, is_content_search) = if has_content {
 		// Content search: search for content within files
+		let content_pattern = content.as_ref().unwrap();
 		if line_numbers {
 			cmd.arg("--line-number");
 		}
@@ -576,5 +579,161 @@ mod tests {
 			f_index < pattern_index,
 			"-F flag should come before the pattern"
 		);
+	}
+
+	#[tokio::test]
+	async fn test_list_files_empty_content_should_list_files() {
+		// CRITICAL TEST: When content is empty string "", should do file listing, NOT content search
+		use crate::mcp::fs::directory::execute_list_files;
+		use std::fs;
+		use tempfile::TempDir;
+
+		// Create a temporary directory with test files
+		let temp_dir = TempDir::new().unwrap();
+		let temp_path = temp_dir.path();
+
+		// Create some test files
+		for i in 1..=5 {
+			let file_path = temp_path.join(format!("test_file_{}.txt", i));
+			fs::write(&file_path, format!("Content of file {}", i)).unwrap();
+		}
+
+		// Create a specific file that would match the pattern
+		let config_path = temp_path.join("config.json");
+		fs::write(&config_path, "{}").unwrap();
+
+		// Test with EMPTY content string - should do file listing, not content search
+		let call = McpToolCall {
+			tool_name: "list_files".to_string(),
+			parameters: json!({
+				"directory": temp_path.to_str().unwrap(),
+				"pattern": "*.json",
+				"content": ""  // Empty content - should list files, not search
+			}),
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let result = execute_list_files(&call).await.unwrap();
+		let output = result.result.as_object().unwrap();
+
+		// Should be file listing (not content search)
+		assert_eq!(output["type"], "file listing");
+		assert!(output["success"].as_bool().unwrap());
+
+		// Should have files array (not lines)
+		assert!(output.contains_key("files"));
+		let files = output["files"].as_array().unwrap();
+
+		// Should find the config.json file via pattern matching
+		assert_eq!(
+			files.len(),
+			1,
+			"Should find exactly one file matching *.json pattern"
+		);
+		assert!(files[0].as_str().unwrap().contains("config.json"));
+	}
+
+	#[tokio::test]
+	async fn test_list_files_no_content_parameter_should_list_files() {
+		// CRITICAL TEST: When content parameter is not provided at all, should do file listing
+		use crate::mcp::fs::directory::execute_list_files;
+		use std::fs;
+		use tempfile::TempDir;
+
+		// Create a temporary directory with test files
+		let temp_dir = TempDir::new().unwrap();
+		let temp_path = temp_dir.path();
+
+		// Create some test files
+		for i in 1..=5 {
+			let file_path = temp_path.join(format!("test_file_{}.txt", i));
+			fs::write(&file_path, format!("Content of file {}", i)).unwrap();
+		}
+
+		// Create a specific file that would match the pattern
+		let config_path = temp_path.join("config.json");
+		fs::write(&config_path, "{}").unwrap();
+
+		// Test WITHOUT content parameter - should do file listing, not content search
+		let call = McpToolCall {
+			tool_name: "list_files".to_string(),
+			parameters: json!({
+				"directory": temp_path.to_str().unwrap(),
+				"pattern": "*.json"
+				// No "content" key at all
+			}),
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let result = execute_list_files(&call).await.unwrap();
+		let output = result.result.as_object().unwrap();
+
+		// Should be file listing (not content search)
+		assert_eq!(output["type"], "file listing");
+		assert!(output["success"].as_bool().unwrap());
+
+		// Should have files array (not lines)
+		assert!(output.contains_key("files"));
+		let files = output["files"].as_array().unwrap();
+
+		// Should find the config.json file via pattern matching
+		assert_eq!(
+			files.len(),
+			1,
+			"Should find exactly one file matching *.json pattern"
+		);
+		assert!(files[0].as_str().unwrap().contains("config.json"));
+	}
+
+	#[tokio::test]
+	async fn test_list_files_whitespace_content_should_list_files() {
+		// CRITICAL TEST: When content is only whitespace, should do file listing, NOT content search
+		use crate::mcp::fs::directory::execute_list_files;
+		use std::fs;
+		use tempfile::TempDir;
+
+		// Create a temporary directory with test files
+		let temp_dir = TempDir::new().unwrap();
+		let temp_path = temp_dir.path();
+
+		// Create some test files
+		for i in 1..=5 {
+			let file_path = temp_path.join(format!("test_file_{}.txt", i));
+			fs::write(&file_path, format!("Content of file {}", i)).unwrap();
+		}
+
+		// Create a specific file that would match the pattern
+		let config_path = temp_path.join("config.json");
+		fs::write(&config_path, "{}").unwrap();
+
+		// Test with whitespace-only content - should do file listing, not content search
+		let call = McpToolCall {
+			tool_name: "list_files".to_string(),
+			parameters: json!({
+				"directory": temp_path.to_str().unwrap(),
+				"pattern": "*.json",
+				"content": "   "  // Whitespace only - should list files, not search
+			}),
+			tool_id: "test-call-id".to_string(),
+		};
+
+		let result = execute_list_files(&call).await.unwrap();
+		let output = result.result.as_object().unwrap();
+
+		// Should be file listing (not content search)
+		assert_eq!(output["type"], "file listing");
+		assert!(output["success"].as_bool().unwrap());
+
+		// Should have files array (not lines)
+		assert!(output.contains_key("files"));
+		let files = output["files"].as_array().unwrap();
+
+		// Should find the config.json file via pattern matching
+		assert_eq!(
+			files.len(),
+			1,
+			"Should find exactly one file matching *.json pattern"
+		);
+		assert!(files[0].as_str().unwrap().contains("config.json"));
 	}
 }
