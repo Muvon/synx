@@ -26,5 +26,5 @@ pub fn display_thinking(thinking: &ThinkingBlock) {
 
 	println!("{}", separator);
 	println!("{}", thinking.content.dimmed());
-	println!("{}", separator);
+	println!("{}", "─".repeat(30).dimmed());
 }
