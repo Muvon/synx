@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.16.0] - 2026-01-09
+
+### 📋 Release Summary
+
+This release enhances the conversational experience with thinking headers in messages and structured command outputs (487fe367, b20c975c). Support for zai and minimax AI providers has been added via updated dependencies, alongside improved thinking displays (fae757c1, 1c0add41). Several bug fixes boost file search reliability, cross-platform glob handling including Windows paths, chat consistency, and AI tool integration (ea7ffba4, 5e0405ff, c82d941e, 18dfb4b1, 8fb6d48d, a86e558e, 4fa2360c, dcc7a8ed, c058a6b6).
+
+
+### ✨ New Features & Enhancements
+
+- **session**: add thinking header to messages `487fe367`
+- **server,session**: structured command outputs for websocket server `b20c975c`
+
+### 🔧 Improvements & Optimizations
+
+- **thinking_display**: use fixed separator pattern `1c0add41`
+- **display**: centralize list rendering `4eea10c2`
+- **session**: simplify message handler `9e52cd26`
+
+### 🐛 Bug Fixes & Stability
+
+- **mcp/fs**: replace map_or with is_some_and for content check `ea7ffba4`
+- **fs**: skip content search for empty content `5e0405ff`
+- **chat**: prevent duplicate thinking block display `c82d941e`
+- **utils**: improve glob pattern handling for Windows paths `18dfb4b1`
+- **glob**: handle absolute path patterns without base_dir `8fb6d48d`
+- **ast_grep**: fail when globs match no files `a86e558e`
+- **session/chat**: warn on empty continuation summary `4fa2360c`
+- **file-parser**: prefer <context> tags `dcc7a8ed`
+- **gemini**: preserve meta in tool calls `c058a6b6`
+- **docker**: update Rust version to `ca1c73ce`
+
+### 📚 Documentation & Examples
+
+- **mcp**: update tool docs and server enhancements `7f48c516`
+
+### 🔄 Other Changes
+
+- **deps**: update octolib to v0.4.0 with zai and minimax providers `fae757c1`
+- **deps**: update octolib to 0.3.0 `f4dbc3e7`
+- **deps**: bump dependency versions `8f53df17`
+- **deps**: update deps and WS API `52478897`
+- **workflows**: add missing newline at EOF `a3a70ca5`
+
+### 📊 Release Summary
+
+**Total commits**: 21 across 5 categories
+
+✨ **2** new features - *Enhanced functionality*
+🔧 **3** improvements - *Better performance & code quality*
+🐛 **10** bug fixes - *Improved stability*
+📚 **1** documentation update - *Better developer experience*
+🔄 **5** other changes - *Maintenance & tooling*
+
 ## [0.15.0] - 2025-11-21
 
 ### 📋 Release Summary
