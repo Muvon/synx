@@ -96,7 +96,7 @@ pub fn read_user_input(
 	let config = RustylineConfig::builder()
 		.completion_type(CompletionType::List) // Bash-like completion with partial matches
 		.edit_mode(EditMode::Emacs)
-		.auto_add_history(true) // Automatically add lines to history
+		.auto_add_history(false) // Manual history control for whitespace-prefixed inputs
 		.bell_style(rustyline::config::BellStyle::None) // No bell
 		.max_history_size(1000)? // Limit history size
 		.color_mode(rustyline::ColorMode::Enabled) // Enable proper ANSI color handling
@@ -192,21 +192,28 @@ pub fn read_user_input(
 			// Check if Ctrl+G was pressed
 			let is_add_without_sending = add_without_sending.load(Ordering::SeqCst);
 
-			// Add to in-memory history (auto_add_history is true, but we also save to file)
-			let _ = editor.add_history_entry(line.clone());
+			// Check if line starts with whitespace (bash-like behavior)
+			// If it does, skip adding to history (both in-memory and persistent)
+			let starts_with_whitespace = line.starts_with(char::is_whitespace);
 
-			// Append to persistent file using role-based thread-safe method
-			// This includes ALL inputs - both regular inputs and commands starting with '/'
-			if let Err(e) = append_to_session_history_file(role, &line) {
-				// Don't fail if history can't be saved, just log it
-				log_info!(
-					"Could not append to history file for role '{}': {}",
-					role,
-					e
-				);
+			if !starts_with_whitespace {
+				// Add to in-memory history only if not starting with whitespace
+				let _ = editor.add_history_entry(line.clone());
+
+				// Append to persistent file using role-based thread-safe method
+				// This includes ALL inputs - both regular inputs and commands starting with '/'
+				if let Err(e) = append_to_session_history_file(role, &line) {
+					// Don't fail if history can't be saved, just log it
+					log_info!(
+						"Could not append to history file for role '{}': {}",
+						role,
+						e
+					);
+				}
 			}
 
 			// Log user input only if it's not a command (doesn't start with '/')
+			// Note: We still log even if it starts with whitespace, as logging is separate from history
 			if !line.trim().starts_with('/') {
 				let _ = crate::session::logger::log_user_request(&line);
 			}
