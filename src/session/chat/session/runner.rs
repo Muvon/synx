@@ -142,6 +142,26 @@ pub async fn setup_and_initialize_session<T: std::fmt::Debug>(
 	args: &T,
 	config: &Config,
 ) -> Result<(ChatSession, Config, String, bool)> {
+	use indicatif::{ProgressBar, ProgressStyle};
+	use std::io::IsTerminal;
+	use std::time::Duration;
+
+	// Show loading spinner in interactive mode
+	let spinner = if std::io::stdin().is_terminal() {
+		let sp = ProgressBar::new_spinner();
+		sp.set_style(
+			ProgressStyle::default_spinner()
+				.template(" {spinner:.cyan} {msg:.cyan}")
+				.unwrap()
+				.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧"),
+		);
+		sp.set_message("Starting session...");
+		sp.enable_steady_tick(Duration::from_millis(80));
+		Some(sp)
+	} else {
+		None
+	};
+
 	// Extract session parameters
 	let (name, resume, resume_recent, model, max_tokens, temperature, role, max_retries) =
 		extract_session_params(args, config);
@@ -200,6 +220,14 @@ To fix this issue
 	// Use CLI max_retries if provided, otherwise use root config max_retries
 	let effective_max_retries = max_retries.unwrap_or(config_for_role.max_retries);
 	session_params = session_params.with_max_retries(effective_max_retries);
+
+	// Clean up spinner BEFORE initializing session (which prints messages)
+	if let Some(sp) = spinner {
+		sp.finish_and_clear();
+		// Clear entire line and move cursor to beginning
+		print!("\x1B[2K\r");
+		std::io::Write::flush(&mut std::io::stdout()).ok();
+	}
 
 	let mut chat_session = ChatSession::initialize(session_params).await?;
 

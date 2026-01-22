@@ -261,6 +261,14 @@ pub fn ensure_tool_call_ids(calls: &mut [McpToolCall]) {
 
 // Initialize all servers for a specific mode/role ONCE at startup
 pub async fn initialize_servers_for_role(config: &crate::config::Config) -> Result<()> {
+	initialize_servers_for_role_with_callback(config, None).await
+}
+
+// Initialize servers with optional progress callback for UI updates
+pub async fn initialize_servers_for_role_with_callback(
+	config: &crate::config::Config,
+	progress_callback: Option<&dyn Fn(&str)>,
+) -> Result<()> {
 	// The config passed here should be the merged config for the role
 	// config.mcp.servers already contains only the role's enabled servers
 	if config.mcp.servers.is_empty() {
@@ -277,6 +285,11 @@ pub async fn initialize_servers_for_role(config: &crate::config::Config) -> Resu
 		// Only initialize external servers that need to be started
 		if let McpConnectionType::Http | McpConnectionType::Stdin = server.connection_type() {
 			crate::log_debug!("Initializing external server: {}", server.name());
+
+			// Notify progress callback
+			if let Some(callback) = progress_callback {
+				callback(server.name());
+			}
 
 			// Check if server is already running to avoid double initialization
 			if server::is_server_already_running_with_config(server) {
@@ -332,10 +345,21 @@ pub async fn initialize_servers_for_role(config: &crate::config::Config) -> Resu
 /// Initialize MCP servers and tool map for a role (used at startup and role switching)
 /// This is the complete initialization that should be used whenever switching roles
 pub async fn initialize_mcp_for_role(role: &str, config: &crate::config::Config) -> Result<()> {
+	initialize_mcp_for_role_with_callback(role, config, None).await
+}
+
+/// Initialize MCP servers with optional progress callback for UI updates
+pub async fn initialize_mcp_for_role_with_callback(
+	role: &str,
+	config: &crate::config::Config,
+	progress_callback: Option<&dyn Fn(&str)>,
+) -> Result<()> {
 	let config_for_role = config.get_merged_config_for_role(role);
 
 	// Step 1: Initialize MCP servers first
-	if let Err(e) = initialize_servers_for_role(&config_for_role).await {
+	if let Err(e) =
+		initialize_servers_for_role_with_callback(&config_for_role, progress_callback).await
+	{
 		crate::log_debug!("Warning: Failed to initialize MCP servers: {}", e);
 		// Continue anyway - servers can be started on-demand if needed
 	}

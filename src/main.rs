@@ -92,23 +92,66 @@ async fn main() -> Result<(), anyhow::Error> {
 	result
 }
 
-/// Initialize MCP servers and tool map for role-based commands
-async fn initialize_mcp_for_role(role: &str, config: &Config) -> Result<(), anyhow::Error> {
-	// Use the public function from the MCP module
-	octomind::mcp::initialize_mcp_for_role(role, config).await
+/// Initialize MCP servers and tool map for role-based commands with progress indicator
+async fn initialize_mcp_for_role_with_progress(
+	role: &str,
+	config: &Config,
+	is_interactive: bool,
+) -> Result<(), anyhow::Error> {
+	use indicatif::{ProgressBar, ProgressStyle};
+	use std::time::Duration;
+
+	// Only show spinner in interactive mode
+	if is_interactive {
+		let spinner = ProgressBar::new_spinner();
+		spinner.set_style(
+			ProgressStyle::default_spinner()
+				.template(" {spinner:.cyan} {msg:.cyan}")
+				.unwrap()
+				.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧"),
+		);
+		spinner.set_message("Initializing MCP servers...");
+		spinner.enable_steady_tick(Duration::from_millis(80));
+
+		// Create progress callback to update spinner message
+		let progress_callback = |server_name: &str| {
+			spinner.set_message(format!("Starting MCP server: {}", server_name));
+		};
+
+		let result = octomind::mcp::initialize_mcp_for_role_with_callback(
+			role,
+			config,
+			Some(&progress_callback),
+		)
+		.await;
+
+		// Ensure spinner is fully cleared with ANSI escape codes
+		spinner.finish_and_clear();
+		// Clear entire line and move cursor to beginning
+		print!("\x1B[2K\r");
+		std::io::Write::flush(&mut std::io::stdout()).ok();
+
+		result
+	} else {
+		// Non-interactive mode - no spinner
+		octomind::mcp::initialize_mcp_for_role(role, config).await
+	}
 }
 
 async fn run_with_cleanup(args: CliArgs, config: Config) -> Result<(), anyhow::Error> {
 	// Initialize MCP servers and tool map once at startup for commands that need them
 	match &args.command {
 		Commands::Session(session_args) => {
-			initialize_mcp_for_role(&session_args.role, &config).await?;
+			// Session is interactive - show progress
+			initialize_mcp_for_role_with_progress(&session_args.role, &config, true).await?;
 		}
 		Commands::Run(run_args) => {
-			initialize_mcp_for_role(&run_args.role, &config).await?;
+			// Run is non-interactive - no progress spinner
+			initialize_mcp_for_role_with_progress(&run_args.role, &config, false).await?;
 		}
 		Commands::Server(server_args) => {
-			initialize_mcp_for_role(&server_args.role, &config).await?;
+			// Server is interactive - show progress
+			initialize_mcp_for_role_with_progress(&server_args.role, &config, true).await?;
 		}
 		_ => {
 			// Other commands don't need MCP servers
