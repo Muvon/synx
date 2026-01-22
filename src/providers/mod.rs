@@ -345,7 +345,7 @@ pub fn convert_response_from_octolib(response: octolib::llm::ProviderResponse) -
 		tool_calls,
 		thinking: response.thinking,
 		finish_reason: response.finish_reason,
-		response_id: response.response_id,
+		response_id: response.id,
 	}
 }
 

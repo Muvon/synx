@@ -1765,9 +1765,9 @@ dependencies = [
 
 [[package]]
 name = "octolib"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b170dc3e5ab13f234602859021479f0f6bb989c0efe703518ee6d5a61c5d808e"
+checksum = "e8eec2f688e2ac1216c8ded67c6c2412c924e2226c0b3140b46e27724815faed"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2053,9 +2053,9 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.105"
+version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "535d180e0ecab6268a3e718bb9fd44db66bbbc256257165fc699dadf70d16fe7"
+checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
 ]
