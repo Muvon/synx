@@ -258,8 +258,8 @@ fn resolve_unresolved_line_range(
 pub async fn str_replace_spec(
 	call: &McpToolCall,
 	path: &Path,
-	old_str: &str,
-	new_str: &str,
+	old_text: &str,
+	new_text: &str,
 ) -> Result<McpToolResult> {
 	if !path.exists() {
 		return Ok(McpToolResult::error(
@@ -278,8 +278,8 @@ pub async fn str_replace_spec(
 		.await
 		.map_err(|e| anyhow!("Permission denied. Cannot read file: {}", e))?;
 
-	// Check if old_str appears in the file
-	let occurrences = content.matches(old_str).count();
+	// Check if old_text appears in the file
+	let occurrences = content.matches(old_text).count();
 	if occurrences == 0 {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
@@ -299,7 +299,7 @@ pub async fn str_replace_spec(
 	save_file_history(path).await?;
 
 	// Replace the string
-	let new_content = content.replace(old_str, new_str);
+	let new_content = content.replace(old_text, new_text);
 
 	// Write the new content
 	tokio_fs::write(path, &new_content)
@@ -327,8 +327,8 @@ pub async fn str_replace_spec(
 pub async fn insert_text_spec(
 	call: &McpToolCall,
 	path: &Path,
-	insert_line: usize,
-	new_str: &str,
+	insert_after_line: usize,
+	content: &str,
 ) -> Result<McpToolResult> {
 	// PROTECTION: Check if operation is safe (line-dependent)
 	if let Some(error_result) = validate_line_dependent_operation(path, "insert", call).await? {
@@ -348,19 +348,19 @@ pub async fn insert_text_spec(
 	let _lock_guard = file_lock.lock().await;
 
 	// Read the file content
-	let content = tokio_fs::read_to_string(path)
+	let file_content = tokio_fs::read_to_string(path)
 		.await
 		.map_err(|e| anyhow!("Permission denied. Cannot read file: {}", e))?;
-	let mut lines: Vec<&str> = content.lines().collect();
+	let mut lines: Vec<&str> = file_content.lines().collect();
 
-	// Validate insert_line
-	if insert_line > lines.len() {
+	// Validate insert_after_line
+	if insert_after_line > lines.len() {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
 			format!(
 				"Insert line {} exceeds file length ({} lines)",
-				insert_line,
+				insert_after_line,
 				lines.len()
 			),
 		));
@@ -370,17 +370,17 @@ pub async fn insert_text_spec(
 	save_file_history(path).await?;
 
 	// Split new content into lines
-	let new_lines: Vec<&str> = new_str.lines().collect();
+	let new_lines: Vec<&str> = content.lines().collect();
 
 	// Insert the new lines
-	let insert_index = insert_line; // 0 means beginning, 1 means after line 1, etc.
+	let insert_index = insert_after_line; // 0 means beginning, 1 means after line 1, etc.
 	lines.splice(insert_index..insert_index, new_lines);
 
 	// Join lines back to string
 	let new_content = lines.join("\n");
 
 	// Add final newline if original file had one
-	let final_content = if content.ends_with('\n') {
+	let final_content = if file_content.ends_with('\n') {
 		format!("{}\n", new_content)
 	} else {
 		new_content
@@ -392,7 +392,8 @@ pub async fn insert_text_spec(
 		.map_err(|e| anyhow!("Permission denied. Cannot write to file: {}", e))?;
 
 	// CHECK: Insert always changes line count (adds lines)
-	if let Err(e) = check_and_mark_line_count_change(path, "insert", &content, &final_content).await
+	if let Err(e) =
+		check_and_mark_line_count_change(path, "insert", &file_content, &final_content).await
 	{
 		crate::log_debug!("Failed to check line count change: {}", e);
 	}
@@ -401,9 +402,9 @@ pub async fn insert_text_spec(
 		tool_name: "text_editor".to_string(),
 		tool_id: call.tool_id.clone(),
 		result: json!({
-			"content": format!("Successfully inserted {} lines at line {}", new_str.lines().count(), insert_line),
+			"content": format!("Successfully inserted {} lines at line {}", content.lines().count(), insert_after_line),
 			"path": path.to_string_lossy(),
-			"lines_inserted": new_str.lines().count()
+			"lines_inserted": content.lines().count()
 		}),
 	})
 }
@@ -412,8 +413,8 @@ pub async fn insert_text_spec(
 pub async fn line_replace_spec(
 	call: &McpToolCall,
 	path: &Path,
-	view_range: (usize, usize),
-	new_str: &str,
+	lines: (usize, usize),
+	content: &str,
 ) -> Result<McpToolResult> {
 	// PROTECTION: Check if operation is safe (line-dependent)
 	if let Some(error_result) =
@@ -438,14 +439,14 @@ pub async fn line_replace_spec(
 		));
 	}
 
-	let (start_line, end_line) = view_range;
+	let (start_line, end_line) = lines;
 
-	// Validate new_str for escaped characters
-	if new_str.starts_with("\\t") && new_str.contains("\\n") {
+	// Validate content for escaped characters
+	if content.starts_with("\\t") && content.contains("\\n") {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-			"new_str should CONTAIN RAW content not escaped characters".to_string(),
+			"content should CONTAIN RAW content not escaped characters".to_string(),
 		));
 	}
 
@@ -525,7 +526,7 @@ pub async fn line_replace_spec(
 	}
 
 	// Add the replacement content
-	result_parts.push(new_str);
+	result_parts.push(content);
 
 	// Add lines after target range
 	for line in lines.iter().skip(end_line) {
@@ -588,7 +589,7 @@ pub async fn line_replace_spec(
 	};
 
 	let lines_replaced_count = end_line - start_line + 1;
-	let new_lines_count = new_str.lines().count();
+	let new_lines_count = content.lines().count();
 
 	let content_message = if lines_replaced_count == 1 && new_lines_count == 1 {
 		format!("Successfully replaced line {} with new content", start_line)

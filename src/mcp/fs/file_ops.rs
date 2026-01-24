@@ -23,15 +23,15 @@ use tokio::fs as tokio_fs;
 
 // Helper function to format file content with line numbers and smart truncation
 // This is the core logic shared between view and view_many commands
-fn format_file_content_with_numbers(lines: &[&str], view_range: Option<(usize, i64)>) -> String {
-	format_content_with_line_numbers(lines, 1, view_range)
+fn format_file_content_with_numbers(lines: &[&str], line_range: Option<(usize, i64)>) -> String {
+	format_content_with_line_numbers(lines, 1, line_range)
 }
 
-// View the content of a file following Anthropic specification - with line numbers and view_range support
+// View the content of a file following Anthropic specification - with line numbers and line_range support
 pub async fn view_file_spec(
 	call: &McpToolCall,
 	path: &Path,
-	view_range: Option<(usize, i64)>,
+	line_range: Option<(usize, i64)>,
 ) -> Result<McpToolResult> {
 	if !path.exists() {
 		return Ok(McpToolResult {
@@ -124,7 +124,7 @@ pub async fn view_file_spec(
 		.map_err(|e| anyhow!("Permission denied. Cannot read file: {}", e))?;
 	let lines: Vec<&str> = content.lines().collect();
 
-	let content_with_numbers = format_file_content_with_numbers(&lines, view_range);
+	let content_with_numbers = format_file_content_with_numbers(&lines, line_range);
 
 	// Check if this is an error message from the helper function
 	if content_with_numbers.starts_with("Start line")

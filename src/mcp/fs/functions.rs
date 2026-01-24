@@ -113,41 +113,41 @@ pub fn get_text_editor_function() -> McpFunction {
 			- After ANY edit (str_replace, insert, line_replace), line numbers become invalid
 			- ALWAYS use 'view' command first to get current line numbers before line_replace
 			- PREFER line_replace when you know exact lines (fastest), str_replace when you know content
-			- new_str contains RAW FILE CONTENT - use actual whitespace characters, not escape sequences (tabs=actual tabs, NOT \\t)!
+			- content parameter contains RAW FILE CONTENT - use actual whitespace characters, not escape sequences (tabs=actual tabs, NOT \\t)!
 			- FOR MULTIPLE EDITS: Use batch_edit tool instead if file hasn't been modified yet
 
 			Available commands:
 
 			`view`: Examine file content or list directory contents
 			- View entire file: `{\"command\": \"view\", \"path\": \"src/main.rs\"}`
-			- View specific lines: `{\"command\": \"view\", \"path\": \"src/main.rs\", \"view_range\": [10, 20]}`
+			- View specific lines: `{\"command\": \"view\", \"path\": \"src/main.rs\", \"lines\": [10, 20]}`
 			- List directory: `{\"command\": \"view\", \"path\": \"src/\"}`
 			- Returns content as plain text with line numbers (1-indexed) for editing reference
-			- Smart elision: when using view_range, shows context with [...X lines more] indicators
+			- Smart elision: when using lines parameter, shows context with [...X lines more] indicators
 
 			`create`: Create new file with specified content
-			- `{\"command\": \"create\", \"path\": \"src/new_module.rs\", \"file_text\": \"pub fn hello() {\\n    println!(\\\"Hello!\\\");\\n}\"}`
+			- `{\"command\": \"create\", \"path\": \"src/new_module.rs\", \"content\": \"pub fn hello() {\\n    println!(\\\"Hello!\\\");\\n}\"}`
 			- Creates parent directories if they don't exist
 			- Returns error if file already exists to prevent accidental overwrites
 
 			`str_replace`: Replace specific string in file with new content
-			- `{\"command\": \"str_replace\", \"path\": \"src/main.rs\", \"old_str\": \"fn old_name()\", \"new_str\": \"fn new_name()\"}`
-			- The old_str must match exactly, including whitespace and indentation
+			- `{\"command\": \"str_replace\", \"path\": \"src/main.rs\", \"old_text\": \"fn old_name()\", \"new_text\": \"fn new_name()\"}`
+			- The old_text must match exactly, including whitespace and indentation
 			- Returns error if string appears 0 times or more than once for safety
 			- Content-based replacement - works regardless of line numbers
 			- Use when exact text is known but line numbers uncertain
 
 			`insert`: Insert text at specific location in file
-			- `{\"command\": \"insert\", \"path\": \"src/main.rs\", \"insert_line\": 5, \"new_str\": \"    // New comment\\n    let x = 10;\"}`
-			- insert_line specifies the line number after which to insert (0 for beginning of file)
+			- `{\"command\": \"insert\", \"path\": \"src/main.rs\", \"insert_after_line\": 5, \"content\": \"    // New comment\\n    let x = 10;\"}`
+			- insert_after_line specifies the line number after which to insert (0 for beginning of file)
 			- WARNING: Changes line numbers for all content AFTER insertion point
 
 			`line_replace`: Replace content within specific line range
-			- `{\"command\": \"line_replace\", \"path\": \"src/main.rs\", \"view_range\": [5, 8], \"new_str\": \"fn updated_function() {\\n    // New implementation\\n}\"}`
-			- Replaces lines from view_range[0] to view_range[1] (inclusive, 1-indexed)
+			- `{\"command\": \"line_replace\", \"path\": \"src/main.rs\", \"lines\": [5, 8], \"content\": \"fn updated_function() {\\n    // New implementation\\n}\"}`
+			- Replaces lines from lines[0] to lines[1] (inclusive, 1-indexed)
 			- FASTEST option - 3x faster than str_replace (no content searching)
-			- **REMOVE LINES**: Use empty `new_str` (\"\" or \"\") to remove lines completely
-			- **USEFUL FOR REFACTORING**: Extract code with `extract_lines`, then remove original with `line_replace` + empty `new_str`
+			- **REMOVE LINES**: Use empty content (\"\" or \"\") to remove lines completely
+			- **USEFUL FOR REFACTORING**: Extract code with `extract_lines`, then remove original with `line_replace` + empty content
 			- CRITICAL: Line numbers change after ANY edit operation
 			- NEVER use line_replace twice without viewing file between operations
 			- ALWAYS use 'view' first to get current line numbers before line_replace
@@ -230,29 +230,29 @@ pub fn get_text_editor_function() -> McpFunction {
 					"maxItems": 50,
 					"description": "Array of absolute file paths for view_many command"
 				},
-				"view_range": {
+				"lines": {
 					"type": "array",
 					"items": {"type": "integer"},
 					"minItems": 2,
 					"maxItems": 2,
-					"description": "Optional array of two integers [start_line, end_line] for viewing specific lines (1-indexed, -1 for end means read to end of file)"
+					"description": "Line range [start_line, end_line] for viewing or replacing (1-indexed, inclusive). Supports negative indexing: -1 for last line"
 				},
-				"file_text": {
+				"content": {
 					"type": "string",
-					"description": "Content to write when creating a new file"
+					"description": "Content for create, insert, or line_replace operations. Raw text with actual whitespace (not escape sequences)"
 				},
-				"old_str": {
+				"old_text": {
 					"type": "string",
-					"description": "Text to replace (must match exactly including whitespace)"
+					"description": "Text to find and replace (must match exactly including whitespace) - for str_replace command"
 				},
-				"new_str": {
+				"new_text": {
 					"type": "string",
-					"description": "Raw file content exactly as it should appear in the file. Use actual tabs/spaces, NOT escape sequences like \\t or \\n. Copy exact indentation from original code. No string literal escaping needed - this is direct file content."
+					"description": "Replacement text for str_replace command. Raw text with actual whitespace (not escape sequences)"
 				},
-				"insert_line": {
+				"insert_after_line": {
 					"type": "integer",
 					"minimum": 0,
-					"description": "Line number after which to insert text (0 for beginning of file, 1-indexed)"
+					"description": "Insert content after this line number (0 = beginning of file, N = after line N)"
 				},
 			}
 		}),
