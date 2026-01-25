@@ -1682,7 +1682,7 @@ mod tests {
 			parameters: json!({
 				"command": "view",
 				"path": file_path.to_string_lossy(),
-				"view_range": [-1, -1]
+				"lines": [-1, -1]
 			}),
 		};
 
@@ -1702,7 +1702,7 @@ mod tests {
 			parameters: json!({
 				"command": "view",
 				"path": file_path.to_string_lossy(),
-				"view_range": [-2, -2]
+				"lines": [-2, -2]
 			}),
 		};
 
@@ -1722,7 +1722,7 @@ mod tests {
 			parameters: json!({
 				"command": "view",
 				"path": file_path.to_string_lossy(),
-				"view_range": [-3, -1]
+				"lines": [-3, -1]
 			}),
 		};
 
@@ -1752,7 +1752,7 @@ mod tests {
 			parameters: json!({
 				"command": "view",
 				"path": file_path.to_string_lossy(),
-				"view_range": [2, -2]
+				"lines": [2, -2]
 			}),
 		};
 
@@ -1793,7 +1793,7 @@ mod tests {
 			parameters: json!({
 				"command": "view",
 				"path": file_path.to_string_lossy(),
-				"view_range": [-5, -1]
+				"lines": [-5, -1]
 			}),
 		};
 
@@ -2097,7 +2097,7 @@ mod tests {
 			parameters: json!({
 				"command": "view",
 				"path": file_path.to_string_lossy(),
-				"view_range": [-1, -1]
+				"lines": [-1, -1]
 			}),
 		};
 
@@ -2117,7 +2117,7 @@ mod tests {
 			parameters: json!({
 				"command": "view",
 				"path": file_path.to_string_lossy(),
-				"view_range": [-2, -1]
+				"lines": [-2, -1]
 			}),
 		};
 
