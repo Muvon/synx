@@ -149,6 +149,7 @@ pub struct ChatSession {
 	pub continuation_disabled: bool,   // Flag to temporarily disable continuation triggers
 	pub was_resumed: bool, // Flag indicating if this session was resumed from an existing file
 	pub pending_prompt: Option<String>, // Pending prompt text to be processed as user input
+	pub initial_status_shown: bool, // Flag to track if initial status line was displayed
 }
 
 /// Parameters for creating a new ChatSession
@@ -211,21 +212,23 @@ impl ChatSession {
 			total_layer_time_ms: 0,
 		};
 
+		let session = Session {
+			info: session_info,
+			messages: Vec::new(),
+			session_file: None,
+			current_non_cached_tokens: 0,
+			current_total_tokens: 0,
+			last_cache_checkpoint_time: SystemTime::now()
+				.duration_since(UNIX_EPOCH)
+				.unwrap_or_default()
+				.as_secs(),
+		};
+
 		Self {
-			session: Session {
-				info: session_info,
-				messages: Vec::new(),
-				session_file: None,
-				current_non_cached_tokens: 0,
-				current_total_tokens: 0,
-				last_cache_checkpoint_time: SystemTime::now()
-					.duration_since(UNIX_EPOCH)
-					.unwrap_or_default()
-					.as_secs(),
-			},
+			session,
 			last_response: String::new(),
 			model: model_name,
-			role: params.role.to_string(),      // Store the role in ChatSession
+			role: params.role.to_string(),
 			temperature: temperature_value,     // Use the provided temperature
 			top_p: top_p_value,                 // Use the provided top_p
 			top_k: top_k_value,                 // Use the provided top_k
@@ -240,6 +243,7 @@ impl ChatSession {
 			continuation_disabled: false,       // Initialize continuation control flag
 			was_resumed: false,                 // This is a new session
 			pending_prompt: None,               // Initialize pending prompt
+			initial_status_shown: false,        // Initialize status display flag
 		}
 	}
 
@@ -407,6 +411,7 @@ impl ChatSession {
 						continuation_disabled: false,       // Initialize continuation control flag
 						was_resumed: true,                  // This session was resumed from file
 						pending_prompt: None,               // Initialize pending prompt
+						initial_status_shown: true,         // Don't show status for resumed sessions
 					};
 
 					// Initialize spending threshold checkpoint for loaded sessions

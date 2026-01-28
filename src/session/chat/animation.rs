@@ -56,7 +56,13 @@ fn format_elapsed_time(elapsed: Duration) -> String {
 }
 
 // Show loading animation while waiting for response (interactive mode)
-pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Result<()> {
+pub async fn show_loading_animation(
+	cancel_flag: Arc<AtomicBool>,
+	cost: f64,
+	input_tokens: u64,
+	output_tokens: u64,
+	max_session_tokens_threshold: usize,
+) -> Result<()> {
 	// Create a spinner with cost-aware message in prompt format
 	let spinner = ProgressBar::new_spinner();
 
@@ -71,9 +77,16 @@ pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> 
 	// Start time tracking
 	let start_time = std::time::Instant::now();
 
-	// Format initial message with cost
+	// Format initial message with cost and context percentage
 	let base_message = if cost > 0.0 {
-		format!("[~${cost:.2}] Working …")
+		if max_session_tokens_threshold > 0 {
+			let total_tokens = input_tokens + output_tokens;
+			let percentage =
+				(total_tokens as f64 / max_session_tokens_threshold as f64 * 100.0).min(100.0);
+			format!("[${:.2}|{:.1}%] Working …", cost, percentage)
+		} else {
+			format!("[${:.2}|∞] Working …", cost)
+		}
 	} else {
 		"Working …".to_string()
 	};
@@ -118,10 +131,23 @@ pub async fn show_no_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Resul
 }
 
 // Smart animation that automatically detects interactive vs non-interactive mode
-pub async fn show_smart_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Result<()> {
+pub async fn show_smart_animation(
+	cancel_flag: Arc<AtomicBool>,
+	cost: f64,
+	input_tokens: u64,
+	output_tokens: u64,
+	max_session_tokens_threshold: usize,
+) -> Result<()> {
 	if std::io::stdin().is_terminal() {
 		// Interactive mode - show spinner animation
-		show_loading_animation(cancel_flag, cost).await
+		show_loading_animation(
+			cancel_flag,
+			cost,
+			input_tokens,
+			output_tokens,
+			max_session_tokens_threshold,
+		)
+		.await
 	} else {
 		// Non-interactive mode - show static cost line
 		show_no_animation(cancel_flag, cost).await

@@ -231,6 +231,13 @@ To fix this issue
 
 	let mut chat_session = ChatSession::initialize(session_params).await?;
 
+	// Display initial status line for new sessions (not resumed)
+	if !chat_session.was_resumed {
+		use colored::*;
+		println!("{}", "? for shortcuts • /help for commands".bright_black());
+		chat_session.initial_status_shown = true;
+	}
+
 	// Apply runtime overrides (these override the session initialization values)
 	if let Some(runtime_model) = &model {
 		chat_session.model = runtime_model.clone();
@@ -567,6 +574,9 @@ pub async fn execute_api_call_and_process_response(
 	let animation_cancel = Arc::new(AtomicBool::new(false));
 	let animation_cancel_clone = animation_cancel.clone();
 	let current_cost = chat_session.session.info.total_cost;
+	let input_tokens = chat_session.session.info.input_tokens;
+	let output_tokens = chat_session.session.info.output_tokens;
+	let max_threshold = config.max_session_tokens_threshold;
 
 	// Set up monitor task to propagate global cancellation to animation
 	let animation_cancel_monitor = animation_cancel.clone();
@@ -584,7 +594,14 @@ pub async fn execute_api_call_and_process_response(
 
 	let animation_task = tokio::spawn(async move {
 		if is_interactive {
-			let _ = show_loading_animation(animation_cancel_clone, current_cost).await;
+			let _ = show_loading_animation(
+				animation_cancel_clone,
+				current_cost,
+				input_tokens,
+				output_tokens,
+				max_threshold,
+			)
+			.await;
 		} else {
 			let _ = show_no_animation(animation_cancel_clone, current_cost).await;
 		}
@@ -1132,6 +1149,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					chat_session.session.info.input_tokens,
 					chat_session.session.info.output_tokens,
 					&chat_session.session.info.name,
+					false, // Don't show status
 				)?
 			} else {
 				log_debug!(
@@ -1153,6 +1171,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 							chat_session.session.info.input_tokens,
 							chat_session.session.info.output_tokens,
 							&chat_session.session.info.name,
+							false,
 						)
 						.unwrap_or(InputResult::Text(String::new()))
 					})
@@ -1171,6 +1190,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				chat_session.session.info.input_tokens,
 				chat_session.session.info.output_tokens,
 				&chat_session.session.info.name,
+				false, // Don't show status - already shown at session start
 			)?
 		};
 

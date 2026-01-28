@@ -123,6 +123,19 @@ fn display_status_line(input_tokens: u64, output_tokens: u64, max_session_tokens
 	println!("{}", status_parts.join(" • ").bright_black());
 }
 
+fn calculate_context_percentage(
+	input_tokens: u64,
+	output_tokens: u64,
+	max_session_tokens_threshold: usize,
+) -> Option<f64> {
+	if max_session_tokens_threshold > 0 {
+		let total_tokens = input_tokens + output_tokens;
+		Some((total_tokens as f64 / max_session_tokens_threshold as f64 * 100.0).min(100.0))
+	} else {
+		None
+	}
+}
+
 fn display_shortcuts_help() {
 	use std::io::{self, Write};
 
@@ -193,6 +206,7 @@ pub fn read_user_input(
 	input_tokens: u64,
 	output_tokens: u64,
 	session_id: &str,
+	show_status: bool,
 ) -> Result<InputResult> {
 	let add_without_sending = Arc::new(AtomicBool::new(false));
 
@@ -283,18 +297,32 @@ pub fn read_user_input(
 		}
 	}
 
-	// Display status line with context usage and shortcuts hint
-	display_status_line(
-		input_tokens,
-		output_tokens,
-		octomind_config.max_session_tokens_threshold,
-	);
+	// Display status line only if requested (once at session start)
+	if show_status {
+		display_status_line(
+			input_tokens,
+			output_tokens,
+			octomind_config.max_session_tokens_threshold,
+		);
+	}
 
-	// Set prompt with colors if terminal supports them and include cost estimation
+	// Set prompt with cost and context percentage
 	let prompt = if estimated_cost > 0.0 {
-		format!("[~${:.2}] > ", estimated_cost)
-			.bright_blue()
-			.to_string()
+		let context_pct = calculate_context_percentage(
+			input_tokens,
+			output_tokens,
+			octomind_config.max_session_tokens_threshold,
+		);
+
+		if let Some(pct) = context_pct {
+			format!("[${:.2}|{:.1}%] > ", estimated_cost, pct)
+				.bright_blue()
+				.to_string()
+		} else {
+			format!("[${:.2}|∞] > ", estimated_cost)
+				.bright_blue()
+				.to_string()
+		}
 	} else {
 		"> ".bright_blue().to_string()
 	};

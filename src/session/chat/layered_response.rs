@@ -64,8 +64,18 @@ pub async fn process_layered_response(
 	let animation_cancel = Arc::new(AtomicBool::new(false));
 	let animation_cancel_clone = animation_cancel.clone();
 	let current_cost = chat_session.session.info.total_cost;
+	let input_tokens = chat_session.session.info.input_tokens;
+	let output_tokens = chat_session.session.info.output_tokens;
+	let max_threshold = config.max_session_tokens_threshold;
 	let animation_task = tokio::spawn(async move {
-		let _ = show_smart_animation(animation_cancel_clone, current_cost).await;
+		let _ = show_smart_animation(
+			animation_cancel_clone,
+			current_cost,
+			input_tokens,
+			output_tokens,
+			max_threshold,
+		)
+		.await;
 	});
 
 	// Display status message BEFORE processing starts - cleaner flow
