@@ -929,10 +929,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	// Setup system prompt and cache using helper function (BEFORE showing interactive prompts)
 	setup_system_prompt_and_cache(&mut chat_session, &config_for_role, &role, true).await?;
 
-	println!("Interactive coding session started. Type your questions/requests.");
-	println!("Type /help for available commands.");
-
-	// Show history usage info for new sessions
+	// Show history usage info for new sessions only
 	if chat_session.session.messages.len() <= 2 {
 		// System + welcome messages
 		use colored::*;
@@ -1134,6 +1131,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					&role,
 					chat_session.session.info.input_tokens,
 					chat_session.session.info.output_tokens,
+					&chat_session.session.info.name,
 				)?
 			} else {
 				log_debug!(
@@ -1154,6 +1152,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 							&role,
 							chat_session.session.info.input_tokens,
 							chat_session.session.info.output_tokens,
+							&chat_session.session.info.name,
 						)
 						.unwrap_or(InputResult::Text(String::new()))
 					})
@@ -1171,10 +1170,12 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				&role,
 				chat_session.session.info.input_tokens,
 				chat_session.session.info.output_tokens,
+				&chat_session.session.info.name,
 			)?
 		};
 
 		// Handle the input result with proper error recovery
+
 		let input = match input_result {
 			InputResult::Text(text) => text,
 			InputResult::AddWithoutSending(text) => {
@@ -1214,12 +1215,10 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				continue;
 			}
 			InputResult::Exit => {
-				// Ctrl+D pressed - graceful exit
-				println!("Ending session. Your conversation has been saved.");
-
+				// Ctrl+D pressed - graceful exit handled in input.rs
 				// Ensure session is saved
 				if let Err(e) = chat_session.save() {
-					eprintln!("Warning: Failed to save session: {}", e);
+					log_debug!("Warning: Failed to save session: {}", e);
 				}
 				break;
 			}
@@ -1227,7 +1226,14 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 		// Check if the input is an exit command
 		if input == "/exit" || input == "/quit" {
-			println!("Ending session. Your conversation has been saved.");
+			// Show resume command with session ID
+			use colored::*;
+			let resume_cmd = format!(
+				"octomind session --resume {}",
+				chat_session.session.info.name
+			)
+			.bright_cyan();
+			println!("\nTo continue this session, run: {}", resume_cmd);
 			break;
 		}
 
@@ -1542,8 +1548,6 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 		// Clear operation context at the end of each successful iteration
 		*current_operation.lock().unwrap() = None;
-
-		// Clean up the cancellation sync task
 	}
 
 	Ok(())

@@ -119,6 +119,7 @@ fn display_status_line(input_tokens: u64, output_tokens: u64, max_session_tokens
 	}
 
 	status_parts.push("? for shortcuts".to_string());
+	status_parts.push("/help for commands".to_string());
 	println!("{}", status_parts.join(" • ").bright_black());
 }
 
@@ -168,7 +169,7 @@ fn display_shortcuts_help() {
 	);
 	println!(
 		"{}",
-		"│ ↑/↓         - Navigate command history                  │".bright_black()
+		"│ Ctrl+P/N    - Navigate command history                  │".bright_black()
 	);
 	println!(
 		"{}",
@@ -191,6 +192,7 @@ pub fn read_user_input(
 	role: &str,
 	input_tokens: u64,
 	output_tokens: u64,
+	session_id: &str,
 ) -> Result<InputResult> {
 	let add_without_sending = Arc::new(AtomicBool::new(false));
 
@@ -340,15 +342,17 @@ pub fn read_user_input(
 			Ok(InputResult::Cancelled)
 		}
 		Err(ReadlineError::Eof) => {
-			// Ctrl+D - Show session file path before exiting
-			println!("\nExiting session...");
+			// Ctrl+D - Show resume command
+			use colored::*;
+			let resume_cmd = format!("octomind session --resume {}", session_id).bright_cyan();
+			println!("\nTo continue this session, run: {}", resume_cmd);
 
-			// Show session file path if available
+			// Debug logging for session preservation
+
 			if let Ok(sessions_dir) = crate::session::get_sessions_dir() {
-				println!("Session files saved in: {}", sessions_dir.display());
+				crate::log_debug!("Session files saved in: {}", sessions_dir.display());
 			}
-
-			log_info!("Session preserved for future reference.");
+			crate::log_debug!("Session preserved for future reference.");
 			Ok(InputResult::Exit)
 		}
 		Err(err) => {

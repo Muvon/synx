@@ -22,12 +22,45 @@ use std::sync::Arc;
 
 use std::time::Duration;
 
+// Format elapsed time in human-readable format
+fn format_elapsed_time(elapsed: Duration) -> String {
+	let total_secs = elapsed.as_secs();
+
+	if total_secs < 60 {
+		// Less than 1 minute: show seconds
+		format!("{}s", total_secs)
+	} else if total_secs < 3600 {
+		// Less than 1 hour: show minutes and seconds
+		let mins = total_secs / 60;
+		let secs = total_secs % 60;
+		if secs > 0 {
+			format!("{}m {}s", mins, secs)
+		} else {
+			format!("{}m", mins)
+		}
+	} else {
+		// 1 hour or more: show hours, minutes, and seconds
+		let hours = total_secs / 3600;
+		let mins = (total_secs % 3600) / 60;
+		let secs = total_secs % 60;
+		if mins > 0 && secs > 0 {
+			format!("{}h {}m {}s", hours, mins, secs)
+		} else if mins > 0 {
+			format!("{}h {}m", hours, mins)
+		} else if secs > 0 {
+			format!("{}h {}s", hours, secs)
+		} else {
+			format!("{}h", hours)
+		}
+	}
+}
+
 // Show loading animation while waiting for response (interactive mode)
 pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Result<()> {
 	// Create a spinner with cost-aware message in prompt format
 	let spinner = ProgressBar::new_spinner();
 
-	// Set a clean style with spinner and cost-aware message
+	// Set a clean style with spinner and elapsed time
 	spinner.set_style(
 		ProgressStyle::default_spinner()
 			.template(" {spinner:.cyan} {msg:.cyan}")
@@ -35,18 +68,31 @@ pub async fn show_loading_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> 
 			.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧"),
 	);
 
-	// Format message with cost in prompt-like format
-	let message = if cost > 0.0 {
-		format!("[~${cost:.2}] Generating response...")
+	// Start time tracking
+	let start_time = std::time::Instant::now();
+
+	// Format initial message with cost
+	let base_message = if cost > 0.0 {
+		format!("[~${cost:.2}] Working …")
 	} else {
-		"Generating response...".to_string()
+		"Working …".to_string()
 	};
-	spinner.set_message(message);
+	spinner.set_message(base_message.clone());
 	spinner.enable_steady_tick(Duration::from_millis(50));
 
-	// Wait for cancellation with faster polling
+	// Wait for cancellation with faster polling and update elapsed time
 	while !cancel_flag.load(Ordering::SeqCst) {
-		tokio::time::sleep(Duration::from_millis(10)).await;
+		tokio::time::sleep(Duration::from_millis(100)).await;
+
+		// Update message with elapsed time every 100ms
+		let elapsed = start_time.elapsed();
+		let elapsed_secs = elapsed.as_secs();
+		let message = if elapsed_secs > 0 {
+			format!("{} ({})", base_message, format_elapsed_time(elapsed))
+		} else {
+			base_message.clone()
+		};
+		spinner.set_message(message);
 	}
 
 	// Clean finish - removes the spinner completely
