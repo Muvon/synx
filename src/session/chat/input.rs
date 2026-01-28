@@ -38,7 +38,6 @@ pub enum InputResult {
 	AddWithoutSending(String),
 }
 
-// Custom event handler for smart Ctrl+E behavior
 struct SmartCtrlEHandler;
 
 impl ConditionalEventHandler for SmartCtrlEHandler {
@@ -49,21 +48,16 @@ impl ConditionalEventHandler for SmartCtrlEHandler {
 		_positive: bool,
 		ctx: &rustyline::EventContext,
 	) -> Option<Cmd> {
-		// Check if there's a hint available using the EventContext
 		if ctx.has_hint() {
-			// There's a hint, so complete it
 			Some(Cmd::CompleteHint)
 		} else {
-			// No hint, use default Emacs behavior (move to end of line)
-			// Return None to let the default key binding take effect
-			None
+			None // Default Emacs behavior (move to end of line)
 		}
 	}
 }
 
-// Custom handler for Ctrl+G - sets flag and accepts the line
 struct CtrlGHandler {
-	add_without_sending: Arc<AtomicBool>,
+	flag: Arc<AtomicBool>,
 }
 
 impl ConditionalEventHandler for CtrlGHandler {
@@ -74,22 +68,130 @@ impl ConditionalEventHandler for CtrlGHandler {
 		_positive: bool,
 		_ctx: &rustyline::EventContext,
 	) -> Option<Cmd> {
-		// Set the flag to indicate this should be added without sending
-		self.add_without_sending.store(true, Ordering::SeqCst);
-		// Accept the line
+		self.flag.store(true, Ordering::SeqCst);
 		Some(Cmd::AcceptLine)
 	}
 }
 
+struct ShowHelpHandler;
+
+impl ConditionalEventHandler for ShowHelpHandler {
+	fn handle(
+		&self,
+		_evt: &Event,
+		_n: RepeatCount,
+		_positive: bool,
+		ctx: &rustyline::EventContext,
+	) -> Option<Cmd> {
+		if ctx.line().is_empty() {
+			use std::io::{self, Write};
+
+			// Clear current line
+			print!("\r\x1B[K");
+			let _ = io::stdout().flush();
+
+			// Print help
+			display_shortcuts_help();
+
+			// Manually print prompt to make it visible again
+			print!("> ");
+			let _ = io::stdout().flush();
+
+			Some(Cmd::Noop)
+		} else {
+			None
+		}
+	}
+}
+
 use crate::log_info;
+
+fn display_status_line(input_tokens: u64, output_tokens: u64, max_session_tokens_threshold: usize) {
+	let mut status_parts = Vec::new();
+
+	if max_session_tokens_threshold > 0 {
+		let total_tokens = input_tokens + output_tokens;
+		let percentage =
+			(total_tokens as f64 / max_session_tokens_threshold as f64 * 100.0).min(100.0);
+		status_parts.push(format!("Context: {:.1}%", percentage));
+	} else {
+		status_parts.push("Context: unlimited".to_string());
+	}
+
+	status_parts.push("? for shortcuts".to_string());
+	println!("{}", status_parts.join(" • ").bright_black());
+}
+
+fn display_shortcuts_help() {
+	use std::io::{self, Write};
+
+	println!();
+	println!(
+		"{}",
+		"╭─ Keyboard Shortcuts ─────────────────────────────────────╮".bright_cyan()
+	);
+	println!(
+		"{}",
+		"│ /           - Commands (type /help for list)            │".bright_black()
+	);
+	println!(
+		"{}",
+		"│ Tab         - Complete command/file                     │".bright_black()
+	);
+	println!(
+		"{}",
+		"│ Shift+Tab   - Search history                            │".bright_black()
+	);
+	println!(
+		"{}",
+		"│ Ctrl+J      - Insert newline (multi-line input)         │".bright_black()
+	);
+	println!(
+		"{}",
+		"│ Ctrl+G      - Add message without sending to API        │".bright_black()
+	);
+	println!(
+		"{}",
+		"│ Ctrl+E      - Accept hint (when available)              │".bright_black()
+	);
+	println!(
+		"{}",
+		"│ Ctrl+R      - Search command history                    │".bright_black()
+	);
+	println!(
+		"{}",
+		"│ Ctrl+C      - Cancel current operation                  │".bright_black()
+	);
+	println!(
+		"{}",
+		"│ Ctrl+D      - Exit session                              │".bright_black()
+	);
+	println!(
+		"{}",
+		"│ ↑/↓         - Navigate command history                  │".bright_black()
+	);
+	println!(
+		"{}",
+		"│ →           - Accept hint (when at end of line)         │".bright_black()
+	);
+	println!(
+		"{}",
+		"╰──────────────────────────────────────────────────────────╯".bright_cyan()
+	);
+	println!();
+
+	// Force flush to ensure everything is displayed
+	let _ = io::stdout().flush();
+}
 
 // Read user input with support for multiline input, command completion, and persistent history
 pub fn read_user_input(
 	estimated_cost: f64,
 	octomind_config: &crate::config::Config,
 	role: &str,
+	input_tokens: u64,
+	output_tokens: u64,
 ) -> Result<InputResult> {
-	// Flag to track if Ctrl+G was pressed
 	let add_without_sending = Arc::new(AtomicBool::new(false));
 
 	// Configure rustyline with proper completion behavior for file completion
@@ -105,7 +207,6 @@ pub fn read_user_input(
 	// Create editor with our custom helper
 	let mut editor = Editor::with_config(config)?;
 
-	// Add command completion
 	use crate::session::chat_helper::CommandHelper;
 	editor.set_helper(Some(CommandHelper::new(octomind_config, role)));
 
@@ -156,13 +257,16 @@ pub fn read_user_input(
 		EventHandler::Simple(Cmd::Newline),
 	);
 
-	// Ctrl+G to submit without sending to API
-	let add_without_sending_clone = add_without_sending.clone();
 	editor.bind_sequence(
 		Event::KeySeq(vec![KeyEvent::new('g', Modifiers::CTRL)]),
 		EventHandler::Conditional(Box::new(CtrlGHandler {
-			add_without_sending: add_without_sending_clone,
+			flag: add_without_sending.clone(),
 		})),
+	);
+
+	editor.bind_sequence(
+		Event::KeySeq(vec![KeyEvent::new('?', Modifiers::empty())]),
+		EventHandler::Conditional(Box::new(ShowHelpHandler)),
 	);
 
 	// Load persistent history using role-based system
@@ -176,6 +280,13 @@ pub fn read_user_input(
 			log_info!("Could not load history for role '{}': {}", role, e);
 		}
 	}
+
+	// Display status line with context usage and shortcuts hint
+	display_status_line(
+		input_tokens,
+		output_tokens,
+		octomind_config.max_session_tokens_threshold,
+	);
 
 	// Set prompt with colors if terminal supports them and include cost estimation
 	let prompt = if estimated_cost > 0.0 {

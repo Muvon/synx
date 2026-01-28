@@ -23,6 +23,7 @@ pub mod history; // Role-based history management
 pub mod image; // Image processing and attachment utilities
 pub mod layers; // Layered architecture implementation
 pub mod logger; // Request/response logging utilities
+pub mod modal; // Terminal modal overlay system
 mod model_utils; // Model-specific utility functions
 mod project_context; // Project context collection and management
 					 // Provider abstraction layer moved to src/providers
