@@ -17,13 +17,25 @@ pub mod commands;
 mod core;
 mod display;
 mod messages;
-mod runner;
 pub mod utils;
 
+// New modular components (extracted from runner.rs)
+mod api_executor;
+mod api_prep;
+mod error_utils;
+mod layer_processor;
+mod main_loop;
+mod params;
+mod prompt_setup;
+mod setup;
+
+pub use api_executor::execute_api_call_and_process_response;
+pub use api_prep::prepare_for_api_call;
 pub use core::ChatSession;
-pub use runner::{
-	execute_api_call_and_process_response, format_provider_error, prepare_for_api_call,
-	process_layers_if_enabled, run_interactive_session, run_interactive_session_with_input,
-	setup_and_initialize_session, setup_system_prompt_and_cache,
-};
+pub use error_utils::{format_provider_error, handle_api_error};
+pub use layer_processor::process_layers_if_enabled;
+pub use main_loop::{run_interactive_session, run_interactive_session_with_input};
+pub use params::{extract_session_params, SessionParams};
+pub use prompt_setup::setup_system_prompt_and_cache;
+pub use setup::setup_and_initialize_session;
 pub use utils::{format_number, get_initial_messages};

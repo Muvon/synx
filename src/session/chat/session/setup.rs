@@ -1,0 +1,154 @@
+// Copyright 2025 Muvon Un Limited
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Session setup and initialization utilities
+
+use super::core::{ChatSession, SessionInitParams};
+use super::params::extract_session_params;
+use crate::config::Config;
+use crate::log_info;
+use anyhow::Result;
+use colored::*;
+use std::io::IsTerminal;
+use std::time::Duration;
+
+// Helper function to setup session parameters and initialize chat session
+pub async fn setup_and_initialize_session<T: std::fmt::Debug>(
+	args: &T,
+	config: &Config,
+) -> Result<(ChatSession, Config, String, bool)> {
+	use indicatif::{ProgressBar, ProgressStyle};
+
+	// Show loading spinner in interactive mode
+	let spinner = if std::io::stdin().is_terminal() {
+		let sp = ProgressBar::new_spinner();
+		sp.set_style(
+			ProgressStyle::default_spinner()
+				.template(" {spinner:.cyan} {msg:.cyan}")
+				.unwrap()
+				.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧"),
+		);
+		sp.set_message("Starting session...");
+		sp.enable_steady_tick(Duration::from_millis(80));
+		Some(sp)
+	} else {
+		None
+	};
+
+	// Extract session parameters
+	let (name, resume, resume_recent, model, max_tokens, temperature, role, max_retries) =
+		extract_session_params(args, config);
+
+	// Get role config for defaults
+	let (role_config, _, _, _, _) = config.get_role_config(&role);
+
+	// Get current directory
+	let current_dir = std::env::current_dir()?;
+
+	// Get the merged configuration for the specified role
+	let config_for_role = config.get_merged_config_for_role(&role);
+
+	// Validate session token threshold if enabled (before initializing session)
+	if config_for_role.max_session_tokens_threshold > 0 {
+		if let Err(e) =
+			crate::session::validate_session_token_threshold(&config_for_role, &role, &current_dir)
+				.await
+		{
+			return Err(anyhow::anyhow!(
+				"Session initialization failed: {}\nTo fix this issue\n1. Increase max_session_tokens_threshold in your config\n2. Or disable session continuation by setting max_session_tokens_threshold = 0\n3. Or reduce the number of MCP servers to lower tool overhead",
+				e
+			));
+		}
+	}
+
+	// Create or load session
+	let mut session_params = SessionInitParams::new(&config_for_role, &role);
+
+	if let Some(name) = name {
+		session_params = session_params.with_name(name);
+	}
+	if let Some(resume) = resume {
+		session_params = session_params.with_resume(resume);
+	}
+	if resume_recent {
+		session_params = session_params.with_resume_recent(true);
+	}
+	if let Some(model) = model.clone() {
+		session_params = session_params.with_model(model);
+	}
+
+	// Use CLI temperature if provided, otherwise use role config temperature
+	let effective_temperature = temperature.unwrap_or(role_config.temperature);
+	session_params = session_params.with_temperature(effective_temperature);
+
+	// Use CLI max_tokens if provided, otherwise use config default
+	let effective_max_tokens =
+		max_tokens.unwrap_or_else(|| config_for_role.get_effective_max_tokens());
+	session_params = session_params.with_max_tokens(effective_max_tokens);
+
+	// Use CLI max_retries if provided, otherwise use root config max_retries
+	let effective_max_retries = max_retries.unwrap_or(config_for_role.max_retries);
+	session_params = session_params.with_max_retries(effective_max_retries);
+
+	// Clean up spinner BEFORE initializing session (which prints messages)
+	if let Some(sp) = spinner {
+		sp.finish_and_clear();
+		// Clear entire line and move cursor to beginning
+		print!("\x1B[2K\r");
+		std::io::Write::flush(&mut std::io::stdout()).ok();
+	}
+
+	let mut chat_session = ChatSession::initialize(session_params).await?;
+
+	// Display initial status line for new sessions (not resumed)
+	if !chat_session.was_resumed {
+		println!("{}", "? for shortcuts • /help for commands".bright_black());
+		chat_session.initial_status_shown = true;
+	}
+
+	// Apply runtime overrides (these override the session initialization values)
+	if let Some(runtime_model) = &model {
+		chat_session.model = runtime_model.clone();
+		log_info!("Using runtime model override: {}", runtime_model);
+	}
+
+	// Apply runtime temperature override if provided via CLI
+	if let Some(runtime_temperature) = temperature {
+		chat_session.temperature = runtime_temperature;
+		log_info!(
+			"Using runtime temperature override: {}",
+			runtime_temperature
+		);
+	}
+
+	// Apply runtime max_tokens override if provided via CLI
+	if let Some(runtime_max_tokens) = max_tokens {
+		chat_session.max_tokens = runtime_max_tokens;
+		log_info!("Using runtime_max_tokens override: {}", runtime_max_tokens);
+	}
+
+	// Apply runtime max_retries override if provided via CLI
+	if let Some(runtime_max_retries) = max_retries {
+		chat_session.max_retries = runtime_max_retries;
+		log_info!(
+			"Using runtime max_retries override: {}",
+			runtime_max_retries
+		);
+	}
+
+	// Track if the first message has been processed through layers
+	let first_message_processed = !chat_session.session.messages.is_empty();
+
+	Ok((chat_session, config_for_role, role, first_message_processed))
+}
