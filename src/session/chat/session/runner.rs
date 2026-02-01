@@ -1482,6 +1482,11 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			}
 		}
 
+		// CRITICAL FIX: Set processing state BEFORE adding user message
+		// This ensures cancellation cleanup works correctly if Ctrl+C is pressed
+		// between adding the message and starting the API call
+		*processing_state.lock().unwrap() = ProcessingState::CallingAPI;
+
 		// Add user message for standard processing flow
 		// CRITICAL FIX: Add user message unless continuation is pending or layers modified session
 		// Logic:
@@ -1517,8 +1522,8 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		// Capture message count BEFORE API call to detect if assistant message gets added
 		let messages_before_api = chat_session.session.messages.len();
 
-		// Set processing state to calling API
-		*processing_state.lock().unwrap() = ProcessingState::CallingAPI;
+		// Processing state already set to CallingAPI earlier (before adding user message)
+		// This ensures cancellation cleanup works correctly
 
 		// The cancellation is already being monitored by the watch channel
 		// No need for additional monitoring here
@@ -1542,7 +1547,30 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		.await
 		{
 			Ok(_) => {
-				// Update processing state to completed when done
+				// CRITICAL FIX: Check for cancellation BEFORE marking as completed
+				// If cancelled during HTTP request, we need to remove the user message
+				if cancellation.is_cancelled() {
+					log_debug!(
+						"Operation cancelled during or after API call - cleaning up user message"
+					);
+
+					// Check if assistant message was added (response was processed)
+					let messages_after_api = chat_session.session.messages.len();
+					let assistant_message_added = messages_after_api > messages_before_api;
+
+					if !assistant_message_added {
+						// No assistant response was processed - remove the user message
+						if user_message_index < chat_session.session.messages.len() {
+							chat_session.session.messages.truncate(user_message_index);
+							log_debug!("Removed user message due to cancellation before assistant response");
+						}
+					}
+					// If assistant message was added, keep everything (conversation state is valid)
+
+					continue; // Return to main loop for next user input
+				}
+
+				// Update processing state to completed when done (only if not cancelled)
 				*processing_state.lock().unwrap() = ProcessingState::CompletedWithResults;
 
 				// Update operation context with assistant message index if one was added
@@ -1553,15 +1581,6 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 						op.assistant_message_index = Some(messages_before_api);
 						log_debug!("Assistant message added at index {}", messages_before_api);
 					}
-				}
-
-				// CRITICAL FIX: Check for cancellation after API call and response processing
-				// This ensures we return to input prompt gracefully instead of continuing
-				if cancellation.is_cancelled() {
-					log_debug!(
-						"Operation cancelled after API call completion - returning to input prompt"
-					);
-					continue; // Return to main loop for next user input
 				}
 
 				// CRITICAL FIX: Check if continuation was triggered during tool processing
