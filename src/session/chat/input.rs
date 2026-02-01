@@ -14,6 +14,9 @@
 
 // User input handling module
 
+use crate::config::Config;
+use crate::mcp::get_available_functions;
+use crate::session::estimate_full_context_tokens;
 use crate::session::history::{append_to_session_history_file, load_session_history_from_file};
 use anyhow::Result;
 use colored::*;
@@ -106,13 +109,13 @@ impl ConditionalEventHandler for ShowHelpHandler {
 
 use crate::log_info;
 
-fn display_status_line(input_tokens: u64, output_tokens: u64, max_session_tokens_threshold: usize) {
+fn display_status_line(current_context_tokens: u64, max_session_tokens_threshold: usize) {
 	let mut status_parts = Vec::new();
 
 	if max_session_tokens_threshold > 0 {
-		let total_tokens = input_tokens + output_tokens;
-		let percentage =
-			(total_tokens as f64 / max_session_tokens_threshold as f64 * 100.0).min(100.0);
+		let percentage = (current_context_tokens as f64 / max_session_tokens_threshold as f64
+			* 100.0)
+			.min(100.0);
 		status_parts.push(format!("Context: {:.1}%", percentage));
 	} else {
 		status_parts.push("Context: unlimited".to_string());
@@ -124,13 +127,14 @@ fn display_status_line(input_tokens: u64, output_tokens: u64, max_session_tokens
 }
 
 fn calculate_context_percentage(
-	input_tokens: u64,
-	output_tokens: u64,
+	current_context_tokens: u64,
 	max_session_tokens_threshold: usize,
 ) -> Option<f64> {
 	if max_session_tokens_threshold > 0 {
-		let total_tokens = input_tokens + output_tokens;
-		Some((total_tokens as f64 / max_session_tokens_threshold as f64 * 100.0).min(100.0))
+		Some(
+			(current_context_tokens as f64 / max_session_tokens_threshold as f64 * 100.0)
+				.min(100.0),
+		)
 	} else {
 		None
 	}
@@ -198,15 +202,30 @@ fn display_shortcuts_help() {
 	let _ = io::stdout().flush();
 }
 
+/// Calculate current context tokens for the session
+/// This uses actual message count + system prompt + tools, NOT lifetime accumulated tokens
+pub async fn calculate_current_context_tokens(
+	messages: &[crate::session::Message],
+	config: &Config,
+	role: &str,
+) -> u64 {
+	// Get system prompt for the role
+	let (_, _, _, _, system_prompt) = config.get_role_config(role);
+
+	// Get available tools
+	let tools = get_available_functions(config).await;
+
+	// Calculate actual context tokens
+	estimate_full_context_tokens(messages, Some(system_prompt), Some(&tools)) as u64
+}
+
 // Read user input with support for multiline input, command completion, and persistent history
 pub fn read_user_input(
 	estimated_cost: f64,
-	octomind_config: &crate::config::Config,
+	octomind_config: &Config,
 	role: &str,
-	input_tokens: u64,
-	output_tokens: u64,
-	session_id: &str,
-	show_status: bool,
+	current_context_tokens: u64,
+	max_session_tokens_threshold: usize,
 ) -> Result<InputResult> {
 	let add_without_sending = Arc::new(AtomicBool::new(false));
 
@@ -297,22 +316,13 @@ pub fn read_user_input(
 		}
 	}
 
-	// Display status line only if requested (once at session start)
-	if show_status {
-		display_status_line(
-			input_tokens,
-			output_tokens,
-			octomind_config.max_session_tokens_threshold,
-		);
-	}
+	// Display status line for user feedback
+	display_status_line(current_context_tokens, max_session_tokens_threshold);
 
 	// Set prompt with cost and context percentage
 	let prompt = if estimated_cost > 0.0 {
-		let context_pct = calculate_context_percentage(
-			input_tokens,
-			output_tokens,
-			octomind_config.max_session_tokens_threshold,
-		);
+		let context_pct =
+			calculate_context_percentage(current_context_tokens, max_session_tokens_threshold);
 
 		if let Some(pct) = context_pct {
 			format!("[${:.2}|{:.1}%] > ", estimated_cost, pct)
@@ -371,16 +381,7 @@ pub fn read_user_input(
 		}
 		Err(ReadlineError::Eof) => {
 			// Ctrl+D - Show resume command
-			use colored::*;
-			let resume_cmd = format!("octomind session --resume {}", session_id).bright_cyan();
-			println!("\nTo continue this session, run: {}", resume_cmd);
-
-			// Debug logging for session preservation
-
-			if let Ok(sessions_dir) = crate::session::get_sessions_dir() {
-				crate::log_debug!("Session files saved in: {}", sessions_dir.display());
-			}
-			crate::log_debug!("Session preserved for future reference.");
+			println!("\n{}: /exit", "Type".bright_yellow());
 			Ok(InputResult::Exit)
 		}
 		Err(err) => {

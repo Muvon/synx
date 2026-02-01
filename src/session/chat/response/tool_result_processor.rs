@@ -15,8 +15,10 @@
 // Tool result processor module - handles tool result processing, caching, and follow-up API calls
 
 use crate::config::Config;
+use crate::mcp::get_available_functions;
 use crate::session::chat::animation::show_smart_animation;
 use crate::session::chat::session::ChatSession;
+use crate::session::estimate_full_context_tokens;
 use crate::session::ChatCompletionWithValidationParams;
 use crate::{log_debug, log_info};
 use anyhow::Result;
@@ -70,15 +72,22 @@ pub async fn process_tool_results(
 	// This provides instant feedback while tool results are being processed
 	let animation_cancel_flag = animation_cancel.clone();
 	let current_cost = chat_session.session.info.total_cost;
-	let input_tokens = chat_session.session.info.input_tokens;
-	let output_tokens = chat_session.session.info.output_tokens;
 	let max_threshold = config.max_session_tokens_threshold;
+
+	// Calculate actual current context tokens for percentage display
+	let (_, _, _, _, system_prompt) = config.get_role_config(role);
+	let tools = get_available_functions(config).await;
+	let current_context_tokens = estimate_full_context_tokens(
+		&chat_session.session.messages,
+		Some(system_prompt),
+		Some(&tools),
+	) as u64;
+
 	let animation_task = tokio::spawn(async move {
 		let _ = show_smart_animation(
 			animation_cancel_flag,
 			current_cost,
-			input_tokens,
-			output_tokens,
+			current_context_tokens,
 			max_threshold,
 		)
 		.await;

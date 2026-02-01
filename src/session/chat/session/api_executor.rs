@@ -20,7 +20,9 @@ use super::super::CostTracker;
 use super::core::ChatSession;
 use super::error_utils::display_rate_limit_info;
 use crate::config::Config;
+use crate::mcp::get_available_functions;
 use crate::session::chat_completion_with_validation;
+use crate::session::estimate_full_context_tokens;
 use crate::session::ChatCompletionWithValidationParams;
 use anyhow::Result;
 use colored::*;
@@ -44,9 +46,16 @@ pub async fn execute_api_call_and_process_response(
 	let animation_cancel = Arc::new(AtomicBool::new(false));
 	let animation_cancel_clone = animation_cancel.clone();
 	let current_cost = chat_session.session.info.total_cost;
-	let input_tokens = chat_session.session.info.input_tokens;
-	let output_tokens = chat_session.session.info.output_tokens;
 	let max_threshold = config.max_session_tokens_threshold;
+
+	// Calculate actual current context tokens for percentage display
+	let (_, _, _, _, system_prompt) = config.get_role_config(role);
+	let tools = get_available_functions(config).await;
+	let current_context_tokens = estimate_full_context_tokens(
+		&chat_session.session.messages,
+		Some(system_prompt),
+		Some(&tools),
+	) as u64;
 
 	// Set up monitor task to propagate global cancellation to animation
 	let animation_cancel_monitor = animation_cancel.clone();
@@ -67,8 +76,7 @@ pub async fn execute_api_call_and_process_response(
 			let _ = show_loading_animation(
 				animation_cancel_clone,
 				current_cost,
-				input_tokens,
-				output_tokens,
+				current_context_tokens,
 				max_threshold,
 			)
 			.await;

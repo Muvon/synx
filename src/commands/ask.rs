@@ -537,7 +537,7 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 					// Start animation task
 					let animation_task = tokio::spawn(async move {
 						use octomind::session::chat::show_smart_animation;
-						let _ = show_smart_animation(animation_cancel, 0.0, 0, 0, 0).await;
+						let _ = show_smart_animation(animation_cancel, 0.0, 0, 0).await;
 					});
 
 					// Execute the query

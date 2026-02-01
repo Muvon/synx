@@ -59,8 +59,7 @@ fn format_elapsed_time(elapsed: Duration) -> String {
 pub async fn show_loading_animation(
 	cancel_flag: Arc<AtomicBool>,
 	cost: f64,
-	input_tokens: u64,
-	output_tokens: u64,
+	current_context_tokens: u64,
 	max_session_tokens_threshold: usize,
 ) -> Result<()> {
 	// Create a spinner with cost-aware message in prompt format
@@ -80,9 +79,9 @@ pub async fn show_loading_animation(
 	// Format initial message with cost and context percentage
 	let base_message = if cost > 0.0 {
 		if max_session_tokens_threshold > 0 {
-			let total_tokens = input_tokens + output_tokens;
-			let percentage =
-				(total_tokens as f64 / max_session_tokens_threshold as f64 * 100.0).min(100.0);
+			let percentage = (current_context_tokens as f64 / max_session_tokens_threshold as f64
+				* 100.0)
+				.min(100.0);
 			format!("[${:.2}|{:.1}%] Working …", cost, percentage)
 		} else {
 			format!("[${:.2}|∞] Working …", cost)
@@ -137,8 +136,7 @@ pub async fn show_no_animation(cancel_flag: Arc<AtomicBool>, cost: f64) -> Resul
 pub async fn show_smart_animation(
 	cancel_flag: Arc<AtomicBool>,
 	cost: f64,
-	input_tokens: u64,
-	output_tokens: u64,
+	current_context_tokens: u64,
 	max_session_tokens_threshold: usize,
 ) -> Result<()> {
 	if std::io::stdin().is_terminal() {
@@ -146,8 +144,7 @@ pub async fn show_smart_animation(
 		show_loading_animation(
 			cancel_flag,
 			cost,
-			input_tokens,
-			output_tokens,
+			current_context_tokens,
 			max_session_tokens_threshold,
 		)
 		.await
