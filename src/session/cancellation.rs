@@ -50,6 +50,7 @@ impl SessionCancellation {
 			first_interrupt: Arc::new(AtomicBool::new(false)),
 		}
 	}
+
 	/// Get current operation receiver
 	pub fn operation_receiver(&self) -> watch::Receiver<bool> {
 		self.cancel_rx.clone()
@@ -160,21 +161,19 @@ impl SessionCancellation {
 
 /// Handle interrupt signal with double-Ctrl+C detection
 fn handle_interrupt(first_interrupt: &Arc<AtomicBool>, cancel_tx: &watch::Sender<bool>) -> bool {
-	// Immediate user feedback
-	println!("\n🛑 Ctrl+C pressed - interrupting...");
-	std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
-
 	if first_interrupt.load(Ordering::SeqCst) {
-		// Second Ctrl+C - force exit
-		println!("🛑 Forcing exit due to repeated Ctrl+C...");
+		// Second Ctrl+C - force exit (always visible)
+		println!("\n🛑 Forcing exit...");
 		std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
 		std::process::exit(130);
 	} else {
-		// First Ctrl+C - graceful cancellation
+		// First Ctrl+C - graceful cancellation (silent, only debug shows details)
+		crate::log_debug!("Ctrl+C: Interrupting current operation...");
+
 		first_interrupt.store(true, Ordering::SeqCst);
 		let _ = cancel_tx.send(true); // Send cancellation signal
 
-		println!("💡 Press Ctrl+C again to force exit");
+		crate::log_debug!("Press Ctrl+C again to force exit");
 		std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
 
 		// Reset flag after 2 seconds

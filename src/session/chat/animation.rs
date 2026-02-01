@@ -101,9 +101,12 @@ pub async fn show_loading_animation(
 		let elapsed = start_time.elapsed();
 		let elapsed_secs = elapsed.as_secs();
 		let message = if elapsed_secs > 0 {
-			format!("{} ({})", base_message, format_elapsed_time(elapsed))
+			use colored::Colorize;
+			let time_and_hint = format!("({} • Ctrl+C to interrupt)", format_elapsed_time(elapsed));
+			format!("{} {}", base_message, time_and_hint.dimmed())
 		} else {
-			base_message.clone()
+			use colored::Colorize;
+			format!("{} {}", base_message, "(Ctrl+C to interrupt)".dimmed())
 		};
 		spinner.set_message(message);
 	}
