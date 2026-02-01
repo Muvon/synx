@@ -1070,18 +1070,31 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					}
 				}
 				ProcessingState::CallingAPI => {
-					// API call was interrupted - remove only incomplete assistant response if any
+					// API call was interrupted - cleanup depends on whether this is first call or follow-up
 					if let Some(op) = operation {
-						if let Some(assistant_idx) = op.assistant_message_index {
-							// Remove incomplete assistant message
-							if assistant_idx < chat_session.session.messages.len() {
-								chat_session.session.messages.truncate(assistant_idx);
-								log_debug!("Removed incomplete assistant response due to API call cancellation");
+						if let Some(user_idx) = op.user_message_index {
+							// Check if there are any messages AFTER the user message
+							// If yes, this is a follow-up API call (tools were executed)
+							// If no, this is the first API call (initial request)
+							let messages_after_user = chat_session.session.messages.len() > user_idx + 1;
+							
+							if messages_after_user {
+								// This is a FOLLOW-UP API call (after tool execution)
+								// Keep user message, assistant message with tool_calls, and tool results
+								log_debug!("API call cancelled during multi-turn (after tools) - preserving conversation state");
+							} else {
+								// This is the FIRST API call (initial user request)
+								// Remove user message to give clean slate for retry
+								if user_idx < chat_session.session.messages.len() {
+									chat_session.session.messages.truncate(user_idx);
+									log_debug!("Removed user message due to first API call cancellation - clean slate for retry");
+								}
 							}
 						}
-						// Keep user message - it's complete and valid
 					}
 				}
+
+
 				ProcessingState::ExecutingTools => {
 					// Tool execution was interrupted - cleanup is now handled immediately in response.rs
 					// This ensures conversation state integrity without waiting for next loop iteration
