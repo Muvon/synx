@@ -998,13 +998,9 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 	// Smart operation tracking for surgical cleanup
 	#[derive(Debug, Clone)]
-	#[allow(dead_code)] // Some fields may not be used after refactoring
 	struct OperationContext {
 		user_message_index: Option<usize>,
-		assistant_message_index: Option<usize>,
-		operation_id: String,
-		has_tool_calls: bool,
-		completed_tool_ids: Vec<String>,
+		assistant_message_index: Option<usize>, // Track when assistant message is added
 	}
 
 	let current_operation = Arc::new(std::sync::Mutex::new(None::<OperationContext>));
@@ -1070,30 +1066,41 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					}
 				}
 				ProcessingState::CallingAPI => {
-					// API call was interrupted - cleanup depends on whether this is first call or follow-up
+					// API call was interrupted - cleanup depends on whether assistant message was added
 					if let Some(op) = operation {
-						if let Some(user_idx) = op.user_message_index {
-							// Check if there are any messages AFTER the user message
-							// If yes, this is a follow-up API call (tools were executed)
-							// If no, this is the first API call (initial request)
-							let messages_after_user = chat_session.session.messages.len() > user_idx + 1;
-							
-							if messages_after_user {
-								// This is a FOLLOW-UP API call (after tool execution)
-								// Keep user message, assistant message with tool_calls, and tool results
+						if let Some(assistant_idx) = op.assistant_message_index {
+							// Assistant message was added for THIS operation (could be first or follow-up)
+							// This means we're in the middle of processing a response
+							// Check if there are tool results after the assistant message
+							let has_tool_results =
+								chat_session.session.messages.len() > assistant_idx + 1;
+
+							if has_tool_results {
+								// This is a FOLLOW-UP API call (tools were executed, results added)
+								// Keep everything - conversation state is valid
 								log_debug!("API call cancelled during multi-turn (after tools) - preserving conversation state");
 							} else {
-								// This is the FIRST API call (initial user request)
-								// Remove user message to give clean slate for retry
+								// This is the FIRST API call - assistant message was added but no tools yet
+								// Remove BOTH user and assistant messages for clean slate
+								if let Some(user_idx) = op.user_message_index {
+									if user_idx < chat_session.session.messages.len() {
+										chat_session.session.messages.truncate(user_idx);
+										log_debug!("Removed user and assistant messages due to first API call cancellation - clean slate for retry");
+									}
+								}
+							}
+						} else {
+							// Assistant message was NOT added yet - API call cancelled before response
+							// Remove user message for clean slate
+							if let Some(user_idx) = op.user_message_index {
 								if user_idx < chat_session.session.messages.len() {
 									chat_session.session.messages.truncate(user_idx);
-									log_debug!("Removed user message due to first API call cancellation - clean slate for retry");
+									log_debug!("Removed user message due to API call cancellation before response - clean slate for retry");
 								}
 							}
 						}
 					}
 				}
-
 
 				ProcessingState::ExecutingTools => {
 					// Tool execution was interrupted - cleanup is now handled immediately in response.rs
@@ -1495,10 +1502,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		// Create operation context for tracking
 		*current_operation.lock().unwrap() = Some(OperationContext {
 			user_message_index: Some(user_message_index),
-			assistant_message_index: None,
-			operation_id: operation_id.clone(),
-			has_tool_calls: false,
-			completed_tool_ids: Vec::new(),
+			assistant_message_index: None, // Will be set when assistant message is added
 		});
 
 		log_debug!(
@@ -1509,6 +1513,9 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 		// Prepare for API call using helper function
 		prepare_for_api_call(&mut chat_session, &current_config, operation_rx.clone()).await?;
+
+		// Capture message count BEFORE API call to detect if assistant message gets added
+		let messages_before_api = chat_session.session.messages.len();
 
 		// Set processing state to calling API
 		*processing_state.lock().unwrap() = ProcessingState::CallingAPI;
@@ -1537,6 +1544,16 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			Ok(_) => {
 				// Update processing state to completed when done
 				*processing_state.lock().unwrap() = ProcessingState::CompletedWithResults;
+
+				// Update operation context with assistant message index if one was added
+				if let Some(ref mut op) = *current_operation.lock().unwrap() {
+					let messages_after_api = chat_session.session.messages.len();
+					if messages_after_api > messages_before_api {
+						// Assistant message was added - record its index
+						op.assistant_message_index = Some(messages_before_api);
+						log_debug!("Assistant message added at index {}", messages_before_api);
+					}
+				}
 
 				// CRITICAL FIX: Check for cancellation after API call and response processing
 				// This ensures we return to input prompt gracefully instead of continuing
