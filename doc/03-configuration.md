@@ -8,13 +8,17 @@ Octomind uses a hierarchical configuration system that allows for flexible custo
 - **macOS/Linux**: `~/.config/octomind/config.toml`
 - **Windows**: `%APPDATA%/octomind/config.toml`
 
+**Multi-File Configuration Support:**
+Octomind supports loading multiple configuration files from the config directory. All `.toml` files in `~/.config/octomind/` are merged together, allowing you to organize configuration into separate files (e.g., `roles.toml`, `layers.toml`, `workflows.toml`).
+
 ## Configuration Hierarchy
 
 The configuration system follows a template-based approach with environment variable overrides:
 
 1. **Template Defaults** (`config-templates/default.toml`) - All default values and structure
-2. **Environment Variables** - Override any setting with `OCTOMIND_*` prefix
-3. **User Configuration** - Optional user config file for persistent customization
+2. **Multi-File Configuration** - All `.toml` files in config directory are merged
+3. **Environment Variables** - Override any setting with `OCTOMIND_*` prefix
+4. **User Configuration** - Optional user config file for persistent customization
 
 ### Configuration Principles
 
@@ -419,6 +423,59 @@ type = "builtin"
 tools = ["text_editor", "shell"]  # Limited tool set
 ```
 
+## Workflow Configuration
+
+Workflows are Octomind's brain-inspired planning system that enables complex, multi-step AI processing with validation, feedback loops, and conditional branching. See [doc/10-workflows.md](./10-workflows.md) for comprehensive documentation.
+
+### Basic Workflow Structure
+
+```toml
+[[workflows]]
+name = "simple_workflow"
+description = "A simple workflow that executes a single layer"
+
+[[workflows.steps]]
+name = "analyze"
+type = "once"
+layer = "task_refiner"
+```
+
+### Workflow Step Types
+
+Workflows support five control flow primitives:
+
+1. **Once** - Execute a layer once
+2. **Loop** - Repeat until exit condition or max iterations
+3. **Foreach** - Iterate over parsed items
+4. **Conditional** - Branch based on pattern matching
+5. **Parallel** - Execute layers in parallel
+
+### Example: Feedback Loop Workflow
+
+```toml
+[[workflows]]
+name = "feedback_loop"
+description = "Iterative refinement with validation"
+
+[[workflows.steps]]
+name = "refine_loop"
+type = "loop"
+max_iterations = 5
+exit_pattern = "COMPLETE"
+
+  [[workflows.steps.substeps]]
+  name = "propose"
+  type = "once"
+  layer = "task_refiner"
+
+  [[workflows.steps.substeps]]
+  name = "validate"
+  type = "once"
+  layer = "validator"
+```
+
+For complete workflow documentation, see [doc/10-workflows.md](./10-workflows.md).
+
 ## Layered Architecture Configuration
 
 ### Layer Configuration Requirements
@@ -679,6 +736,43 @@ server_refs = ["developer", "filesystem", "web"]
 2. **Better organization** - Clear separation between server definitions and role configurations
 3. **Easier maintenance** - Update server configuration in one place
 4. **Cleaner configs** - Roles only specify which servers they need
+
+### OAuth 2.1 + PKCE Authentication
+
+HTTP MCP servers can be secured with OAuth 2.1 + PKCE (Proof Key for Code Exchange) authentication. This is useful for connecting to services that require OAuth authorization:
+
+```toml
+# HTTP MCP server with OAuth 2.1 + PKCE authentication
+[[mcp.servers]]
+name = "github_mcp"
+type = "http"
+url = "https://api.github.com/mcp"
+timeout_seconds = 30
+tools = []
+
+# OAuth configuration (optional)
+[mcp.servers.oauth]
+client_id = "your-oauth-client-id"
+client_secret = "your-oauth-client-secret"
+authorization_url = "https://github.com/login/oauth/authorize"
+token_url = "https://github.com/login/oauth/access_token"
+callback_url = "http://localhost:34567/oauth/callback"
+scopes = ["repo", "read:org"]
+```
+
+**OAuth Configuration Fields:**
+- `client_id` - OAuth application client ID
+- `client_secret` - OAuth application client secret
+- `authorization_url` - Authorization endpoint URL
+- `token_url` - Token endpoint URL
+- `callback_url` - Local callback URL for OAuth flow (typically `http://localhost:PORT/oauth/callback`)
+- `scopes` - List of OAuth scopes to request
+
+**How It Works:**
+1. When Octomind connects to the server, it initiates OAuth flow
+2. User is directed to authorization URL in browser
+3. After authorization, token is exchanged and stored
+4. Subsequent requests use the OAuth token automatically
 
 ## Embedding Configuration
 

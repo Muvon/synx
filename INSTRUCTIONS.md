@@ -217,6 +217,26 @@ crate::log_debug!("Something happened");
 - `src/mcp/agent/functions.rs` - Dynamic `agent_<name>` tool generation
 - `src/config/mod.rs` AgentConfig - Agent-to-layer routing configuration
 - Template agents section - Agent definitions that route to layers via MCP
+### 🧠 WORKFLOW SYSTEM (BRAIN-INSPIRED PLANNING)
+**Workflow Architecture:**
+- `src/session/workflows/mod.rs` - Workflow system exports
+- `src/session/workflows/orchestrator.rs` - Workflow execution orchestration
+- `src/session/workflows/executor.rs` - Individual step execution
+- `src/session/workflows/parser.rs` - Pattern parsing and matching
+- `src/session/chat/session/commands/workflow.rs` - `/workflow` command handler
+
+**Workflow Features:**
+- **Control Flow Primitives**: Once, Loop, Foreach, Conditional, Parallel
+- **Validation and Feedback**: Built-in validation loops and iterative refinement
+- **Non-intrusive**: Workflows don't affect session history
+- **Execution**: Use `/workflow <name>` command to execute configured workflows
+- **Configuration**: Template `[[workflows]]` sections define workflow steps
+
+**Key Files:**
+- `config-templates/default.toml` - Workflow definitions
+- `src/config/workflows.rs` - Workflow configuration structures
+- `doc/10-workflows.md` - Comprehensive workflow documentation
+
 
 ## 🐛 DEBUGGING BY SYMPTOM
 
@@ -1348,9 +1368,10 @@ octomind completion bash > ~/.bash_completion.d/octomind  # Shell completion
 /done                                             # Finalize task with memorization and auto-commit
 
 # Layer and tool management
-/layers                                           # Toggle layered processing on/off
+/workflow [name]                                  # Execute workflows (list available with /workflow)
 /run <command>                                    # Execute configured custom commands
 /mcp [info|list|full|health|dump|validate]       # MCP server management and debugging
+
 
 # System and debugging
 /loglevel [debug|info|none]                      # Set log level

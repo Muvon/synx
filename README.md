@@ -17,7 +17,8 @@ Octomind is a session-first AI development assistant that transforms how you int
 - 💰 **Cost Tracking & Optimization** - Real-time usage monitoring, caching, and detailed cost reporting
 - 🔧 **Role-Based Configuration** - Developer (full tools), Assistant (chat-only), and custom roles
 - 🧠 **Smart Session Continuation** - Automatic context management when token limits are reached
-- ⚡ **Layered Processing** - AI pipeline system for complex task decomposition and processing
+- 🧠 **Brain-Inspired Workflows** - Multi-step planning system with validation, feedback loops, and conditional branching
+
 
 ## 🚀 Quick Start
 
@@ -166,9 +167,10 @@ Essential commands for interactive sessions:
 
 **MCP Tools & Debugging**
 - `/mcp info` - Check MCP server status
+- `/workflow <name>` - Execute workflows
 - `/run <command>` - Execute custom commands
-- `/layers` - Toggle layered processing
 - `/loglevel [level]` - Set logging level
+
 
 **Session Management**
 - `/save` - Save current session
@@ -220,8 +222,10 @@ octomind config --validate
 - **[AI Providers](./doc/04-providers.md)** - Provider setup and model selection
 - **[Sessions Guide](./doc/05-sessions.md)** - Interactive sessions and commands
 - **[Advanced Features](./doc/06-advanced.md)** - MCP tools and extensibility
-- **[Command Layers](./doc/07-command-layers.md)** - AI processing pipeline
+- **[Command Layers & Workflows](./doc/07-command-layers.md)** - AI processing pipeline and brain-inspired planning
+- **[Workflows](./doc/10-workflows.md)** - Multi-step planning system
 - **[MCP Development](./doc/08-mcp-server-development.md)** - Tool development
+
 
 ## 🚀 Contributing
 

@@ -1,8 +1,46 @@
-# Command Layers in Octomind
+# Command Layers and Workflows in Octomind
+
+Octomind provides two powerful systems for specialized AI processing:
+
+1. **Workflows** - Brain-inspired planning system for complex multi-step processing
+2. **Command Layers** - Standalone utilities that don't affect session history
+
+## Workflows: Brain-Inspired Planning
+
+Workflows are Octomind's planning system that enables complex, multi-step AI processing with validation, feedback loops, and conditional branching. See [doc/10-workflows.md](./10-workflows.md) for comprehensive documentation.
+
+### Workflow Execution
+
+Use the `/workflow` command to execute workflows:
+
+```bash
+# List available workflows
+/workflow
+
+# Execute a specific workflow
+/workflow simple_workflow
+
+# Execute workflow with custom input
+/workflow feedback_loop "Your custom input here"
+```
+
+### Workflow Step Types
+
+Workflows support five control flow primitives:
+
+1. **Once** - Execute a layer once
+2. **Loop** - Repeat until exit condition or max iterations
+3. **Foreach** - Iterate over parsed items
+4. **Conditional** - Branch based on pattern matching
+5. **Parallel** - Execute layers in parallel
+
+For complete workflow documentation, see [doc/10-workflows.md](./10-workflows.md).
+
+## Command Layers: Standalone Utilities
 
 Command layers are a powerful feature that allows you to define specialized AI helpers that can be invoked without affecting your session history. They use the same flexible layer infrastructure as the main processing pipeline but operate as standalone utilities.
 
-## Key Benefits
+### Key Benefits
 
 - **Non-intrusive**: Commands don't affect your conversation history
 - **Specialized**: Each command can have its own model, system prompt, and configuration
@@ -10,7 +48,7 @@ Command layers are a powerful feature that allows you to define specialized AI h
 - **Cost-effective**: Only run when needed, with isolated token usage
 - **Context-aware**: Proper input_mode handling for accessing session context
 
-## Usage
+### Usage
 
 Use the `/run` command followed by the command name:
 

@@ -69,8 +69,10 @@ All CLI commands work via WebSocket. Just send them as content:
 - `"/help"` - Show available commands
 - `"/info"` - Display session info
 - `"/model"` - Show current model
+- `"/workflow <name>"` - Execute workflows
 - `"/run <command>"` - Execute custom commands
 - Any other `/command` from the CLI
+
 
 ### Server → Client (Output)
 

@@ -418,7 +418,7 @@ Octomind provides comprehensive session management through built-in commands:
 - `/done` - Finalize task with memorization and auto-commit
 
 ### Layer and Tool Management
-- `/layers` - Toggle layered processing on/off
+- `/workflow [name]` - Execute workflows (list available with `/workflow`)
 - `/run <command>` - Execute configured custom commands
 - `/mcp [info|list|full|health|dump|validate]` - MCP server management
 - `/prompt <text>` - Add a system prompt to current session
@@ -469,9 +469,32 @@ The `/context` command displays the current session context that would be sent t
 - Session statistics (total vs. filtered message counts)
 - For `large` filter: displays median, standard deviation, and threshold information
 
-#### Architecture Commands
-- `/layers` - Toggle layered processing
+#### Workflow and Command Execution
+- `/workflow [name]` - Execute workflows (list available with `/workflow`)
 - `/run <command>` - Execute configured custom commands
+#### Workflow Execution Command
+
+The `/workflow` command executes brain-inspired planning workflows for complex multi-step AI processing:
+
+```bash
+# List available workflows
+> /workflow
+
+# Execute a specific workflow
+> /workflow simple_workflow
+
+# Execute workflow with custom input
+> /workflow feedback_loop "Your custom input here"
+```
+
+**Workflow Features:**
+- **Brain-inspired planning**: Separates planning from execution
+- **Multi-step processing**: Supports once, loop, foreach, conditional, and parallel steps
+- **Validation and feedback**: Built-in validation and iterative refinement
+- **Non-intrusive**: Workflows don't affect session history
+
+For comprehensive workflow documentation, see [doc/10-workflows.md](./10-workflows.md).
+
 
 ## Multimodal Vision Support
 

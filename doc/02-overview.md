@@ -87,6 +87,12 @@ graph TB
 **Agent Server** (`src/mcp/agent/`):
 - `agent_*()` tools - Route tasks to configured AI layers for specialized processing
 - `call_llm(prompt="...", model="...", system="...", temperature=0.7)` - Direct LLM call with runtime parameters
+**External Server Support**:
+- HTTP MCP servers with OAuth 2.1 + PKCE authentication
+- Command-based (stdin) MCP servers
+- Health monitoring and automatic recovery
+- Server registry for centralized configuration
+
 
 ### 3. Multi-Provider AI Support
 
@@ -158,6 +164,40 @@ graph TB
 - Custom command execution with `/run <command>`
 - Agent system for specialized AI routing
 - Configurable input/output modes
+
+### Brain-Inspired Workflow System
+
+**Multi-Step Planning and Execution** (`src/session/workflows/`):
+- **Planner vs Executor**: Workflows act as planners (prefrontal cortex), main model executes (motor cortex)
+- **Control Flow Primitives**: Once, Loop, Foreach, Conditional, Parallel step types
+- **Validation and Feedback**: Built-in validation loops and iterative refinement
+- **Non-intrusive**: Workflows don't affect session history
+- **Execution**: Use `/workflow <name>` command to execute configured workflows
+
+**Workflow Architecture**:
+```
+User Input
+    ↓
+┌─────────────────────────────────────┐
+│  WORKFLOW (Planning)                │
+│  • Decomposes tasks                 │
+│  • Validates approaches             │
+│  • Predicts impacts                 │
+│  • Evaluates quality                │
+│  • Generates enhanced plan          │
+└──────────────┬──────────────────────┘
+               ↓ Enhanced Plan
+┌─────────────────────────────────────┐
+│  MAIN MODEL (Execution)             │
+│  • Receives refined plan            │
+│  • Uses MCP tools                   │
+│  • Implements changes               │
+└─────────────────────────────────────┘
+               ↓
+            Result
+```
+
+For comprehensive workflow documentation, see [doc/10-workflows.md](./10-workflows.md).
 
 ### Advanced Development Tools
 

@@ -47,6 +47,55 @@ Add a new built-in MCP server when you have:
 - Tools that should be independently configurable from existing servers
 - Functionality that doesn't fit well in existing servers
 
+## External HTTP Servers with OAuth 2.1 + PKCE
+
+Octomind supports OAuth 2.1 + PKCE authentication for external HTTP MCP servers. This allows secure authentication without storing credentials.
+
+### OAuth Configuration
+
+Add OAuth configuration to your HTTP MCP server:
+
+```toml
+[[mcp.servers]]
+name = "github_mcp"
+type = "http"
+url = "https://api.github.com/mcp"
+timeout_seconds = 30
+tools = []
+
+# OAuth 2.1 + PKCE configuration
+[mcp.servers.oauth]
+client_id = "your-oauth-client-id"
+client_secret = "your-oauth-client-secret"
+authorization_url = "https://github.com/login/oauth/authorize"
+token_url = "https://github.com/login/oauth/access_token"
+callback_url = "http://localhost:34567/oauth/callback"
+scopes = ["repo", "read:org"]
+```
+
+### OAuth Flow
+
+1. **Initiation**: When Octomind connects to the server, it checks for OAuth configuration
+2. **Authorization**: User is directed to the authorization URL in their browser
+3. **Token Exchange**: After user authorization, Octomind exchanges the authorization code for an access token
+4. **Automatic Usage**: Subsequent requests use the OAuth token automatically
+5. **Token Refresh**: Tokens are automatically refreshed when expired
+
+### Implementation Details
+
+OAuth support is implemented in `src/config/oauth_config.rs` with:
+- PKCE (Proof Key for Code Exchange) for enhanced security
+- Automatic token refresh
+- Secure token storage
+- Support for multiple OAuth providers
+
+### Benefits
+
+- **Secure**: No need to store credentials in configuration
+- **User-Controlled**: Users authorize access through their browser
+- **Automatic**: Tokens are managed automatically
+- **Standard**: Uses OAuth 2.1 standard with PKCE
+
 ## Step-by-Step Implementation
 
 1. Create server module structure (`src/mcp/<server_name>/`)

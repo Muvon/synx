@@ -853,11 +853,13 @@ enable_tools = true
 input_mode = "all"
 ```
 
-### Session Commands for Layers
+### Session Commands for Workflows
 
-- `/layers` - Toggle layered processing on/off
+- `/workflow [name]` - Execute workflows (list available with /workflow)
 - `/done` - Manually trigger context optimization
 - `/info` - View token usage by layer
+
+
 
 ## Token Management
 
@@ -1011,6 +1013,41 @@ url = "https://mcp.so/server/web-dev-tools"
 timeout_seconds = 30
 tools = []
 ```
+### OAuth 2.1 + PKCE Authentication for External Servers
+
+HTTP MCP servers can be secured with OAuth 2.1 + PKCE (Proof Key for Code Exchange) authentication:
+
+```toml
+# HTTP MCP server with OAuth 2.1 + PKCE authentication
+[[mcp.servers]]
+name = "github_mcp"
+type = "http"
+url = "https://api.github.com/mcp"
+timeout_seconds = 30
+tools = []
+
+# OAuth configuration
+[mcp.servers.oauth]
+client_id = "your-oauth-client-id"
+client_secret = "your-oauth-client-secret"
+authorization_url = "https://github.com/login/oauth/authorize"
+token_url = "https://github.com/login/oauth/access_token"
+callback_url = "http://localhost:34567/oauth/callback"
+scopes = ["repo", "read:org"]
+```
+
+**How OAuth Flow Works:**
+1. When Octomind connects to the server, it initiates OAuth flow
+2. User is directed to authorization URL in browser
+3. After authorization, token is exchanged and stored
+4. Subsequent requests use the OAuth token automatically
+
+**Benefits:**
+- Secure authentication without storing credentials
+- User-controlled authorization
+- Automatic token refresh
+- Support for multiple OAuth providers
+
 
 ## Session Management
 
@@ -1100,16 +1137,18 @@ octomind config --validate
 - **Verify tool permissions**: Check allowed_tools list
 - **External server issues**: Verify URL and authentication
 
-#### Layer Performance Issues
+#### Workflow Performance Issues
 ```bash
-# Monitor layer performance
+# Monitor workflow performance
 /info
 
-# Disable layers temporarily
-/layers
+# List available workflows
+/workflow
 
 # Optimize context
 /done
+```
+
 ```
 
 #### Token Limit Issues
