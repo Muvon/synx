@@ -109,7 +109,8 @@ impl ConditionalEventHandler for ShowHelpHandler {
 
 use crate::log_info;
 
-fn display_status_line(current_context_tokens: u64, max_session_tokens_threshold: usize) {
+/// Display the context/cost status line - shown only at session start
+pub fn display_status_line(current_context_tokens: u64, max_session_tokens_threshold: usize) {
 	let mut status_parts = Vec::new();
 
 	if max_session_tokens_threshold > 0 {
@@ -220,12 +221,14 @@ pub async fn calculate_current_context_tokens(
 }
 
 // Read user input with support for multiline input, command completion, and persistent history
+// show_status_line controls whether to display the context/cost status line (only on first interaction)
 pub fn read_user_input(
 	estimated_cost: f64,
 	octomind_config: &Config,
 	role: &str,
 	current_context_tokens: u64,
 	max_session_tokens_threshold: usize,
+	show_status_line: bool,
 ) -> Result<InputResult> {
 	let add_without_sending = Arc::new(AtomicBool::new(false));
 
@@ -316,8 +319,10 @@ pub fn read_user_input(
 		}
 	}
 
-	// Display status line for user feedback
-	display_status_line(current_context_tokens, max_session_tokens_threshold);
+	// Display status line for user feedback (only on first interaction)
+	if show_status_line {
+		display_status_line(current_context_tokens, max_session_tokens_threshold);
+	}
 
 	// Set prompt with cost and context percentage
 	let prompt = if estimated_cost > 0.0 {

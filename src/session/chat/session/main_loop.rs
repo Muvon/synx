@@ -61,6 +61,18 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			"{}",
 			"💡 Tip: Use ↑/↓ arrows or Ctrl+R for command history search".bright_yellow()
 		);
+
+		// Display context/cost status line ONCE at the start of new sessions
+		let initial_context_tokens = crate::session::chat::input::calculate_current_context_tokens(
+			&chat_session.session.messages,
+			&config_for_role,
+			&role,
+		)
+		.await;
+		crate::session::chat::input::display_status_line(
+			initial_context_tokens,
+			config_for_role.max_session_tokens_threshold,
+		);
 	}
 
 	// Print the last few messages for context with colors if terminal supports them (for resumed sessions)
@@ -278,6 +290,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				&role,
 				current_context_tokens,
 				current_config.max_session_tokens_threshold,
+				false, // Don't show status line on continuation/cancellation
 			)?
 		} else if let Some(prompt_text) = chat_session.pending_prompt.take() {
 			// CRITICAL FIX: Process pending prompt from /prompt command
@@ -292,6 +305,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				&role,
 				current_context_tokens,
 				current_config.max_session_tokens_threshold,
+				false, // Don't show status line after first interaction
 			)?
 		};
 
