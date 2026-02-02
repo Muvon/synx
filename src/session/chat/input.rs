@@ -228,6 +228,7 @@ pub fn read_user_input(
 	role: &str,
 	current_context_tokens: u64,
 	max_session_tokens_threshold: usize,
+	session_id: &str,
 	show_status_line: bool,
 ) -> Result<InputResult> {
 	let add_without_sending = Arc::new(AtomicBool::new(false));
@@ -386,9 +387,17 @@ pub fn read_user_input(
 		}
 		Err(ReadlineError::Eof) => {
 			// Ctrl+D - Show resume command
-			println!("\n{}: /exit", "Type".bright_yellow());
+			let resume_cmd = format!("octomind session --resume {}", session_id).bright_cyan();
+			println!("\nTo continue this session, run: {}", resume_cmd);
+
+			// Debug logging for session preservation
+			if let Ok(sessions_dir) = crate::session::get_sessions_dir() {
+				crate::log_debug!("Session files saved in: {}", sessions_dir.display());
+			}
+			crate::log_debug!("Session preserved for future reference.");
 			Ok(InputResult::Exit)
 		}
+
 		Err(err) => {
 			println!("Error: {:?}", err);
 			Ok(InputResult::Text(String::new()))

@@ -290,6 +290,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				&role,
 				current_context_tokens,
 				current_config.max_session_tokens_threshold,
+				&chat_session.session.info.name,
 				false, // Don't show status line on continuation/cancellation
 			)?
 		} else if let Some(prompt_text) = chat_session.pending_prompt.take() {
@@ -305,6 +306,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				&role,
 				current_context_tokens,
 				current_config.max_session_tokens_threshold,
+				&chat_session.session.info.name,
 				false, // Don't show status line after first interaction
 			)?
 		};
