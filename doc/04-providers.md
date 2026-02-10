@@ -399,20 +399,20 @@ Session Cost Report:
   Total requests: 5
   Total tokens: 45,000 (input: 30,000 | output: 15,000)
   Total cost: $0.135
-  
+
   Per-request breakdown:
     Request 1: 8,000 tokens → $0.024
     Request 2: 9,500 tokens → $0.028
     Request 3: 12,000 tokens → $0.036
     Request 4: 7,500 tokens → $0.023
     Request 5: 8,000 tokens → $0.024
-  
+
   Compression Statistics:
     Total compressions: 2
     Average reduction: 65%
     Tokens saved: 18,000
     Cost saved: $0.054
-  
+
   Cache Statistics:
     Cache writes: 1 (cost: $0.015)
     Cache reads: 3 (savings: $0.045)

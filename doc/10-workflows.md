@@ -315,7 +315,7 @@ allowed_tools = ["developer:*", "filesystem:*"]
 
 ### Layer Configuration
 
-Layers used by workflows:
+Layers used by workflows. **Note: The `description` field is REQUIRED for all layers** (used for agents, commands, and documentation):
 
 ```toml
 [layers.task_decomposer]

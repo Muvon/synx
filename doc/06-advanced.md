@@ -37,8 +37,6 @@ Octomind provides four built-in MCP servers with comprehensive development capab
 - `semantic_search(query="...", ...)` - Semantic code search using descriptive queries
 - `view_signatures(files=[...])` - Extract function signatures and class definitions
 - `graphrag(operation="...", ...)` - Advanced relationship-aware code analysis
-
-**Memory Server** (`src/mcp/memory/`):
 - `memorize(title="...", content="...", ...)` - Store important information for future reference
 - `remember(query="...", limit=5, ...)` - Search and retrieve stored memories
 - `forget(confirm=true, query="...", ...)` - Permanently remove specific memories
@@ -1006,19 +1004,19 @@ Before compressing, the system calculates if compression saves money by analyzin
 net_benefit = (
     // Cost of current turn with full context
     current_tokens * current_model_cost
-    
+
     // Plus: cost of remaining turns with full context
     + estimated_remaining_turns * current_tokens * current_model_cost
-    
+
     // Minus: cost of compression (AI decision + summary)
     - compression_cost
-    
+
     // Minus: cost of cache invalidation (forced rewrite at 1.25x)
     - (compressed_tokens * 1.25 * current_model_cost)
-    
+
     // Plus: savings from smaller context in future turns
     + estimated_remaining_turns * (current_tokens - compressed_tokens) * current_model_cost
-    
+
     // Plus: cache read savings (0.1x cost for cached content)
     + estimated_remaining_turns * compressed_tokens * 0.1 * current_model_cost
 )
@@ -1133,18 +1131,18 @@ Threshold matched: 100,000 (target_ratio: 4.0x)
 Cache-aware analysis:
   Current tokens: 95,000
   Estimated remaining turns: 5
-  
+
   Without compression:
     5 turns × 95,000 tokens = 475,000 tokens
     Cost: 475,000 × $0.003 = $1.425
-  
+
   With compression:
     Cache invalidation: 95,000 × 0.0025 = $0.2375
     Compressed size: 95,000 ÷ 4 = 23,750 tokens
     5 turns × 23,750 tokens = 118,750 tokens
     Cost: 118,750 × $0.003 = $0.3563
     Total: $0.2375 + $0.3563 = $0.5938
-  
+
   Net benefit: $1.425 - $0.5938 = $0.8312 ✓ COMPRESS
 ```
 
@@ -1157,18 +1155,18 @@ Threshold matched: 50,000 (target_ratio: 2.0x)
 Cache-aware analysis:
   Current tokens: 55,000
   Estimated remaining turns: 1
-  
+
   Without compression:
     1 turn × 55,000 tokens = 55,000 tokens
     Cost: 55,000 × $0.003 = $0.165
-  
+
   With compression:
     Cache invalidation: 55,000 × 0.0025 = $0.1375
     Compressed size: 55,000 ÷ 2 = 27,500 tokens
     1 turn × 27,500 tokens = 27,500 tokens
     Cost: 27,500 × $0.003 = $0.0825
     Total: $0.1375 + $0.0825 = $0.22
-  
+
   Net benefit: $0.165 - $0.22 = -$0.055 ✗ SKIP (would cost money)
 ```
 
@@ -1182,7 +1180,7 @@ Compression Statistics:
   Average reduction: 72.5%
   Total tokens saved: 45,000
   Cost saved: $0.045
-  
+
   Last compression:
     Before: 98,500 tokens
     After: 24,625 tokens (4.0x compression)

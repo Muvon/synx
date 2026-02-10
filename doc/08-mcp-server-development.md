@@ -6,7 +6,7 @@ This guide explains how to add new built-in MCP servers to Octomind. Use this wh
 
 ## Built-in MCP Servers
 
-Octomind provides **five** built-in MCP servers with comprehensive development capabilities:
+Octomind provides **four** built-in MCP servers with comprehensive development capabilities:
 
 **Developer Server** (`src/mcp/dev/`):
 - `shell(command="...", background=false)` - Execute shell commands with output capture, foreground/background execution
@@ -21,8 +21,6 @@ Octomind provides **five** built-in MCP servers with comprehensive development c
 - `semantic_search(query="...", ...)` - Semantic code search by describing functionality
 - `view_signatures(files=[...])` - Extract function signatures and class definitions
 - `graphrag(operation="...", ...)` - Relationship-aware code analysis
-
-**Memory Server** (`src/mcp/memory/`):
 - `memorize(title="...", content="...", ...)` - Store important information for future reference
 - `remember(query="...", limit=5, ...)` - Search and retrieve stored memories
 - `forget(confirm=true, query="...", ...)` - Permanently remove specific memories

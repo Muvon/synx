@@ -1004,7 +1004,7 @@ Compression Statistics:
   Average reduction: 72.5%
   Total tokens saved: 45,000
   Cost saved: $0.045
-  
+
   Last compression:
     Before: 98,500 tokens
     After: 24,625 tokens (4.0x compression)

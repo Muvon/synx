@@ -102,6 +102,7 @@ All CLI commands work via WebSocket. Just send them as content:
 | Type | Description | Content | Metadata |
 |------|-------------|---------|----------|
 | `assistant` | AI assistant response | Response text | None |
+| `thinking` | AI thinking/reasoning content | Thinking text | None |
 | `tool_use` | Tool execution notification (AI intends to use tool) | Human-readable description | `{"tool": "name", "tool_id": "id", "server": "server_name", "params": {...}}` |
 | `tool_result` | Tool execution completed | Tool output text | `{"tool": "name", "tool_id": "id", "server": "server_name", "success": bool, "duration_ms": number}` |
 | `cost` | Cost and token usage | Human-readable summary | `{"session_tokens": number, "session_cost": number, ...}` |
@@ -253,6 +254,9 @@ class OctomindClient {
       case 'assistant':
         console.log('\x1b[32m%s\x1b[0m', msg.content); // Green
         break;
+      case 'thinking':
+        console.log('\x1b[35m🤔 %s\x1b[0m', msg.content); // Magenta
+        break;
       case 'tool_use':
         const toolInfo = msg.meta ? `${msg.meta.tool} | ${msg.meta.server}` : '';
         console.log('\x1b[36m🔧 %s [%s]\x1b[0m', msg.content, toolInfo); // Cyan
@@ -343,6 +347,8 @@ class OctomindClient:
 
         if msg_type == 'assistant':
             print(f'\033[32m{content}\033[0m')  # Green
+        elif msg_type == 'thinking':
+            print(f'\033[35m🤔 {content}\033[0m')  # Magenta
         elif msg_type == 'tool_use':
             meta = msg.get('meta', {})
             tool_info = f"{meta.get('tool', '')} | {meta.get('server', '')}"

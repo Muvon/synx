@@ -71,8 +71,6 @@ graph TB
 - `semantic_search(query="...", ...)` - Semantic code search using descriptive queries about functionality
 - `view_signatures(files=[...])` - Extract function signatures and class definitions from files
 - `graphrag(operation="search|get-node|get-relationships|find-path|overview", ...)` - Advanced relationship-aware code analysis
-
-**Memory Server** (`src/mcp/memory/`):
 - `memorize(title="...", content="...", ...)` - Store important information for future reference
 - `remember(query="...", limit=5, ...)` - Search and retrieve stored memories using semantic search
 - `forget(confirm=true, query="...", ...)` - Permanently remove specific memories
@@ -87,6 +85,7 @@ graph TB
 **Agent Server** (`src/mcp/agent/`):
 - `agent_*()` tools - Route tasks to configured AI layers for specialized processing
 - `call_llm(prompt="...", model="...", system="...", temperature=0.7)` - Direct LLM call with runtime parameters
+
 **External Server Support**:
 - HTTP MCP servers with OAuth 2.1 + PKCE authentication
 - Command-based (stdin) MCP servers
@@ -130,6 +129,18 @@ graph TB
 - Provider-specific cache support (Anthropic Claude, etc.)
 - Configurable cache thresholds and timeouts
 
+**Adaptive Context Compression**:
+- Token-based compression triggers at configurable thresholds (50k, 100k, 150k tokens)
+- Pressure-level system with graduated compression ratios (2x, 4x, 8x)
+- Hierarchical compression: task → phase → project levels
+- Preserves architectural information and file references during compression
+- Decision model (Haiku) for cost-efficient compression decisions
+
+**Context Awareness**:
+- Real-time context percentage display in prompt (e.g., `[0.02|45.3%]`)
+- Shows estimated cost and context usage percentage
+- Unified token calculation including messages, system prompt, and tool definitions
+
 **Real-Time Tracking**:
 - Per-session cost monitoring
 - Per-request spending thresholds
@@ -151,9 +162,11 @@ graph TB
 
 ### Smart Session Continuation
 
-**Automatic Context Management** (`src/session/chat/continuation/`):
+**Adaptive Context Management** (`src/session/chat/continuation/`):
 - AI-driven context preservation when token limits reached
 - File context parsing with `filename:startline:endline` format
+- Automatic conversation compression at configurable thresholds
+- Hierarchical compression: task → phase → project levels
 - Visual feedback showing continuation status
 - Zero configuration required
 

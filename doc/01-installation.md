@@ -302,10 +302,16 @@ Octomind uses a template-based configuration system with smart defaults:
 ### Configuration Files
 
 ```
-~/.config/octomind/config.toml    # User configuration
+~/.config/octomind/config.toml    # Main user configuration
+~/.config/octomind/*.toml         # Additional config files (merged)
 ~/.local/share/octomind/sessions/ # Session history
 ~/.local/share/octomind/logs/     # Debug logs
 ```
+
+**Multi-File Configuration:** Octomind supports loading multiple `.toml` files from the config directory. Files are loaded in alphabetical order and merged together, with later files overriding earlier ones. This allows you to:
+- Split configuration into logical files (e.g., `roles.toml`, `layers.toml`)
+- Override settings without modifying the main `config.toml`
+- Share common configurations across projects
 
 ### Environment Variables
 
@@ -315,12 +321,50 @@ Any configuration setting can be overridden with environment variables:
 # System-wide settings
 export OCTOMIND_LOG_LEVEL="debug"
 export OCTOMIND_MODEL="openrouter:anthropic/claude-sonnet-4"
-export OCTOMIND_MAX_TOKENS="8192"
+export OCTOMIND_MAX_TOKENS="16384"
 
 # Role-specific overrides (use double underscores for nested settings)
 export OCTOMIND_ROLES__DEVELOPER__MODEL="openai:gpt-4o"
 export OCTOMIND_ROLES__DEVELOPER__TEMPERATURE="0.1"
 ```
+
+### Custom Instructions and Constraints
+
+Octomind supports automatic loading of custom instructions and constraints:
+
+- **`custom_instructions_file_name`** (default: `"INSTRUCTIONS.md"`): Content loaded as a user message in new sessions
+- **`custom_constraints_file_name`** (default: `"CONSTRAINTS.md"`): Content appended to each user request in `<constraints>...</constraints>` tags
+
+Set to empty string to disable: `custom_constraints_file_name = ""`
+
+### Context Compression
+
+Octomind includes intelligent context compression to manage long sessions. When enabled, the system automatically compresses session history when context pressure exceeds configured thresholds:
+
+```toml
+[compression]
+hints_enabled = true                    # Show compression hints
+hints_pressure_threshold = 0.7          # Context pressure threshold for hints
+adaptive_threshold = true               # Enable token-based compression
+
+[[compression.pressure_levels]]
+threshold = 50000
+target_ratio = 2.0  # Compress to 50% at 50k tokens
+
+[[compression.pressure_levels]]
+threshold = 100000
+target_ratio = 4.0  # Compress to 25% at 100k tokens
+
+[[compression.pressure_levels]]
+threshold = 150000
+target_ratio = 8.0  # Compress to 12.5% at 150k tokens
+
+[compression.decision]
+model = "anthropic:claude-haiku-4-5"    # Model for compression decisions
+max_tokens = 16000
+```
+
+Compression preserves architectural information, file references, and key technical details while reducing token usage. See [Advanced Configuration](./06-advanced.md) for details.
 
 ## Troubleshooting
 

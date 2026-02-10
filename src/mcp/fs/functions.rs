@@ -362,7 +362,7 @@ pub fn get_batch_edit_function() -> McpFunction {
 			File has:
 			  1: use std::fs;
 			  2: use std::io;
-			  3: 
+			  3:
 			  4: fn main() {
 			Bad: {\"operation\": \"replace\", \"line_range\": [1, 3], \"content\": \"use std::fs;\\nuse std::io;\\nuse std::path::PathBuf;\"}
 			Problem: Retyped lines 1-2 that didn't change!
