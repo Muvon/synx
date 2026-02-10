@@ -857,6 +857,8 @@ fn format_compressed_entry(preserved: &str, context: &str, compression_id: Strin
 }
 
 /// Find which messages to compress (keep last 4 turns = 2 exchanges raw)
+///
+/// CRITICAL: Must not cut between assistant with tool_calls and its tool results
 fn find_compression_range(messages: &[crate::session::Message]) -> Result<(usize, usize)> {
 	// Find system message index
 	let system_idx = messages
@@ -872,24 +874,24 @@ fn find_compression_range(messages: &[crate::session::Message]) -> Result<(usize
 		.map(|(idx, _)| idx)
 		.collect();
 
-	// Need at least 6 turns to compress (keep 4, compress 2+)
+	// Need at least 6 conversation messages to compress (keep 4, compress 2+)
 	if conversation_indices.len() <= 4 {
 		return Ok((0, 0)); // Not enough to compress
 	}
 
-	// Compress everything except last 4 turns
+	// Compress everything except last 4 conversation messages
 	let preserve_count = 4;
 	let compress_count = conversation_indices.len() - preserve_count;
 
 	let start_idx = system_idx + 1; // Start after system message
-	let mut end_idx = conversation_indices[compress_count - 1]; // End before preserved turns
+	let mut end_idx = conversation_indices[compress_count - 1]; // Last conversation message to compress
 
-	// SAFETY: If end_idx lands on a tool-use boundary, extend through contiguous tool results
+	// CRITICAL: If end_idx is an assistant with tool_calls, extend through ALL its tool results
+	// This prevents cutting between assistant and its tool results
 	if end_idx < messages.len() {
-		let end_msg = &messages[end_idx];
-		let ends_on_tool_boundary =
-			(end_msg.role == "assistant" && end_msg.tool_calls.is_some()) || end_msg.role == "tool";
-		if ends_on_tool_boundary {
+		let msg = &messages[end_idx];
+		if msg.role == "assistant" && msg.tool_calls.is_some() {
+			// Extend through all contiguous tool results
 			while end_idx + 1 < messages.len() && messages[end_idx + 1].role == "tool" {
 				end_idx += 1;
 			}
@@ -940,30 +942,121 @@ mod tests {
 	}
 
 	#[test]
+	#[allow(clippy::vec_init_then_push)]
 	fn extends_range_to_include_tool_results() {
 		let mut messages = Vec::new();
 		messages.push(msg("system")); // 0
 
-		// Create 6 conversation turns (need > 4 to trigger compression)
-		for i in 0..3 {
-			messages.push(msg("user")); // 1, 4, 7
-			let mut assistant = msg("assistant"); // 2, 5, 8
-			assistant.tool_calls = Some(json!([
-				{"id": format!("call_{}", i), "type": "function", "function": {"name": format!("tool{}", i)}}
-			]));
-			messages.push(assistant);
-			let mut tool = msg("tool"); // 3, 6, 9
-			tool.tool_call_id = Some(format!("call_{}", i));
-			tool.name = Some(format!("tool{}", i));
-			messages.push(tool);
-		}
+		// Create scenario where end_idx lands on assistant with tool_calls
+		messages.push(msg("user")); // 1
+		let mut assistant1 = msg("assistant"); // 2
+		assistant1.tool_calls = Some(json!([
+			{"id": "call_1", "type": "function", "function": {"name": "tool1"}}
+		]));
+		messages.push(assistant1);
+		let mut tool1 = msg("tool"); // 3
+		tool1.tool_call_id = Some("call_1".to_string());
+		messages.push(tool1);
+
+		messages.push(msg("user")); // 4
+		messages.push(msg("assistant")); // 5
+		messages.push(msg("user")); // 6
+		messages.push(msg("assistant")); // 7
+		messages.push(msg("user")); // 8
+		messages.push(msg("assistant")); // 9
+
+		let (start_idx, end_idx) = find_compression_range(&messages).unwrap();
+
+		// conversation_indices = [1, 2, 4, 5, 6, 7, 8, 9] (8 messages)
+		// Keep last 4: [6, 7, 8, 9]
+		// Compress first 4: [1, 2, 4, 5]
+		// end_idx = conversation_indices[3] = 5 (assistant without tool_calls, no extension)
+		assert_eq!(start_idx, 1);
+		assert_eq!(end_idx, 5);
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn extends_when_ending_on_assistant_with_tools() {
+		// THIS is the critical test - end_idx lands on assistant WITH tool_calls
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+
+		messages.push(msg("user")); // 1
+		messages.push(msg("assistant")); // 2
+
+		messages.push(msg("user")); // 3
+		let mut assistant_with_tools = msg("assistant"); // 4
+		assistant_with_tools.tool_calls = Some(json!([
+			{"id": "call_1", "type": "function", "function": {"name": "tool1"}}
+		]));
+		messages.push(assistant_with_tools);
+		let mut tool1 = msg("tool"); // 5
+		tool1.tool_call_id = Some("call_1".to_string());
+		messages.push(tool1);
+
+		messages.push(msg("user")); // 6
+		messages.push(msg("assistant")); // 7
+		messages.push(msg("user")); // 8
+		messages.push(msg("assistant")); // 9
+
+		let (start_idx, end_idx) = find_compression_range(&messages).unwrap();
+
+		// conversation_indices = [1, 2, 3, 4, 6, 7, 8, 9] (8 messages)
+		// Keep last 4: [6, 7, 8, 9]
+		// Compress first 4: [1, 2, 3, 4]
+		// end_idx = conversation_indices[3] = 4 (assistant WITH tool_calls)
+		// MUST extend through tool at index 5
+		assert_eq!(start_idx, 1);
+		assert_eq!(
+			end_idx, 5,
+			"Must extend through tool results when ending on assistant with tool_calls"
+		);
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn handles_multiple_assistants_with_tools() {
+		// Test scenario: multiple assistant messages with tool calls in sequence
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+
+		messages.push(msg("user")); // 1
+
+		// First assistant with tools
+		let mut assistant1 = msg("assistant"); // 2
+		assistant1.tool_calls = Some(json!([
+			{"id": "call_1", "type": "function", "function": {"name": "tool1"}}
+		]));
+		messages.push(assistant1);
+		let mut tool1 = msg("tool"); // 3
+		tool1.tool_call_id = Some("call_1".to_string());
+		messages.push(tool1);
+
+		// Second assistant with tools (no user message between)
+		let mut assistant2 = msg("assistant"); // 4
+		assistant2.tool_calls = Some(json!([
+			{"id": "call_2", "type": "function", "function": {"name": "tool2"}}
+		]));
+		messages.push(assistant2);
+		let mut tool2 = msg("tool"); // 5
+		tool2.tool_call_id = Some("call_2".to_string());
+		messages.push(tool2);
+
+		// More conversation messages to trigger compression
+		messages.push(msg("user")); // 6
+		messages.push(msg("assistant")); // 7
+		messages.push(msg("user")); // 8
+		messages.push(msg("assistant")); // 9
 		messages.push(msg("user")); // 10
 
 		let (start_idx, end_idx) = find_compression_range(&messages).unwrap();
 
-		// Compress first 2 conversation turns, keeping last 4
-		// Extends through tool results at boundary
+		// conversation_indices = [1, 2, 4, 6, 7, 8, 9, 10] (8 messages)
+		// Keep last 4: [7, 8, 9, 10]
+		// Compress first 4: [1, 2, 4, 6]
+		// end_idx = conversation_indices[3] = 6 (user message, no extension needed)
 		assert_eq!(start_idx, 1);
-		assert_eq!(end_idx, 4);
+		assert_eq!(end_idx, 6);
 	}
 }
