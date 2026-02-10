@@ -438,11 +438,16 @@ async fn compress_phase(
 	let start_idx = start_index.unwrap();
 	let end_idx = end_index.unwrap();
 
+	// CRITICAL: Use start_idx - 1 to include the FIRST task compression message in the range
+	// calculate_range_tokens and remove_messages_in_range both use (start_index + 1)..=end_index
+	// So to include message at start_idx, we need to pass start_idx - 1
+	let range_start = if start_idx > 0 { start_idx - 1 } else { 0 };
+
 	// Calculate tokens before compression
 	let tokens_before = calculate_range_tokens(
 		session,
 		&MessageRange {
-			start_index: start_idx,
+			start_index: range_start,
 			end_index: end_idx,
 		},
 	)?;
@@ -463,11 +468,11 @@ async fn compress_phase(
 		return Ok(None);
 	}
 
-	// Remove all task compression messages in range
-	let (messages_removed, had_cached) = session.remove_messages_in_range(start_idx, end_idx)?;
+	// Remove all task compression messages in range (using range_start to include first task)
+	let (messages_removed, had_cached) = session.remove_messages_in_range(range_start, end_idx)?;
 
-	// Insert phase summary (preserve cache if any removed message was cached)
-	session.insert_compressed_knowledge(start_idx, phase_summary, had_cached)?;
+	// Insert phase summary at range_start (preserve cache if any removed message was cached)
+	session.insert_compressed_knowledge(range_start, phase_summary, had_cached)?;
 
 	// Calculate metrics
 	let tokens_saved = tokens_before.saturating_sub(tokens_after);
@@ -542,11 +547,16 @@ async fn compress_project(
 	let start_idx = *compression_indices.first().unwrap();
 	let end_idx = *compression_indices.last().unwrap();
 
+	// CRITICAL: Use start_idx - 1 to include the FIRST compression message in the range
+	// calculate_range_tokens and remove_messages_in_range both use (start_index + 1)..=end_index
+	// So to include message at start_idx, we need to pass start_idx - 1
+	let range_start = if start_idx > 0 { start_idx - 1 } else { 0 };
+
 	// Calculate tokens before
 	let tokens_before = calculate_range_tokens(
 		session,
 		&MessageRange {
-			start_index: start_idx,
+			start_index: range_start,
 			end_index: end_idx,
 		},
 	)?;
@@ -572,11 +582,11 @@ async fn compress_project(
 		return Ok(None);
 	}
 
-	// Remove all compression messages
-	let (messages_removed, had_cached) = session.remove_messages_in_range(start_idx, end_idx)?;
+	// Remove all compression messages (using range_start to include first compression)
+	let (messages_removed, had_cached) = session.remove_messages_in_range(range_start, end_idx)?;
 
-	// Insert project summary (preserve cache if any removed message was cached)
-	session.insert_compressed_knowledge(start_idx, project_summary, had_cached)?;
+	// Insert project summary at range_start (preserve cache if any removed message was cached)
+	session.insert_compressed_knowledge(range_start, project_summary, had_cached)?;
 
 	let tokens_saved = tokens_before.saturating_sub(tokens_after);
 	let metrics = CompressionMetrics::new(messages_removed, tokens_saved, tokens_before);
