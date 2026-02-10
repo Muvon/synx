@@ -435,6 +435,42 @@ impl GenericLayer {
 			return Ok(None);
 		}
 
+		// Start animation for the follow-up API call (same as main session)
+		use std::sync::atomic::{AtomicBool, Ordering};
+		use std::sync::Arc;
+
+		let animation_cancel = Arc::new(AtomicBool::new(false));
+		let animation_cancel_clone = animation_cancel.clone();
+
+		// Set up monitor task to propagate global cancellation to animation
+		let operation_cancelled_monitor = operation_cancelled.clone();
+		let _cancel_monitor = tokio::spawn(async move {
+			while !animation_cancel_clone.load(Ordering::SeqCst) {
+				if *operation_cancelled_monitor.borrow() {
+					animation_cancel_clone.store(true, Ordering::SeqCst);
+					break;
+				}
+				tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+			}
+		});
+
+		// Calculate current context for animation display
+		let current_context_tokens =
+			layer_session.get_full_context_tokens(layer_config).await as u64;
+		let current_cost = layer_session.session.info.total_cost;
+		let max_threshold = layer_config.max_session_tokens_threshold;
+
+		let animation_cancel_flag = animation_cancel.clone();
+		let animation_task = tokio::spawn(async move {
+			let _ = crate::session::chat::show_smart_animation(
+				animation_cancel_flag,
+				current_cost,
+				current_context_tokens,
+				max_threshold,
+			)
+			.await;
+		});
+
 		// Make follow-up API call with tool results
 		// CRITICAL FIX: Pass cancellation token to make API calls immediately cancellable
 		let validation_params = ChatCompletionWithValidationParams::new(
@@ -448,7 +484,14 @@ impl GenericLayer {
 		)
 		.with_max_retries(0)
 		.with_cancellation_token(operation_cancelled.clone());
-		match crate::session::chat_completion_with_validation(validation_params).await {
+
+		let api_result = crate::session::chat_completion_with_validation(validation_params).await;
+
+		// Stop animation after API call completes
+		animation_cancel.store(true, Ordering::SeqCst);
+		let _ = animation_task.await;
+
+		match api_result {
 			Ok(response) => {
 				// Check for cancellation after API call
 				if *operation_cancelled.borrow() {
