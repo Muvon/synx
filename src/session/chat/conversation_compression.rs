@@ -896,19 +896,18 @@ fn find_compression_range(messages: &[crate::session::Message]) -> Result<(usize
 	let compress_count = conversation_indices.len() - preserve_count;
 
 	let start_idx = system_idx + 1; // Start after system message
-	let mut end_idx = conversation_indices[compress_count - 1]; // Last conversation message to compress
 
-	// CRITICAL: If end_idx is an assistant with tool_calls, extend through ALL its tool results
-	// This prevents cutting between assistant and its tool results
-	if end_idx < messages.len() {
-		let msg = &messages[end_idx];
-		if msg.role == "assistant" && msg.tool_calls.is_some() {
-			// Extend through all contiguous tool results
-			while end_idx + 1 < messages.len() && messages[end_idx + 1].role == "tool" {
-				end_idx += 1;
-			}
-		}
-	}
+	// CRITICAL FIX: The end_idx must be the last MESSAGE INDEX (not conversation index)
+	// before the first preserved conversation message.
+	//
+	// OLD BUG: Used conversation_indices[compress_count - 1] which gave us the index
+	// of the last conversation message to compress, but SKIPPED any tool messages
+	// that follow it.
+	//
+	// CORRECT: The first preserved conversation message is at conversation_indices[compress_count].
+	// Everything BEFORE that index (including tool messages) should be compressed.
+	// So end_idx = conversation_indices[compress_count] - 1
+	let end_idx = conversation_indices[compress_count] - 1;
 
 	Ok((start_idx, end_idx))
 }
@@ -959,7 +958,7 @@ mod tests {
 		let mut messages = Vec::new();
 		messages.push(msg("system")); // 0
 
-		// Create scenario where end_idx lands on assistant with tool_calls
+		// Create scenario where tool messages are between conversation messages
 		messages.push(msg("user")); // 1
 		let mut assistant1 = msg("assistant"); // 2
 		assistant1.tool_calls = Some(json!([
@@ -981,16 +980,19 @@ mod tests {
 
 		// conversation_indices = [1, 2, 4, 5, 6, 7, 8, 9] (8 messages)
 		// Keep last 4: [6, 7, 8, 9]
-		// Compress first 4: [1, 2, 4, 5]
-		// end_idx = conversation_indices[3] = 5 (assistant without tool_calls, no extension)
+		// First preserved conversation message: conversation_indices[4] = 6
+		// end_idx = 6 - 1 = 5 (includes tool message at 3)
 		assert_eq!(start_idx, 1);
-		assert_eq!(end_idx, 5);
+		assert_eq!(
+			end_idx, 5,
+			"Must include all messages before first preserved conversation message"
+		);
 	}
 
 	#[test]
 	#[allow(clippy::vec_init_then_push)]
 	fn extends_when_ending_on_assistant_with_tools() {
-		// THIS is the critical test - end_idx lands on assistant WITH tool_calls
+		// THIS is the critical test - tool messages between conversation messages
 		let mut messages = Vec::new();
 		messages.push(msg("system")); // 0
 
@@ -1016,13 +1018,12 @@ mod tests {
 
 		// conversation_indices = [1, 2, 3, 4, 6, 7, 8, 9] (8 messages)
 		// Keep last 4: [6, 7, 8, 9]
-		// Compress first 4: [1, 2, 3, 4]
-		// end_idx = conversation_indices[3] = 4 (assistant WITH tool_calls)
-		// MUST extend through tool at index 5
+		// First preserved conversation message: conversation_indices[4] = 6
+		// end_idx = 6 - 1 = 5 (includes tool message at 5)
 		assert_eq!(start_idx, 1);
 		assert_eq!(
 			end_idx, 5,
-			"Must extend through tool results when ending on assistant with tool_calls"
+			"Must include all messages (including tool results) before first preserved conversation message"
 		);
 	}
 
@@ -1066,9 +1067,12 @@ mod tests {
 
 		// conversation_indices = [1, 2, 4, 6, 7, 8, 9, 10] (8 messages)
 		// Keep last 4: [7, 8, 9, 10]
-		// Compress first 4: [1, 2, 4, 6]
-		// end_idx = conversation_indices[3] = 6 (user message, no extension needed)
+		// First preserved conversation message: conversation_indices[4] = 7
+		// end_idx = 7 - 1 = 6 (includes all tool messages at 3, 5)
 		assert_eq!(start_idx, 1);
-		assert_eq!(end_idx, 6);
+		assert_eq!(
+			end_idx, 6,
+			"Must include all messages including tool results before first preserved"
+		);
 	}
 }
