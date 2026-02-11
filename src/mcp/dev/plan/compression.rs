@@ -313,6 +313,17 @@ pub async fn compress_completed_task(
 		metrics.compression_ratio * 100.0
 	);
 
+	// CRITICAL FIX: Reset token tracking for fresh start after compression
+	// This prevents token drift and ensures accurate cache/pricing calculations
+	session.session.current_non_cached_tokens = 0;
+	session.session.current_total_tokens = 0;
+
+	// Update cache checkpoint time
+	session.session.last_cache_checkpoint_time = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap_or_default()
+		.as_secs();
+
 	Ok(Some(metrics))
 }
 
@@ -485,6 +496,17 @@ async fn compress_phase(
 		metrics.tokens_saved
 	);
 
+	// CRITICAL FIX: Reset token tracking for fresh start after compression
+	// This prevents token drift and ensures accurate cache/pricing calculations
+	session.session.current_non_cached_tokens = 0;
+	session.session.current_total_tokens = 0;
+
+	// Update cache checkpoint time
+	session.session.last_cache_checkpoint_time = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap_or_default()
+		.as_secs();
+
 	Ok(Some(metrics))
 }
 
@@ -596,6 +618,17 @@ async fn compress_project(
 		compression_indices.len(),
 		metrics.tokens_saved
 	);
+
+	// CRITICAL FIX: Reset token tracking for fresh start after compression
+	// This prevents token drift and ensures accurate cache/pricing calculations
+	session.session.current_non_cached_tokens = 0;
+	session.session.current_total_tokens = 0;
+
+	// Update cache checkpoint time
+	session.session.last_cache_checkpoint_time = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap_or_default()
+		.as_secs();
 
 	Ok(Some(metrics))
 }
