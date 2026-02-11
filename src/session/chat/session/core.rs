@@ -200,12 +200,14 @@ impl ChatSession {
 		let max_retries_value = params.max_retries.unwrap_or(0);
 
 		// Create a new session with initial info
+		let timestamp = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap_or_default()
+			.as_secs();
+
 		let session_info = crate::session::SessionInfo {
 			name: params.name.clone(),
-			created_at: SystemTime::now()
-				.duration_since(UNIX_EPOCH)
-				.unwrap_or_default()
-				.as_secs(),
+			created_at: timestamp,
 			model: model_name.clone(),
 			provider: "openrouter".to_string(),
 			input_tokens: 0,
@@ -221,18 +223,23 @@ impl ChatSession {
 			total_layer_time_ms: 0,
 			compression_stats: CompressionStats::default(),
 			total_api_calls: 0,
+			// Initialize cache state
+			current_non_cached_tokens: 0,
+			current_total_tokens: 0,
+			last_cache_checkpoint_time: timestamp,
+			// Initialize runtime state
+			cache_next_user_message: false,
+			spending_threshold_checkpoint: 0.0,
+			continuation_pending: false,
+			continuation_disabled: false,
+			compression_hint_count: 0,
+			last_compression_hint_shown: 0,
 		};
 
 		let session = Session {
 			info: session_info,
 			messages: Vec::new(),
 			session_file: None,
-			current_non_cached_tokens: 0,
-			current_total_tokens: 0,
-			last_cache_checkpoint_time: SystemTime::now()
-				.duration_since(UNIX_EPOCH)
-				.unwrap_or_default()
-				.as_secs(),
 		};
 
 		Self {
@@ -406,36 +413,44 @@ impl ChatSession {
 					// Create chat session from loaded session
 					let restored_model = session.info.model.clone(); // Extract model before moving session
 					let restored_cost = session.info.total_cost; // Extract cost before moving session
+
+					// Restore runtime state from session.info
+					let cache_next = session.info.cache_next_user_message;
+					let spending_checkpoint = session.info.spending_threshold_checkpoint;
+					let continuation_pending = session.info.continuation_pending;
+					let continuation_disabled = session.info.continuation_disabled;
+					let compression_hint_count = session.info.compression_hint_count;
+					let last_compression_hint = session.info.last_compression_hint_shown;
+
 					let mut chat_session = ChatSession {
 						session,
 						last_response: String::new(),
-						model: restored_model,              // Use restored model from session
-						role: params.role.to_string(),      // Add role from params
-						temperature: effective_temperature, // Use config-based temperature
-						top_p: effective_top_p,             // Use config-based top_p
-						top_k: effective_top_k,             // Use config-based top_k
-						max_tokens: effective_max_tokens,   // Use config-based max_tokens
-						estimated_cost: restored_cost,      // FIXED: Use actual cost from session
-						cache_next_user_message: false,     // Initialize cache flag
-						spending_threshold_checkpoint: 0.0, // Initialize spending checkpoint
-						request_spending_checkpoint: 0.0,   // Initialize request spending checkpoint
-						pending_image: None,                // Initialize pending image
+						model: restored_model,               // Use restored model from session
+						role: params.role.to_string(),       // Add role from params
+						temperature: effective_temperature,  // Use config-based temperature
+						top_p: effective_top_p,              // Use config-based top_p
+						top_k: effective_top_k,              // Use config-based top_k
+						max_tokens: effective_max_tokens,    // Use config-based max_tokens
+						estimated_cost: restored_cost,       // FIXED: Use actual cost from session
+						cache_next_user_message: cache_next, // Restore from session.info
+						spending_threshold_checkpoint: spending_checkpoint, // Restore from session.info
+						request_spending_checkpoint: 0.0,    // Initialize request spending checkpoint
+						pending_image: None,                 // Initialize pending image
 						max_retries: params.max_retries.unwrap_or(0), // Use provided max_retries or default to 0
-						continuation_pending: false,        // Initialize continuation state
-						continuation_disabled: false,       // Initialize continuation control flag
-						was_resumed: true,                  // This session was resumed from file
-						pending_prompt: None,               // Initialize pending prompt
-						initial_status_shown: true,         // Don't show status for resumed sessions
-						compression_hint_count: 0,          // Initialize compression hint counter
-						last_compression_hint_shown: 0,     // Initialize last hint timestamp
-						cached_tools: None,                 // Initialize tool cache (populated on first use)
+						continuation_pending,                // Restore from session.info
+						continuation_disabled,               // Restore from session.info
+						was_resumed: true,                   // This session was resumed from file
+						pending_prompt: None,                // Initialize pending prompt
+						initial_status_shown: true,          // Don't show status for resumed sessions
+						compression_hint_count,              // Restore from session.info
+						last_compression_hint_shown: last_compression_hint, // Restore from session.info
+						cached_tools: None,                  // Initialize tool cache (populated on first use)
 					};
 
-					// Initialize spending threshold checkpoint for loaded sessions
-					chat_session.spending_threshold_checkpoint = 0.0;
-
-					// Apply runtime state from session log
-					chat_session.cache_next_user_message = runtime_state.cache_next_message;
+					// Apply runtime state from session log (legacy support)
+					if runtime_state.cache_next_message {
+						chat_session.cache_next_user_message = true;
+					}
 
 					// Apply restored role if available
 					if let Some(restored_role) = runtime_state.role {

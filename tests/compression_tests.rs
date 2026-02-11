@@ -319,11 +319,19 @@ mod adaptive_compression_tests {
 				total_layer_time_ms: 0,
 				compression_stats: octomind::session::CompressionStats::default(),
 				total_api_calls: 0,
+				// Cache state (Phase 1)
+				current_non_cached_tokens: 100, // Simulate some cache activity
+				current_total_tokens: 500,      // This is the cache counter, NOT full context
+				last_cache_checkpoint_time: timestamp,
+				// Runtime state (Phase 2)
+				cache_next_user_message: false,
+				spending_threshold_checkpoint: 0.0,
+				continuation_pending: false,
+				continuation_disabled: false,
+				compression_hint_count: 0,
+				last_compression_hint_shown: 0,
 			},
 			session_file: None,
-			current_non_cached_tokens: 100, // Simulate some cache activity
-			current_total_tokens: 500,      // This is the cache counter, NOT full context
-			last_cache_checkpoint_time: timestamp,
 		}
 	}
 
@@ -333,17 +341,17 @@ mod adaptive_compression_tests {
 		let session = create_test_session(50);
 
 		// The cache counter (current_total_tokens) is artificially set to 500
-		assert_eq!(session.current_total_tokens, 500);
+		assert_eq!(session.info.current_total_tokens, 500);
 
 		// But the ACTUAL full context should be much larger
 		let full_context_tokens = estimate_full_context_tokens(&session.messages, None, None);
 
 		// Full context should be significantly larger than cache counter
 		assert!(
-			full_context_tokens > session.current_total_tokens as usize,
+			full_context_tokens > session.info.current_total_tokens as usize,
 			"Full context tokens ({}) should be > cache counter ({})",
 			full_context_tokens,
-			session.current_total_tokens
+			session.info.current_total_tokens
 		);
 
 		// With 101 messages of substantial content, we should have thousands of tokens
@@ -374,7 +382,7 @@ mod adaptive_compression_tests {
 
 		// Calculate what the function should see
 		let full_context = estimate_full_context_tokens(&session.messages, None, None) as usize;
-		let cache_counter = session.current_total_tokens as usize;
+		let cache_counter = session.info.current_total_tokens as usize;
 
 		// Verify our test setup: full context > threshold, cache counter < threshold
 		assert!(
@@ -474,8 +482,8 @@ mod adaptive_compression_tests {
 		let full_context_before = estimate_full_context_tokens(&session.messages, None, None);
 
 		// Simulate cache checkpoint (resets counter to 0)
-		session.current_total_tokens = 0;
-		session.current_non_cached_tokens = 0;
+		session.info.current_total_tokens = 0;
+		session.info.current_non_cached_tokens = 0;
 
 		let full_context_after = estimate_full_context_tokens(&session.messages, None, None);
 
@@ -486,6 +494,6 @@ mod adaptive_compression_tests {
 		);
 
 		// But cache counter is now 0
-		assert_eq!(session.current_total_tokens, 0);
+		assert_eq!(session.info.current_total_tokens, 0);
 	}
 }

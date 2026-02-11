@@ -315,11 +315,11 @@ pub async fn compress_completed_task(
 
 	// CRITICAL FIX: Reset token tracking for fresh start after compression
 	// This prevents token drift and ensures accurate cache/pricing calculations
-	session.session.current_non_cached_tokens = 0;
-	session.session.current_total_tokens = 0;
+	session.session.info.current_non_cached_tokens = 0;
+	session.session.info.current_total_tokens = 0;
 
-	// Update cache checkpoint time
-	session.session.last_cache_checkpoint_time = std::time::SystemTime::now()
+	// Reset cache checkpoint time
+	session.session.info.last_cache_checkpoint_time = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap_or_default()
 		.as_secs();
@@ -498,11 +498,11 @@ async fn compress_phase(
 
 	// CRITICAL FIX: Reset token tracking for fresh start after compression
 	// This prevents token drift and ensures accurate cache/pricing calculations
-	session.session.current_non_cached_tokens = 0;
-	session.session.current_total_tokens = 0;
+	session.session.info.current_non_cached_tokens = 0;
+	session.session.info.current_total_tokens = 0;
 
-	// Update cache checkpoint time
-	session.session.last_cache_checkpoint_time = std::time::SystemTime::now()
+	// Reset cache checkpoint time
+	session.session.info.last_cache_checkpoint_time = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap_or_default()
 		.as_secs();
@@ -621,11 +621,11 @@ async fn compress_project(
 
 	// CRITICAL FIX: Reset token tracking for fresh start after compression
 	// This prevents token drift and ensures accurate cache/pricing calculations
-	session.session.current_non_cached_tokens = 0;
-	session.session.current_total_tokens = 0;
+	session.session.info.current_non_cached_tokens = 0;
+	session.session.info.current_total_tokens = 0;
 
-	// Update cache checkpoint time
-	session.session.last_cache_checkpoint_time = std::time::SystemTime::now()
+	// Reset cache checkpoint time
+	session.session.info.last_cache_checkpoint_time = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap_or_default()
 		.as_secs();

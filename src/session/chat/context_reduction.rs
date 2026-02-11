@@ -188,11 +188,11 @@ pub async fn perform_context_reduction(
 			}
 
 			// Reset token tracking for fresh start
-			chat_session.session.current_non_cached_tokens = 0;
-			chat_session.session.current_total_tokens = 0;
+			chat_session.session.info.current_non_cached_tokens = 0;
+			chat_session.session.info.current_total_tokens = 0;
 
-			// Update cache checkpoint time
-			chat_session.session.last_cache_checkpoint_time = std::time::SystemTime::now()
+			// Reset cache checkpoint time
+			chat_session.session.info.last_cache_checkpoint_time = std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
 				.as_secs();

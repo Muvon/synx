@@ -215,8 +215,34 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			}
 
 			// Save the session after cleanup to persist changes
+			// PHASE 4: Robust save with retry and error reporting
 			if let Err(e) = chat_session.save() {
-				log_debug!("Warning: Failed to save session after smart cleanup: {}", e);
+				use colored::*;
+				eprintln!();
+				eprintln!(
+					"{}",
+					"⚠️  CRITICAL: Failed to save session after cleanup"
+						.bright_red()
+						.bold()
+				);
+				eprintln!("{} {}", "Error:".bright_yellow(), e);
+				eprintln!(
+					"{}",
+					"Session state may be inconsistent on resume.".bright_yellow()
+				);
+				eprintln!();
+
+				// Attempt one retry
+				log_debug!("Retrying session save after failure...");
+				if let Err(retry_err) = chat_session.save() {
+					eprintln!(
+						"{}",
+						"⚠️  Retry failed. Session may be corrupted.".bright_red()
+					);
+					log_debug!("Retry save failed: {}", retry_err);
+				} else {
+					eprintln!("{}", "✓ Retry succeeded - session saved.".bright_green());
+				}
 			}
 
 			// Clear operation context

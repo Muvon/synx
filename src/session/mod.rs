@@ -223,6 +223,26 @@ pub struct SessionInfo {
 	// API call tracking for cache-aware compression
 	#[serde(default)]
 	pub total_api_calls: usize, // Total API calls made in this session (for cache economics)
+	// Cache state tracking (Phase 1: moved from Session to SessionInfo for persistence)
+	#[serde(default)]
+	pub current_non_cached_tokens: u64,
+	#[serde(default)]
+	pub current_total_tokens: u64,
+	#[serde(default = "current_timestamp")]
+	pub last_cache_checkpoint_time: u64,
+	// Runtime state tracking (Phase 2: ChatSession runtime state for proper resume)
+	#[serde(default)]
+	pub cache_next_user_message: bool,
+	#[serde(default)]
+	pub spending_threshold_checkpoint: f64,
+	#[serde(default)]
+	pub continuation_pending: bool,
+	#[serde(default)]
+	pub continuation_disabled: bool,
+	#[serde(default)]
+	pub compression_hint_count: usize,
+	#[serde(default)]
+	pub last_compression_hint_shown: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -312,12 +332,6 @@ pub struct Session {
 	pub info: SessionInfo,
 	pub messages: Vec<Message>,
 	pub session_file: Option<PathBuf>,
-	// Track cumulative token counts since last cache checkpoint (for auto-caching thresholds)
-	pub current_non_cached_tokens: u64,
-	pub current_total_tokens: u64,
-	// Track last cache checkpoint time for time-based auto-caching
-	#[serde(default = "current_timestamp")]
-	pub last_cache_checkpoint_time: u64,
 }
 
 impl Session {
@@ -347,13 +361,21 @@ impl Session {
 				total_layer_time_ms: 0,
 				compression_stats: CompressionStats::default(),
 				total_api_calls: 0,
+				// Initialize cache state
+				current_non_cached_tokens: 0,
+				current_total_tokens: 0,
+				last_cache_checkpoint_time: timestamp,
+				// Initialize runtime state
+				cache_next_user_message: false,
+				spending_threshold_checkpoint: 0.0,
+				continuation_pending: false,
+				continuation_disabled: false,
+				compression_hint_count: 0,
+				last_compression_hint_shown: 0,
 			},
 
 			messages: Vec::new(),
 			session_file: None,
-			current_non_cached_tokens: 0,
-			current_total_tokens: 0,
-			last_cache_checkpoint_time: timestamp,
 		}
 	}
 
@@ -385,8 +407,8 @@ impl Session {
 					msg.cached = crate::session::model_supports_caching(&self.info.model);
 					if msg.cached {
 						// Reset token counters when adding a cache checkpoint
-						self.current_non_cached_tokens = 0;
-						self.current_total_tokens = 0;
+						self.info.current_non_cached_tokens = 0;
+						self.info.current_total_tokens = 0;
 						return Ok(true);
 					}
 					return Ok(false);
@@ -1026,9 +1048,6 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 			info,
 			messages: cleaned_messages,
 			session_file: Some(session_file.clone()),
-			current_non_cached_tokens: 0,
-			current_total_tokens: 0,
-			last_cache_checkpoint_time: current_timestamp(), // Initialize to current time for existing sessions
 		};
 
 		Ok(session)
@@ -1096,11 +1115,21 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 			layer_stats: Vec::new(),
 			tool_calls: 0,
 			total_api_time_ms: 0,
-
 			total_tool_time_ms: 0,
 			total_layer_time_ms: 0,
 			compression_stats: CompressionStats::default(),
 			total_api_calls: 0,
+			// Initialize cache state
+			current_non_cached_tokens: 0,
+			current_total_tokens: 0,
+			last_cache_checkpoint_time: current_timestamp(),
+			// Initialize runtime state
+			cache_next_user_message: false,
+			spending_threshold_checkpoint: 0.0,
+			continuation_pending: false,
+			continuation_disabled: false,
+			compression_hint_count: 0,
+			last_compression_hint_shown: 0,
 		};
 
 		// Extract runtime state from log file
@@ -1173,9 +1202,6 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 			info,
 			messages: final_messages,
 			session_file: Some(session_file.clone()),
-			current_non_cached_tokens: 0,
-			current_total_tokens: 0,
-			last_cache_checkpoint_time: current_timestamp(),
 		};
 
 		// Save a SUMMARY entry to fix the session file for future loads

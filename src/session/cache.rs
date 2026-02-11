@@ -237,7 +237,8 @@ impl CacheManager {
 			.unwrap_or_default()
 			.as_secs();
 
-		let time_since_last_cache = current_time.saturating_sub(session.last_cache_checkpoint_time);
+		let time_since_last_cache =
+			current_time.saturating_sub(session.info.last_cache_checkpoint_time);
 
 		if time_since_last_cache >= config.cache_timeout_seconds {
 			// Find the LAST tool message, and if none, the LAST user message
@@ -264,12 +265,12 @@ impl CacheManager {
 					}
 					Ok(false) => {
 						// Even if we couldn't add a marker, update the time to prevent constant attempts
-						session.last_cache_checkpoint_time = current_time;
+						session.info.last_cache_checkpoint_time = current_time;
 						return Ok(false);
 					}
 					Err(_) => {
 						// Update time on error too to prevent constant attempts
-						session.last_cache_checkpoint_time = current_time;
+						session.info.last_cache_checkpoint_time = current_time;
 						return Ok(false); // Silently fail for auto-cache
 					}
 				}
@@ -278,7 +279,7 @@ impl CacheManager {
 
 		// Check absolute threshold (only check if > 0, meaning enabled)
 		if config.cache_tokens_threshold > 0
-			&& session.current_non_cached_tokens >= config.cache_tokens_threshold
+			&& session.info.current_non_cached_tokens >= config.cache_tokens_threshold
 		{
 			// Find the LAST tool message, and if none, the LAST user message
 			let target_index = session
@@ -344,7 +345,7 @@ impl CacheManager {
 
 		// Check absolute threshold first (only check if > 0, meaning enabled)
 		if config.cache_tokens_threshold > 0
-			&& session.current_non_cached_tokens >= config.cache_tokens_threshold
+			&& session.info.current_non_cached_tokens >= config.cache_tokens_threshold
 		{
 			match self.apply_cache_to_message(session, tool_message_index, supports_caching) {
 				Ok(true) => return Ok(true),
@@ -359,19 +360,20 @@ impl CacheManager {
 			.unwrap_or_default()
 			.as_secs();
 
-		let time_since_last_cache = current_time.saturating_sub(session.last_cache_checkpoint_time);
+		let time_since_last_cache =
+			current_time.saturating_sub(session.info.last_cache_checkpoint_time);
 
 		if time_since_last_cache >= config.cache_timeout_seconds {
 			match self.apply_cache_to_message(session, tool_message_index, supports_caching) {
 				Ok(true) => return Ok(true),
 				Ok(false) => {
 					// Even if we couldn't add a marker, update the time to prevent constant attempts
-					session.last_cache_checkpoint_time = current_time;
+					session.info.last_cache_checkpoint_time = current_time;
 					return Ok(false);
 				}
 				Err(_) => {
 					// Update time on error too to prevent constant attempts
-					session.last_cache_checkpoint_time = current_time;
+					session.info.last_cache_checkpoint_time = current_time;
 					return Ok(false); // Silently fail for auto-cache
 				}
 			}
@@ -410,8 +412,8 @@ impl CacheManager {
 		// - Add ONLY non-cached input tokens to non-cached tracking
 		// - Output tokens don't count toward cache thresholds (they can't be cached)
 
-		session.current_total_tokens += total_input_tokens;
-		session.current_non_cached_tokens += input_tokens; // Only non-cached input tokens
+		session.info.current_total_tokens += total_input_tokens;
+		session.info.current_non_cached_tokens += input_tokens; // Only non-cached input tokens
 	}
 
 	/// Estimate current session tokens for threshold checking
@@ -504,8 +506,8 @@ impl CacheManager {
 			total_cached_tokens: session.info.cached_tokens,
 			total_input_tokens: session.info.input_tokens + session.info.cached_tokens,
 			total_output_tokens: session.info.output_tokens,
-			current_non_cached_tokens: session.current_non_cached_tokens,
-			current_total_tokens: session.current_total_tokens,
+			current_non_cached_tokens: session.info.current_non_cached_tokens,
+			current_total_tokens: session.info.current_total_tokens,
 			cache_efficiency: if session.info.input_tokens + session.info.cached_tokens > 0 {
 				// Cache efficiency = percentage of total input tokens that came from cache
 				// This shows the overall session cache efficiency (lifetime)
@@ -595,9 +597,9 @@ impl CacheManager {
 			msg.cached = true;
 
 			// Reset token counters when adding a cache checkpoint
-			session.current_non_cached_tokens = 0;
-			session.current_total_tokens = 0;
-			session.last_cache_checkpoint_time = std::time::SystemTime::now()
+			session.info.current_non_cached_tokens = 0;
+			session.info.current_total_tokens = 0;
+			session.info.last_cache_checkpoint_time = std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
 				.as_secs();
@@ -778,12 +780,20 @@ mod tests {
 				total_tool_time_ms: 0,
 				compression_stats: crate::session::CompressionStats::default(),
 				total_api_calls: 0,
+				// Cache state (Phase 1)
+				current_non_cached_tokens: 0,
+				current_total_tokens: 0,
+				last_cache_checkpoint_time: 0,
+				// Runtime state (Phase 2)
+				cache_next_user_message: false,
+				spending_threshold_checkpoint: 0.0,
+				continuation_pending: false,
+				continuation_disabled: false,
+				compression_hint_count: 0,
+				last_compression_hint_shown: 0,
 			},
 			messages: Vec::new(),
 			session_file: None,
-			current_non_cached_tokens: 0,
-			current_total_tokens: 0,
-			last_cache_checkpoint_time: 0,
 		}
 	}
 

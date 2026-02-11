@@ -23,8 +23,19 @@ use colored::Colorize;
 use std::io::IsTerminal;
 
 impl ChatSession {
-	// Save the session
-	pub fn save(&self) -> Result<()> {
+	// Sync runtime state from ChatSession fields to session.info (for persistence)
+	fn sync_runtime_state(&mut self) {
+		self.session.info.cache_next_user_message = self.cache_next_user_message;
+		self.session.info.spending_threshold_checkpoint = self.spending_threshold_checkpoint;
+		self.session.info.continuation_pending = self.continuation_pending;
+		self.session.info.continuation_disabled = self.continuation_disabled;
+		self.session.info.compression_hint_count = self.compression_hint_count;
+		self.session.info.last_compression_hint_shown = self.last_compression_hint_shown;
+	}
+
+	// Save the session (syncs runtime state first)
+	pub fn save(&mut self) -> Result<()> {
+		self.sync_runtime_state();
 		self.session.save()
 	}
 
@@ -268,8 +279,8 @@ impl ChatSession {
 		// This ensures tool message tokens are counted toward auto-cache thresholds
 		// Tool messages are input tokens (they go to the API as input), not output tokens
 		let tool_input_tokens = tool_content_tokens + tool_overhead_tokens;
-		self.session.current_total_tokens += tool_input_tokens;
-		self.session.current_non_cached_tokens += tool_input_tokens;
+		self.session.info.current_total_tokens += tool_input_tokens;
+		self.session.info.current_non_cached_tokens += tool_input_tokens;
 
 		// Save to session file
 		if let Some(session_file) = &self.session.session_file {
