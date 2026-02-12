@@ -6,18 +6,22 @@ Octomind supports multiple AI providers through a unified interface powered by t
 
 **Architecture**: Octomind uses octolib as the underlying provider implementation, with an adapter layer that maintains backward compatibility while leveraging the comprehensive provider ecosystem.
 
-## Recent Changes
+## Provider Format
 
-### Provider Format Migration
-**All models now require the `provider:model` format:**
-- ❌ Old: `"anthropic/claude-sonnet-4"`
-- ✅ New: `"openrouter:anthropic/claude-sonnet-4"` or `"anthropic:claude-sonnet-4"`
+**All models use the `provider:model` format:**
+- ✅ Correct: `"openrouter:anthropic/claude-sonnet-4"` or `"anthropic:claude-sonnet-4"`
+- ❌ Incorrect: `"anthropic/claude-sonnet-4"` (missing provider prefix)
 
-### New Provider Support
-- **Amazon Bedrock**: Added support for AWS Bedrock models
-- **Cloudflare Workers AI**: Added support for Cloudflare's AI models
-- **Enhanced Google Vertex AI**: Improved authentication and model support
-- **Direct Provider Access**: All major providers now support direct API access
+## Supported Providers
+
+Octomind supports seven AI providers:
+- **OpenRouter**: Multi-provider access through single API
+- **OpenAI**: Direct API access to GPT models
+- **Anthropic**: Direct API access to Claude models
+- **Google Vertex AI**: Gemini models via Google Cloud
+- **Amazon Bedrock**: Claude and other models via AWS
+- **Cloudflare Workers AI**: Edge AI inference
+- **DeepSeek**: Cost-effective models
 
 ## Supported Providers
 
@@ -533,7 +537,7 @@ export OCTOMIND_OPENROUTER__CACHE_TOKENS_PCT_THRESHOLD=40
 - **Model routing**: Automatic fallbacks
 
 ### OpenAI Features
-- **Latest models**: Early access to new models
+- **Model variety**: Access to GPT-4o, o1, and other OpenAI models
 - **Function calling**: Advanced tool integration
 - **Structured outputs**: JSON mode support
 

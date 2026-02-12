@@ -129,11 +129,22 @@ Output modes control how the layer's output affects the session:
 
 ### Smart Context Processing
 
-The input_mode system now properly handles session context:
+The input_mode system handles session context:
 
 - **With `input_mode = "last"`**: If no explicit input is provided, the command gets the last assistant response. If explicit input is provided, it's combined with the previous assistant context.
 - **With `input_mode = "all"`**: The command receives the full conversation context formatted for analysis.
 - **With `input_mode = "summary"`**: The command gets a concise summary of the conversation.
+
+### Visual Feedback
+
+Command layers display the same smart animation as main sessions during API processing:
+
+- **Initial API call**: Shows animated spinner with context token count and cost
+- **Follow-up calls**: Animation continues during recursive tool processing
+- **Cancellation**: Animation stops immediately when operation is cancelled
+- **Context tracking**: Displays current tokens, cost, and threshold information
+
+This provides consistent visual feedback across both main sessions and command layer execution.
 
 ### MCP (Tool) Integration
 

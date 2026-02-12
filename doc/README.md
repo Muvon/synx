@@ -14,11 +14,11 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 - [07-command-layers.md](./07-command-layers.md) — Layered processing, custom commands, and agents
 - [08-mcp-server-development.md](./08-mcp-server-development.md) — MCP server development and protocol compliance
 - [09-websocket-server.md](./09-websocket-server.md) — WebSocket API for programmatic access
-- **[10-workflows.md](./10-workflows.md) — Brain-inspired planning system** ⭐ NEW
+- [10-workflows.md](./10-workflows.md) — Brain-inspired planning system for complex multi-step tasks
 
 ## Current Architecture Overview
 
-**Octomind v0.12.0** implements a session-first architecture with the following core components:
+**Octomind v0.16.0** implements a session-first architecture with the following core components:
 
 ### Session-First Design
 - **Interactive AI Conversations**: All functionality accessed through natural language sessions
@@ -42,7 +42,7 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 - **Cost Tracking**: Real-time usage monitoring with detailed reporting
 - **Layered Processing**: AI pipeline system for complex task decomposition
 - **Template-Based Configuration**: All defaults in `config-templates/default.toml`
-## Recent Updates & Features
+## Core Features
 
 ### Smart Adaptive Compression System
 - **Token-Based Triggers**: Compression activates at absolute token count thresholds (50k, 100k, 150k)
@@ -62,12 +62,6 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 - **Visual Feedback**: Animated indicator during tool execution showing progress
 - **User Experience**: Clear indication that tools are running and system is responsive
 - **Parallel Tool Support**: Animation works correctly with parallel tool execution
-- **Race Condition Fixes**: Proper timing to avoid animation showing before execution completes
-
-### Reverse Search Enhancement
-- **Ctrl+E Support**: Exit reverse search mode with Ctrl+E keyboard shortcut
-- **Interactive Sessions**: Improved terminal interaction for better user experience
-- **Search Navigation**: Full reverse search functionality with proper exit handling
 
 ### Smart Session Continuation System
 - **Modular Architecture**: Refactored into focused modules in `src/session/chat/continuation/`
@@ -239,6 +233,6 @@ Default values
 
 ---
 
-**Octomind v0.12.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.
+**Octomind v0.16.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.
 
 **© 2025 Muvon Un Limited** | Apache License 2.0

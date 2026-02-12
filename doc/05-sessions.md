@@ -795,19 +795,19 @@ enabled = false  # No tools in chat mode
 
 ### Automatic Context Preservation
 
-Octomind features an intelligent session continuation system that automatically manages token limits while preserving essential context through AI-driven file analysis. **Recently enhanced** with critical bug fixes for parallel tool execution and CTRL-C cancellation support.
+Octomind features an intelligent session continuation system that automatically manages token limits while preserving essential context through AI-driven file analysis.
 
 #### How It Works
 
 When your session approaches the configured token threshold during any operation:
 
 1. **Automatic Detection**: System monitors tokens against `max_session_tokens_threshold`
-2. **Deferred Processing**: **NEW** - During parallel tool execution, continuation is deferred until all tools complete
+2. **Deferred Processing**: During parallel tool execution, continuation is deferred until all tools complete
 3. **Structured Summary Request**: AI receives a detailed prompt to summarize the session
 4. **File Context Parsing**: AI specifies needed files using format `filename:startline:endline`
 5. **Context Preservation**: System reads specified files with line numbers
 6. **Seamless Continuation**: Session resets with summary and file context intact
-7. **Cancellation Support**: **NEW** - CTRL-C can interrupt long-running continuation operations
+7. **Cancellation Support**: CTRL-C can interrupt long-running continuation operations
 
 #### Configuration
 
@@ -816,12 +816,12 @@ When your session approaches the configured token threshold during any operation
 max_session_tokens_threshold = 20000
 ```
 
-#### Critical Bug Fixes (Latest)
+#### Technical Implementation
 
-- **Fixed OpenAI API 400 Errors**: Resolved "tool_call_ids did not have response messages" during parallel tool execution
-- **Added CTRL-C Support**: Users can now interrupt continuation operations with proper cancellation handling
-- **Clean API Design**: Refactored with `TruncationOptions` struct following Rust best practices
-- **Eliminated Code Smells**: Removed duplicate functions and parameter pollution
+- **Parallel Tool Safety**: Continuation defers during parallel tool execution to prevent "tool_call_ids did not have response messages" errors
+- **CTRL-C Cancellation**: Operations can be interrupted with proper cancellation handling
+- **Clean API Design**: Uses `TruncationOptions` struct following Rust best practices
+- **Code Quality**: Eliminated duplicate functions and parameter pollution
 
 #### Example Continuation Flow
 
@@ -853,17 +853,16 @@ Continuing with preserved context...
 
 #### Features
 
-- **Modular Architecture**: **ENHANCED** - Refactored into focused modules with improved maintainability
-- **Enhanced User Experience**: **CRITICAL FIX** - Assistant summaries now displayed to users during continuation
+- **Modular Architecture**: Refactored into focused modules with improved maintainability
+- **User Experience**: Assistant summaries displayed to users during continuation
 - **Professional Display**: Colored headers and organized status information during continuation
-- **Parallel Tool Safety**: **NEW** - Prevents continuation during parallel tool execution to avoid API errors
-- **Cancellation Support**: **NEW** - CTRL-C interruption support for long-running operations
+- **Parallel Tool Safety**: Prevents continuation during parallel tool execution to avoid API errors
+- **Cancellation Support**: CTRL-C interruption support for long-running operations
 - **Zero Configuration**: All prompts and logic are built-in
 - **AI-Driven Selection**: AI chooses exactly which files and lines to preserve
 - **Visual Feedback**: Clear indication when continuation occurs with file context details
 - **Error Resilience**: Graceful handling of missing files or parsing errors
 - **Performance Limits**: Maximum 10 file contexts, 10k lines per file
-- **Backward Compatible**: All existing functionality preserved via re-exports
 
 ## Visual Feedback and Animation
 
