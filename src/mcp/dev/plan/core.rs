@@ -323,6 +323,12 @@ async fn handle_start_command(call: &McpToolCall) -> Result<McpToolResult> {
 		tasks[0].title
 	));
 
+	// CRITICAL FIX: Set start_index for first task when plan is created
+	// This will be used by compression to know where the first task's work begins
+	// Note: We can't get message_count here (no session access), so we signal
+	// that start_index should be set in response.rs when plan tool returns
+	// The flag will be checked and start_index will be set AFTER plan(start) completes
+
 	Ok(McpToolResult::success(
 		call.tool_name.clone(),
 		call.tool_id.clone(),
@@ -504,6 +510,18 @@ async fn handle_next_command(call: &McpToolCall) -> Result<McpToolResult> {
 	// Request task compression if we have a completed task
 	if let Some(task) = completed_task {
 		super::compression::request_compression(task);
+	}
+
+	// CRITICAL FIX: Clear start_index after requesting compression
+	// This signals that the NEXT task should set a new start_index
+	// The new start_index will be set in response.rs after plan(next) returns
+	// This ensures each task gets its own compression range
+	{
+		let mut start_index = CURRENT_TASK_START_INDEX.lock().unwrap();
+		*start_index = None;
+		crate::log_debug!(
+			"Cleared start_index after plan(next) - next task will set new start_index"
+		);
 	}
 
 	// Automatic phase compression: trigger when phase completes

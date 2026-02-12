@@ -332,6 +332,7 @@ mod adaptive_compression_tests {
 				input_tokens: 0,
 				output_tokens: 0,
 				cached_tokens: 0,
+				reasoning_tokens: 0,
 				total_cost: 0.0,
 				duration_seconds: 0,
 				layer_stats: vec![],
