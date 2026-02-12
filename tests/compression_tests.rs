@@ -19,6 +19,13 @@
 //!
 //! Note: These tests focus on the core remove_messages_in_range logic
 //! using a minimal test setup to avoid complex ChatSession initialization.
+//!
+//! ## Test Isolation (Race Condition Fix)
+//!
+//! Tests that load Config use `create_isolated_config()` helper to avoid
+//! race conditions when running in parallel (e.g., CI with multiple cores).
+//! Each test gets its own temporary config directory via OCTOMIND_CONFIG_PATH,
+//! preventing concurrent config migrations from corrupting shared state.
 
 #[cfg(test)]
 mod compression_tests {
@@ -252,6 +259,21 @@ mod adaptive_compression_tests {
 	use octomind::session::{estimate_full_context_tokens, Message, Session, SessionInfo};
 	use std::time::{SystemTime, UNIX_EPOCH};
 
+	/// Helper to create isolated config for testing
+	/// Returns (TempDir, Config) - TempDir must be kept alive for config to remain valid
+	fn create_isolated_config() -> (tempfile::TempDir, Config) {
+		let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+		let config_path = temp_dir.path().join("config.toml");
+
+		// Set env var to use isolated config directory
+		std::env::set_var("OCTOMIND_CONFIG_PATH", config_path.to_str().unwrap());
+
+		// Load config (will create default in temp dir)
+		let config = Config::load().expect("Failed to load isolated config");
+
+		(temp_dir, config)
+	}
+
 	/// Helper to create a test session with N message pairs
 	fn create_test_session(message_count: usize) -> Session {
 		let timestamp = SystemTime::now()
@@ -366,8 +388,8 @@ mod adaptive_compression_tests {
 	fn test_should_check_compression_uses_correct_token_source() {
 		// This test verifies Bug #1 fix: should_check_compression uses full context, not cache counter
 
-		// Load default config
-		let config = Config::load().expect("Failed to load config");
+		// Load isolated config to avoid race conditions
+		let (_temp_dir, config) = create_isolated_config();
 
 		// Create a session with enough messages to exceed lowest pressure level
 		// We'll create a custom threshold for testing
@@ -408,7 +430,7 @@ mod adaptive_compression_tests {
 
 	#[test]
 	fn test_compression_threshold_calculation() {
-		let config = Config::load().expect("Failed to load config");
+		let (_temp_dir, config) = create_isolated_config();
 
 		// Test that pressure levels are correctly configured
 		assert!(
@@ -433,7 +455,7 @@ mod adaptive_compression_tests {
 
 	#[test]
 	fn test_adaptive_threshold_flag() {
-		let config = Config::load().expect("Failed to load config");
+		let (_temp_dir, config) = create_isolated_config();
 
 		// Verify adaptive_threshold is configurable
 		// Default should be true (enabled)
@@ -445,7 +467,7 @@ mod adaptive_compression_tests {
 
 	#[test]
 	fn test_pressure_levels_configuration() {
-		let config = Config::load().expect("Failed to load config");
+		let (_temp_dir, config) = create_isolated_config();
 
 		// Verify pressure_levels are configured
 		assert!(
