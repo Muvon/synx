@@ -846,6 +846,28 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 							);
 						}
 					}
+					"TRUNCATION_POINT" => {
+						// Found a truncation point - this means messages were removed due to Ctrl+C cleanup
+						// Truncate to the specified message count to reflect the cleaned state
+						if let Some(message_count) =
+							json_value.get("message_count").and_then(|m| m.as_u64())
+						{
+							let target_count = message_count as usize;
+							if restoration_point_found {
+								restoration_messages.truncate(target_count);
+								crate::log_debug!(
+								"Session restoration: Found TRUNCATION_POINT - truncated restoration messages to {}",
+								target_count
+							);
+							} else {
+								messages.truncate(target_count);
+								crate::log_debug!(
+								"Session restoration: Found TRUNCATION_POINT - truncated messages to {}",
+								target_count
+							);
+							}
+						}
+					}
 					"COMMAND" => {
 						// Commands are processed separately in extract_runtime_state_from_log
 						continue;

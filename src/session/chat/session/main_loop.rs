@@ -216,6 +216,26 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 			// Save the session after cleanup to persist changes
 			// PHASE 4: Robust save with retry and error reporting
+			// CRITICAL FIX: Write TRUNCATION_POINT marker to session file
+			// This tells the loader to discard messages after this point on resume
+			if let Some(session_file) = &chat_session.session.session_file {
+				let truncation_entry = serde_json::json!({
+					"type": "TRUNCATION_POINT",
+					"timestamp": std::time::SystemTime::now()
+						.duration_since(std::time::UNIX_EPOCH)
+						.unwrap_or_default()
+						.as_secs(),
+					"message_count": chat_session.session.messages.len(),
+					"reason": "ctrl_c_cleanup"
+				});
+				if let Err(e) = crate::session::append_to_session_file(
+					session_file,
+					&serde_json::to_string(&truncation_entry).unwrap_or_default(),
+				) {
+					log_debug!("Failed to write TRUNCATION_POINT: {}", e);
+				}
+			}
+
 			if let Err(e) = chat_session.save() {
 				use colored::*;
 				eprintln!();
