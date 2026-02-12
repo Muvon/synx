@@ -134,9 +134,16 @@ impl Config {
 	/// Load configuration from the system-wide config file with strict validation
 	/// Supports multi-file configuration: reads config.toml and all other *.toml files
 	/// in the same directory, merging them into a single configuration.
+	///
+	/// Environment variable OCTOMIND_CONFIG_PATH can be used to specify a custom config path.
 	pub fn load() -> Result<Self> {
-		// Use the new system-wide config file path
-		let config_path = crate::directories::get_config_file_path()?;
+		// Check for custom config path from environment variable
+		let config_path = if let Ok(custom_path) = std::env::var("OCTOMIND_CONFIG_PATH") {
+			std::path::PathBuf::from(custom_path)
+		} else {
+			// Use the new system-wide config file path
+			crate::directories::get_config_file_path()?
+		};
 
 		// Get the config directory (config file's parent)
 		let config_dir = config_path.parent().unwrap_or(Path::new("."));

@@ -315,6 +315,26 @@ export CLOUDFLARE_API_TOKEN="your_cloudflare_token"
 export JINA_API_KEY="your_jina_key"
 ```
 
+### Configuration Path Override
+
+Use a custom configuration file or directory:
+
+```bash
+# Use specific config file
+export OCTOMIND_CONFIG_PATH="/path/to/custom-config.toml"
+
+# Use config directory (loads all .toml files)
+export OCTOMIND_CONFIG_PATH="/path/to/config-directory"
+
+# Works with all commands
+octomind session    # Uses custom config
+octomind run "task" # Uses custom config
+```
+
+**Default locations (when OCTOMIND_CONFIG_PATH not set):**
+- **macOS/Linux**: `~/.config/octomind/config.toml`
+- **Windows**: `%APPDATA%/octomind/config.toml`
+
 ### Configuration Overrides
 
 Environment variables are the PRIMARY method of configuration:
