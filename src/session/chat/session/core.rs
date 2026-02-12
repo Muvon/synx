@@ -464,6 +464,23 @@ impl ChatSession {
 						}
 					}
 
+					// CRITICAL FIX: Recalculate token tracking from actual messages
+					// After compression, persisted counters are reset to 0, but messages remain.
+					// On resume, we must recalculate from actual message content to restore correct state.
+					// This ensures cache thresholds and token counts reflect reality, not stale persisted values.
+					let cache_manager = crate::session::cache::CacheManager::new();
+					let (total_tokens, non_cached_tokens) =
+						cache_manager.estimate_current_session_tokens(&chat_session.session);
+					chat_session.session.info.current_total_tokens = total_tokens;
+					chat_session.session.info.current_non_cached_tokens = non_cached_tokens;
+
+					crate::log_debug!(
+					"Session resume: Recalculated token state - total: {}, non-cached: {} (from {} messages)",
+					total_tokens,
+					non_cached_tokens,
+					chat_session.session.messages.len()
+				);
+
 					// Get last assistant response if any
 					for msg in chat_session.session.messages.iter().rev() {
 						if msg.role == "assistant" {

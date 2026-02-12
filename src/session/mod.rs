@@ -789,6 +789,7 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 	let file = File::open(session_file)?;
 	let reader = BufReader::new(file);
 	let mut session_info: Option<SessionInfo> = None;
+	let mut last_summary_timestamp: u64 = 0; // Track last SUMMARY timestamp
 	let mut messages = Vec::new();
 	let mut restoration_point_found = false;
 	let mut restoration_messages = Vec::new();
@@ -804,9 +805,15 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 				match log_type {
 					"SUMMARY" => {
 						// Extract session info from JSON log entry
+						// SUMMARY is the source of truth - it contains complete session state
 						if let Some(session_info_value) = json_value.get("session_info") {
 							session_info =
 								Some(serde_json::from_value(session_info_value.clone())?);
+							// Track SUMMARY timestamp to ignore older STATS entries
+							last_summary_timestamp = json_value
+								.get("timestamp")
+								.and_then(|t| t.as_u64())
+								.unwrap_or(0);
 						}
 					}
 					"RESTORATION_POINT" => {
@@ -814,6 +821,27 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 						restoration_point_found = true;
 						messages.clear();
 						restoration_messages.clear();
+					}
+					"COMPRESSION_POINT" => {
+						// Found a compression point - messages before this were compressed
+						// Clear messages like RESTORATION_POINT to reflect compressed state
+						if restoration_point_found {
+							restoration_messages.clear();
+						} else {
+							messages.clear();
+						}
+
+						// Log compression restoration for debugging
+						if let (Some(comp_type), Some(msgs_removed)) = (
+							json_value.get("compression_type").and_then(|t| t.as_str()),
+							json_value.get("messages_removed").and_then(|m| m.as_u64()),
+						) {
+							crate::log_debug!(
+								"Session restoration: Found COMPRESSION_POINT ({}, {} messages removed)",
+								comp_type,
+								msgs_removed
+							);
+						}
 					}
 					"COMMAND" => {
 						// Commands are processed separately in extract_runtime_state_from_log
@@ -843,49 +871,60 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 						continue;
 					}
 					"STATS" => {
-						// Extract cost and token information from STATS entries
-						if let Some(info) = &mut session_info {
-							if let Some(total_cost) =
-								json_value.get("total_cost").and_then(|c| c.as_f64())
-							{
-								info.total_cost = total_cost;
-							}
-							if let Some(input_tokens) =
-								json_value.get("input_tokens").and_then(|t| t.as_u64())
-							{
-								info.input_tokens = input_tokens;
-							}
-							if let Some(output_tokens) =
-								json_value.get("output_tokens").and_then(|t| t.as_u64())
-							{
-								info.output_tokens = output_tokens;
-							}
-							if let Some(cached_tokens) =
-								json_value.get("cached_tokens").and_then(|t| t.as_u64())
-							{
-								info.cached_tokens = cached_tokens;
-							}
-							if let Some(tool_calls) =
-								json_value.get("tool_calls").and_then(|t| t.as_u64())
-							{
-								info.tool_calls = tool_calls;
-							}
-							if let Some(api_time) =
-								json_value.get("total_api_time_ms").and_then(|t| t.as_u64())
-							{
-								info.total_api_time_ms = api_time;
-							}
-							if let Some(tool_time) = json_value
-								.get("total_tool_time_ms")
-								.and_then(|t| t.as_u64())
-							{
-								info.total_tool_time_ms = tool_time;
-							}
-							if let Some(layer_time) = json_value
-								.get("total_layer_time_ms")
-								.and_then(|t| t.as_u64())
-							{
-								info.total_layer_time_ms = layer_time;
+						// STATS entries provide incremental updates during a session
+						// BUT: Only apply STATS that are NEWER than the last SUMMARY
+						// This ensures SUMMARY (written on save/exit) is the source of truth
+						let stats_timestamp = json_value
+							.get("timestamp")
+							.and_then(|t| t.as_u64())
+							.unwrap_or(0);
+
+						// Only apply STATS if it's newer than the last SUMMARY
+						// This prevents old STATS from overwriting fresh SUMMARY data on resume
+						if stats_timestamp > last_summary_timestamp {
+							if let Some(info) = &mut session_info {
+								if let Some(total_cost) =
+									json_value.get("total_cost").and_then(|c| c.as_f64())
+								{
+									info.total_cost = total_cost;
+								}
+								if let Some(input_tokens) =
+									json_value.get("input_tokens").and_then(|t| t.as_u64())
+								{
+									info.input_tokens = input_tokens;
+								}
+								if let Some(output_tokens) =
+									json_value.get("output_tokens").and_then(|t| t.as_u64())
+								{
+									info.output_tokens = output_tokens;
+								}
+								if let Some(cached_tokens) =
+									json_value.get("cached_tokens").and_then(|t| t.as_u64())
+								{
+									info.cached_tokens = cached_tokens;
+								}
+								if let Some(tool_calls) =
+									json_value.get("tool_calls").and_then(|t| t.as_u64())
+								{
+									info.tool_calls = tool_calls;
+								}
+								if let Some(api_time) =
+									json_value.get("total_api_time_ms").and_then(|t| t.as_u64())
+								{
+									info.total_api_time_ms = api_time;
+								}
+								if let Some(tool_time) = json_value
+									.get("total_tool_time_ms")
+									.and_then(|t| t.as_u64())
+								{
+									info.total_tool_time_ms = tool_time;
+								}
+								if let Some(layer_time) = json_value
+									.get("total_layer_time_ms")
+									.and_then(|t| t.as_u64())
+								{
+									info.total_layer_time_ms = layer_time;
+								}
 							}
 						}
 					}
@@ -1728,5 +1767,467 @@ mod tests {
 		assert!(cleaned);
 		assert_eq!(messages.len(), 1); // Only user message should remain
 		assert_eq!(messages[0].role, "user");
+	}
+
+	#[test]
+	fn test_session_loading_preserves_stats_from_summary() {
+		// Test that SUMMARY is the source of truth and old STATS don't overwrite it
+		use std::io::Write;
+		use tempfile::NamedTempFile;
+
+		// Create a temporary session file
+		let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+
+		// Write initial SUMMARY with some stats
+		writeln!(
+			temp_file,
+			"{}",
+			serde_json::to_string(&json!({
+				"type": "SUMMARY",
+				"timestamp": 1000,
+				"session_info": {
+					"name": "test-session",
+					"created_at": 1000,
+					"model": "openrouter:anthropic/claude-sonnet-4",
+					"provider": "openrouter",
+					"input_tokens": 100,
+					"output_tokens": 50,
+					"cached_tokens": 20,
+					"total_cost": 0.001,
+					"duration_seconds": 10,
+					"layer_stats": [
+						{
+							"layer_type": "main",
+							"model": "openrouter:anthropic/claude-sonnet-4",
+							"input_tokens": 100,
+							"output_tokens": 50,
+							"cost": 0.001,
+							"timestamp": 1000,
+							"api_time_ms": 500,
+							"tool_time_ms": 100,
+							"total_time_ms": 600
+						}
+					],
+					"tool_calls": 5,
+					"total_api_time_ms": 500,
+					"total_tool_time_ms": 100,
+					"total_layer_time_ms": 600,
+					"compression_stats": {
+						"task_compressions": 0,
+						"phase_compressions": 0,
+						"project_compressions": 0,
+						"conversation_compressions": 0,
+						"total_messages_removed": 0,
+						"total_tokens_saved": 0
+					},
+
+					"total_api_calls": 1,
+					"current_non_cached_tokens": 0,
+					"current_total_tokens": 0,
+					"last_cache_checkpoint_time": 1000,
+					"cache_next_user_message": false,
+					"spending_threshold_checkpoint": 0.0,
+					"continuation_pending": false,
+					"continuation_disabled": false,
+					"compression_hint_count": 0,
+					"last_compression_hint_shown": 0
+				}
+			}))
+			.unwrap()
+		)
+		.expect("Failed to write SUMMARY");
+
+		// Write some STATS entries with OLDER timestamps (should be ignored)
+		writeln!(
+			temp_file,
+			"{}",
+			serde_json::to_string(&json!({
+				"type": "STATS",
+				"timestamp": 900, // OLDER than SUMMARY
+				"total_cost": 0.0,
+				"input_tokens": 0,
+				"output_tokens": 0,
+				"cached_tokens": 0,
+				"tool_calls": 0,
+				"total_api_time_ms": 0,
+				"total_tool_time_ms": 0,
+				"total_layer_time_ms": 0,
+				"model": "openrouter:anthropic/claude-sonnet-4",
+				"provider": "openrouter"
+			}))
+			.unwrap()
+		)
+		.expect("Failed to write old STATS");
+
+		// Write a user message
+		writeln!(
+			temp_file,
+			"{}",
+			serde_json::to_string(&json!({
+				"role": "user",
+				"content": "Hello",
+				"timestamp": 1100,
+				"cached": false
+			}))
+			.unwrap()
+		)
+		.expect("Failed to write message");
+
+		// Write final SUMMARY with updated stats (should be used)
+		writeln!(
+			temp_file,
+			"{}",
+			serde_json::to_string(&json!({
+				"type": "SUMMARY",
+				"timestamp": 2000, // NEWER timestamp
+				"session_info": {
+					"name": "test-session",
+					"created_at": 1000,
+					"model": "openrouter:anthropic/claude-sonnet-4",
+					"provider": "openrouter",
+					"input_tokens": 200, // Updated values
+					"output_tokens": 100,
+					"cached_tokens": 40,
+					"total_cost": 0.002,
+					"duration_seconds": 20,
+					"layer_stats": [
+						{
+							"layer_type": "main",
+							"model": "openrouter:anthropic/claude-sonnet-4",
+							"input_tokens": 200,
+							"output_tokens": 100,
+							"cost": 0.002,
+							"timestamp": 2000,
+							"api_time_ms": 1000,
+							"tool_time_ms": 200,
+							"total_time_ms": 1200
+						}
+					],
+					"tool_calls": 10,
+					"total_api_time_ms": 1000,
+					"total_tool_time_ms": 200,
+					"total_layer_time_ms": 1200,
+					"compression_stats": {
+						"task_compressions": 0,
+						"phase_compressions": 0,
+						"project_compressions": 0,
+						"conversation_compressions": 0,
+						"total_messages_removed": 0,
+						"total_tokens_saved": 0
+					},
+
+					"total_api_calls": 2,
+					"current_non_cached_tokens": 0,
+					"current_total_tokens": 0,
+					"last_cache_checkpoint_time": 2000,
+					"cache_next_user_message": false,
+					"spending_threshold_checkpoint": 0.0,
+					"continuation_pending": false,
+					"continuation_disabled": false,
+					"compression_hint_count": 0,
+					"last_compression_hint_shown": 0
+				}
+			}))
+			.unwrap()
+		)
+		.expect("Failed to write final SUMMARY");
+
+		temp_file.flush().expect("Failed to flush temp file");
+
+		// Load the session
+		let session =
+			load_session(&temp_file.path().to_path_buf()).expect("Failed to load session");
+
+		// Verify that the FINAL SUMMARY values are used, not the old STATS
+		assert_eq!(
+			session.info.input_tokens, 200,
+			"Input tokens should be from final SUMMARY"
+		);
+		assert_eq!(
+			session.info.output_tokens, 100,
+			"Output tokens should be from final SUMMARY"
+		);
+		assert_eq!(
+			session.info.cached_tokens, 40,
+			"Cached tokens should be from final SUMMARY"
+		);
+		assert_eq!(
+			session.info.total_cost, 0.002,
+			"Total cost should be from final SUMMARY"
+		);
+		assert_eq!(
+			session.info.tool_calls, 10,
+			"Tool calls should be from final SUMMARY"
+		);
+		assert_eq!(
+			session.info.total_api_time_ms, 1000,
+			"API time should be from final SUMMARY"
+		);
+		assert_eq!(
+			session.info.total_tool_time_ms, 200,
+			"Tool time should be from final SUMMARY"
+		);
+		assert_eq!(
+			session.info.total_layer_time_ms, 1200,
+			"Layer time should be from final SUMMARY"
+		);
+
+		// CRITICAL: Verify layer_stats are preserved
+		assert_eq!(
+			session.info.layer_stats.len(),
+			1,
+			"Layer stats should be preserved"
+		);
+		assert_eq!(
+			session.info.layer_stats[0].input_tokens, 200,
+			"Layer stats should match final SUMMARY"
+		);
+		assert_eq!(
+			session.info.layer_stats[0].output_tokens, 100,
+			"Layer stats should match final SUMMARY"
+		);
+		assert_eq!(
+			session.info.layer_stats[0].cost, 0.002,
+			"Layer stats cost should match final SUMMARY"
+		);
+
+		// Verify messages are loaded
+		assert_eq!(session.messages.len(), 1, "Should have 1 message");
+		assert_eq!(
+			session.messages[0].role, "user",
+			"Message should be user message"
+		);
+
+		// Verify model is preserved from SUMMARY
+		assert_eq!(
+			session.info.model, "openrouter:anthropic/claude-sonnet-4",
+			"Model should be from SUMMARY"
+		);
+	}
+
+	#[test]
+	fn test_session_loading_restores_model_from_command() {
+		// Test that model changes via /model command are properly restored
+		use std::io::Write;
+		use tempfile::NamedTempFile;
+
+		let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+
+		// Write initial SUMMARY with original model
+		writeln!(
+			temp_file,
+			"{}",
+			serde_json::to_string(&json!({
+				"type": "SUMMARY",
+				"timestamp": 1000,
+				"session_info": {
+					"name": "test-session",
+					"created_at": 1000,
+					"model": "openrouter:anthropic/claude-sonnet-4",
+					"provider": "openrouter",
+					"input_tokens": 100,
+					"output_tokens": 50,
+					"cached_tokens": 20,
+					"total_cost": 0.001,
+					"duration_seconds": 10,
+					"layer_stats": [],
+					"tool_calls": 5,
+					"total_api_time_ms": 500,
+					"total_tool_time_ms": 100,
+					"total_layer_time_ms": 600,
+					"compression_stats": {
+						"task_compressions": 0,
+						"phase_compressions": 0,
+						"project_compressions": 0,
+						"conversation_compressions": 0,
+						"total_messages_removed": 0,
+						"total_tokens_saved": 0
+					},
+					"total_api_calls": 1,
+					"current_non_cached_tokens": 0,
+					"current_total_tokens": 0,
+					"last_cache_checkpoint_time": 1000,
+					"cache_next_user_message": false,
+					"spending_threshold_checkpoint": 0.0,
+					"continuation_pending": false,
+					"continuation_disabled": false,
+					"compression_hint_count": 0,
+					"last_compression_hint_shown": 0
+				}
+			}))
+			.unwrap()
+		)
+		.expect("Failed to write SUMMARY");
+
+		// Write a /model command that changes the model
+		writeln!(
+			temp_file,
+			"{}",
+			serde_json::to_string(&json!({
+				"type": "COMMAND",
+				"timestamp": 1500,
+				"command": "/model openrouter:openai/gpt-4o"
+			}))
+			.unwrap()
+		)
+		.expect("Failed to write COMMAND");
+
+		// Write a user message
+		writeln!(
+			temp_file,
+			"{}",
+			serde_json::to_string(&json!({
+				"role": "user",
+				"content": "Hello with new model",
+				"timestamp": 1600,
+				"cached": false
+			}))
+			.unwrap()
+		)
+		.expect("Failed to write message");
+
+		// Write final SUMMARY with the changed model
+		writeln!(
+			temp_file,
+			"{}",
+			serde_json::to_string(&json!({
+				"type": "SUMMARY",
+				"timestamp": 2000,
+				"session_info": {
+					"name": "test-session",
+					"created_at": 1000,
+					"model": "openrouter:openai/gpt-4o",
+					"provider": "openrouter",
+					"input_tokens": 200,
+					"output_tokens": 100,
+					"cached_tokens": 40,
+					"total_cost": 0.002,
+					"duration_seconds": 20,
+					"layer_stats": [],
+					"tool_calls": 10,
+					"total_api_time_ms": 1000,
+					"total_tool_time_ms": 200,
+					"total_layer_time_ms": 1200,
+					"compression_stats": {
+						"task_compressions": 0,
+						"phase_compressions": 0,
+						"project_compressions": 0,
+						"conversation_compressions": 0,
+						"total_messages_removed": 0,
+						"total_tokens_saved": 0
+					},
+					"total_api_calls": 2,
+					"current_non_cached_tokens": 0,
+					"current_total_tokens": 0,
+					"last_cache_checkpoint_time": 2000,
+					"cache_next_user_message": false,
+					"spending_threshold_checkpoint": 0.0,
+					"continuation_pending": false,
+					"continuation_disabled": false,
+					"compression_hint_count": 0,
+					"last_compression_hint_shown": 0
+				}
+			}))
+			.unwrap()
+		)
+		.expect("Failed to write final SUMMARY");
+
+		temp_file.flush().expect("Failed to flush temp file");
+
+		// Load the session
+		let session =
+			load_session(&temp_file.path().to_path_buf()).expect("Failed to load session");
+
+		// Verify that the changed model is restored
+		// The /model command should be detected and applied
+		assert_eq!(
+			session.info.model, "openrouter:openai/gpt-4o",
+			"Model should be restored from /model command and final SUMMARY"
+		);
+
+		// Verify stats are also correct
+		assert_eq!(session.info.input_tokens, 200);
+		assert_eq!(session.info.total_cost, 0.002);
+	}
+
+	#[test]
+	fn test_session_loading_model_without_command() {
+		// Test that model is restored from SUMMARY when no /model command was used
+		use std::io::Write;
+		use tempfile::NamedTempFile;
+
+		let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+
+		// Write SUMMARY with a specific model (no /model command in session)
+		writeln!(
+			temp_file,
+			"{}",
+			serde_json::to_string(&json!({
+				"type": "SUMMARY",
+				"timestamp": 1000,
+				"session_info": {
+					"name": "test-session",
+					"created_at": 1000,
+					"model": "openrouter:google/gemini-2.0-flash-exp:free",
+					"provider": "openrouter",
+					"input_tokens": 100,
+					"output_tokens": 50,
+					"cached_tokens": 20,
+					"total_cost": 0.001,
+					"duration_seconds": 10,
+					"layer_stats": [],
+					"tool_calls": 5,
+					"total_api_time_ms": 500,
+					"total_tool_time_ms": 100,
+					"total_layer_time_ms": 600,
+					"compression_stats": {
+						"task_compressions": 0,
+						"phase_compressions": 0,
+						"project_compressions": 0,
+						"conversation_compressions": 0,
+						"total_messages_removed": 0,
+						"total_tokens_saved": 0
+					},
+					"total_api_calls": 1,
+					"current_non_cached_tokens": 0,
+					"current_total_tokens": 0,
+					"last_cache_checkpoint_time": 1000,
+					"cache_next_user_message": false,
+					"spending_threshold_checkpoint": 0.0,
+					"continuation_pending": false,
+					"continuation_disabled": false,
+					"compression_hint_count": 0,
+					"last_compression_hint_shown": 0
+				}
+			}))
+			.unwrap()
+		)
+		.expect("Failed to write SUMMARY");
+
+		// Write a user message (no /model command)
+		writeln!(
+			temp_file,
+			"{}",
+			serde_json::to_string(&json!({
+				"role": "user",
+				"content": "Hello",
+				"timestamp": 1100,
+				"cached": false
+			}))
+			.unwrap()
+		)
+		.expect("Failed to write message");
+
+		temp_file.flush().expect("Failed to flush temp file");
+
+		// Load the session
+		let session =
+			load_session(&temp_file.path().to_path_buf()).expect("Failed to load session");
+
+		// Verify that the model from SUMMARY is preserved
+		assert_eq!(
+			session.info.model, "openrouter:google/gemini-2.0-flash-exp:free",
+			"Model should be restored from SUMMARY when no /model command exists"
+		);
 	}
 }

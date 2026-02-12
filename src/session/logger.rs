@@ -173,6 +173,26 @@ pub fn log_restoration_point(
 	Ok(())
 }
 
+/// Log compression point - marks that messages were compressed
+/// On session load, this acts like RESTORATION_POINT: clears all previous messages
+pub fn log_compression_point(
+	session_name: &str,
+	compression_type: &str,
+	messages_removed: usize,
+	tokens_saved: u64,
+) -> Result<()> {
+	let log_file = get_session_log_file(session_name)?;
+	let log_entry = serde_json::json!({
+		"type": "COMPRESSION_POINT",
+		"timestamp": get_timestamp(),
+		"compression_type": compression_type,
+		"messages_removed": messages_removed,
+		"tokens_saved": tokens_saved
+	});
+	append_to_log(&log_file, &serde_json::to_string(&log_entry)?)?;
+	Ok(())
+}
+
 /// Log session command execution (runtime-only commands like /model, /cache, etc.)
 pub fn log_session_command(session_name: &str, command_line: &str) -> Result<()> {
 	let log_file = get_session_log_file(session_name)?;

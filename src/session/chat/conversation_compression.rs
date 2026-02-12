@@ -763,6 +763,16 @@ fn apply_compression(
 		.compression_stats
 		.add_conversation_compression(messages_removed, tokens_saved);
 
+	// CRITICAL: Log compression point to session file
+	// This marker tells session loader to clear messages before this point on resume
+	// Without this, all "compressed" messages are reloaded, defeating compression
+	let _ = crate::session::logger::log_compression_point(
+		&session.session.info.name,
+		"conversation",
+		messages_removed,
+		tokens_saved,
+	);
+
 	// CRITICAL FIX: Reset token tracking for fresh start after compression
 	// This prevents token drift and ensures accurate cache/pricing calculations
 	// Mirrors the behavior in context_truncation.rs::perform_smart_full_summarization()

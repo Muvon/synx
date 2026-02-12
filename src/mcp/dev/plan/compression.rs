@@ -313,6 +313,15 @@ pub async fn compress_completed_task(
 		metrics.compression_ratio * 100.0
 	);
 
+	// CRITICAL: Log compression point to session file
+	// This marker tells session loader to clear messages before this point on resume
+	let _ = crate::session::logger::log_compression_point(
+		&session.session.info.name,
+		"task",
+		messages_removed,
+		tokens_saved,
+	);
+
 	// CRITICAL FIX: Reset token tracking for fresh start after compression
 	// This prevents token drift and ensures accurate cache/pricing calculations
 	session.session.info.current_non_cached_tokens = 0;
@@ -496,6 +505,14 @@ async fn compress_phase(
 		metrics.tokens_saved
 	);
 
+	// CRITICAL: Log compression point to session file
+	let _ = crate::session::logger::log_compression_point(
+		&session.session.info.name,
+		"phase",
+		messages_removed,
+		tokens_saved,
+	);
+
 	// CRITICAL FIX: Reset token tracking for fresh start after compression
 	// This prevents token drift and ensures accurate cache/pricing calculations
 	session.session.info.current_non_cached_tokens = 0;
@@ -617,6 +634,14 @@ async fn compress_project(
 		"Project compression complete: {} summaries → 1 project summary, {} tokens saved",
 		compression_indices.len(),
 		metrics.tokens_saved
+	);
+
+	// CRITICAL: Log compression point to session file
+	let _ = crate::session::logger::log_compression_point(
+		&session.session.info.name,
+		"project",
+		messages_removed,
+		tokens_saved,
 	);
 
 	// CRITICAL FIX: Reset token tracking for fresh start after compression
