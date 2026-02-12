@@ -1,5 +1,151 @@
 # Changelog
 
+## [0.17.0] - 2026-02-12
+
+### 📋 Release Summary
+
+This release introduces intelligent conversation compression that automatically manages context size and costs while preserving important information, plus new keyboard shortcuts and file completion for faster navigation. Enhanced visual feedback includes progress animations, context percentage displays, and helpful tips during sessions. Multiple bug fixes improve token tracking, compression reliability, and overall system stability.
+
+
+### ✨ New Features & Enhancements
+
+- **config**: add OCTOMIND_CONFIG_PATH environment variable support `cc9a799f`
+- **compression**: preserve plan context in compressed task summaries `414e34ff`
+- **chat**: detect task completion patterns as critical chunks `f7e52081`
+- **compression**: add ignore_cost flag for decision API `337b60d9`
+- **compression**: add context-aware bounds for session estimation `827bc57e`
+- **compression**: adaptive compression with real pricing `c0c666eb`
+- **chat**: add Ctrl+E to exit reverse search `99da1fcc`
+- **tool**: display animation during tool execution `79bce9eb`
+- **info**: show conversation compression statistics `0824582a`
+- **compression**: adaptive pressure-based compression `17573f05`
+- **chat**: add animation feedback during compression `0fa57c5c`
+- **compression**: add decision model for cost savings `eb45f89b`
+- **chat**: add automatic conversation compression `79ba40cf`
+- **compression**: add adaptive compression with context pressure detection `f1935080`
+- **session**: display randomized tips on new sessions `e93ce76b`
+- **edit_mode**: add Meta key bindings for word operations `0798b3a7`
+- **input**: add Ctrl+a/Ctrl+e/Ctrl+u navigation shortcuts `7c74d375`
+- **chat**: add @ file completion `4942ffb7`
+- **chat**: add context percentage display to prompt and animations `b7dcd2e0`
+- **modal**: add terminal overlay system for help tooltips `20d6d3a4`
+- **config**: add multi-file configuration support `aae24a2b`
+- **workflow**: improve execution output with progress tracking `7d7e42bf`
+- **commands**: add workflow command, remove layers command `009d85e6`
+- **ui**: add progress spinner for MCP server initialization `3d3d7b96`
+- **mcp**: add OAuth 2.1 + PKCE support for HTTP MCP `c4a7dd35`
+
+### 🔧 Improvements & Optimizations
+
+- **session**: persist runtime state in SessionInfo `35beae70`
+- **chat**: preserve file context in compression `aa123c6f`
+- **compression**: use struct for decision model config `c6e1a4e0`
+- **compression**: skip compression when no token savings `9e599532`
+- **token counting**: rename and improve token estimation `81d7c37d`
+- **mcp**: improve edit methods documentation `a178e4b3`
+- **compression**: remove pressure_trigger and consolidate threshold logic `afdfdf2d`
+- **conversation-compression**: merge decision and summary into single API call `5be9e6d2`
+- **diff_chunker**: replace summarization with semantic chunking `c9f3aac3`
+- **plan**: simplify compression tracking by removing execution guard `70084746`
+- **compression**: implement automatic hierarchical compression system `7a4d3669`
+- **session**: auto-process summary requests during continuation `83819969`
+- **session**: move tip display function to setup module `6538ab8e`
+- **chat**: make queue add action invisible to user `b474074a`
+- **chat**: simplify key condition and enable bracketed paste `3390bb46`
+- use debug logging for cancellation messages `74acfb57`
+- **chat**: migrate to reedline for terminal input `03e8ee86`
+- **session/chat**: extract runner into focused modules `ff52e90a`
+- **session**: improve interrupt feedback handling `d2088a35`
+- **session**: improve exit flow and UI feedback `4b322eaa`
+- **workflows**: use iterator pattern for workflow access `36b29ff9`
+- **workflows**: improve session and output handling `82c9796d`
+- **session**: migrate to workflow architecture `99524dff`
+- **text_editor**: improve argument names for clarity `d374541e`
+- **chat**: add response_id tracking for OpenAI API `fcd4a89f`
+
+### 🐛 Bug Fixes & Stability
+
+- **plan**: enable automatic continuation after compression in plan `9e2d26a9`
+- **session**: prevent token drift and message reload after compression `6cf67d43`
+- **compression**: prevent cutting tool messages during compression range calculation `37151054`
+- **compression**: reset token counters after compression `84c8ba51`
+- **layers**: add missing animation for follow-up API calls `512ef18d`
+- **chat**: prevent cutting between assistant tool calls and results `135bfde3`
+- **compression**: include first compression message in range calculations `c4a86534`
+- **chat**: remove duplicate token tracking in response handlers `d221aedb`
+- **chat**: clarify token breakdown labels and cache comment `cf183628`
+- **compression**: preserve cache markers during compression `4da7044e`
+- **moonshot**: preserve thinking field in tool result processing `98ea2c17`
+- **providers**: add error handling for thinking field deserialization `766ad26b`
+- **moonshot**: resolve usage tracking and thinking block handling `c30a345b`
+- **moonshot**: handle thinking field conversion for reasoning models `7f541520`
+- **web**: handle stringified JSON array input to prevent crash `c7b6f478`
+- **glob**: normalize paths before pattern matching `e3ad81e4`
+- **compression**: correct cache calculation for decision model `dfbf7989`
+- **compression**: add debug logging and prevent start_index reset `1cb1b335`
+- **compression**: be consistent with effeciency tracking `807d5002`
+- **compression**: corruption with missing tools in some cases `cbded7d7`
+- **compression**: cache-aware smart adaptive compression logic `ce69f067`
+- **tokens**: unify tokens calculation `cfe32edf`
+- **compression**: discourse-aware semantic chunking `8355f513`
+- **animation**: fix issue with working animation showed before tool execution `c285d150`
+- **session/chat**: accurately estimate context with system prompt and tools `c5bb42de`
+- **compression**: correct token counting for threshold checks `12867e1f`
+- **chat**: add sleep to avoid animation race `e02dbfbf`
+- **plan**: adjust start index for tool preservation in compression `dcb9cfc6`
+- **plan**: skip compression logic when none pending `953ac2fe`
+- **message**: correct inclusive range boundary validation `6eaf6641`
+- **input**: add missing $ to cost display indicator `693b9984`
+- **session/chat**: handle Ctrl+C during reverse search `9bd34f99`
+- **session**: display resume command on Ctrl+D with session ID `47dcae03`
+- **session**: show context status line only at session start `6ed1a391`
+- **context**: compute accurate context token usage `bf46318b`
+- **session**: clean up user message on cancellation during API call `0016e3e1`
+- **session**: improve operation tracking for session state `13838bfc`
+- **session**: preserve conversation state when API call interrupted after tools `b6831be0`
+- **providers**: update response_id field to id for octolib compatibility `db7ee3f0`
+- **chat**: skip history for whitespace-prefixed inputs `b133f6b2`
+- show correct provider name in cost error messages `52012b22`
+- **health_monitor, oauth**: adjust health check interval and fix OAuth discovery `eb6c752d`
+- **zai**: resolve provider issue `59523442`
+
+### 📚 Documentation & Examples
+
+- **providers**: update provider format and supported list `c487a93a`
+- add compression and multi-file config features `1229e7c0`
+- **advanced**: expand future turn estimation with velocity-based analysis `92cee9f3`
+- **sessions**: add visual feedback and animation documentation `e825dd04`
+- add compression and token system documentation `de0564bd`
+- significantly condense INSTRUCTIONS.md developer guide `3f37c65b`
+- document config, auth, and workflow features `45bb09ba`
+- **installation**: detail shell completion setup for all shells `a531d95a`
+
+### 🔄 Other Changes
+
+- **chat**: extend compression range test for multiple conversation turns `29db9436`
+- **deps**: bump octolib to 0.8.0 `31d918ec`
+- upgrade Rust toolchain to 1.92.0 `a4979870`
+- **ci**: bump Rust toolchain to 1.92.0 `08071883`
+- **deps**: update dependency versions in Cargo.lock `b9e6d201`
+- upgrade octolib to 0.7.0 `d2bb7896`
+- **deps**: upgrade clap to 4.5.56 and rand to 0.9 `74319072`
+- **deps**: update octolib to latest version `a66d9ea4`
+- **deps**: upgrade cargo dependencies `30a7004c`
+- **fs**: update tests to use lines parameter instead of view_range `9ee929a9`
+- **deps**: switch local octolib path to version 0.5.0 `5d9b1503`
+- **oauth**: fix validation tests for public client scenarios `166b83f8`
+- **deps**: bump octolib to 0.4.2 `860e1439`
+
+### 📊 Release Summary
+
+**Total commits**: 114 across 5 categories
+
+✨ **25** new features - *Enhanced functionality*
+🔧 **25** improvements - *Better performance & code quality*
+🐛 **43** bug fixes - *Improved stability*
+📚 **8** documentation updates - *Better developer experience*
+🔄 **13** other changes - *Maintenance & tooling*
+
 ## [0.16.0] - 2026-01-09
 
 ### 📋 Release Summary
