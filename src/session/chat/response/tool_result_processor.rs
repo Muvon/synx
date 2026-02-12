@@ -195,67 +195,129 @@ pub async fn process_tool_results(
 	}
 
 	// Process any pending compression with proper error handling
-	match crate::mcp::dev::plan::process_pending_compression(chat_session).await {
-		Ok(Some(metrics)) => {
-			chat_session
-				.session
-				.info
-				.compression_stats
-				.add_task_compression(metrics.messages_removed, metrics.tokens_saved);
-			crate::session::chat::cost_tracker::CostTracker::display_compression_result(
-				"Task", &metrics,
-			);
-		}
-		Ok(None) => {
-			// No pending compression - this is normal
-		}
-		Err(e) => {
-			// Compression failed - log at INFO level since this is unexpected
-			log_info!(
-				"❌ Task compression failed: {}. Context was not compressed.",
-				e
-			);
-			// Note: Session continues normally - compression is best-effort
+	let task_compression_occurred =
+		match crate::mcp::dev::plan::process_pending_compression(chat_session).await {
+			Ok(Some(metrics)) => {
+				chat_session
+					.session
+					.info
+					.compression_stats
+					.add_task_compression(metrics.messages_removed, metrics.tokens_saved);
+				crate::session::chat::cost_tracker::CostTracker::display_compression_result(
+					"Task", &metrics,
+				);
+				true
+			}
+			Ok(None) => {
+				// No pending compression - this is normal
+				false
+			}
+			Err(e) => {
+				// Compression failed - log at INFO level since this is unexpected
+				log_info!(
+					"❌ Task compression failed: {}. Context was not compressed.",
+					e
+				);
+				// Note: Session continues normally - compression is best-effort
+				false
+			}
+		};
+
+	// CRITICAL FIX: After task compression, check if continuation should trigger
+	// This allows automatic continuation after single-task compression
+	if task_compression_occurred && crate::mcp::dev::plan::core::has_active_plan() {
+		log_debug!("Task compression completed with active plan - checking if continuation needed");
+		use crate::session::chat::session_continuation;
+		if session_continuation::check_and_handle_continuation(chat_session, config).await? {
+			// Stop animation before returning
+			animation_cancel.store(true, Ordering::SeqCst);
+			let _ = animation_task.await;
+
+			log_info!("Continuation triggered after task compression - returning to main loop");
+			return Ok(None);
 		}
 	}
+
 	// Process phase compression (automatic)
-	match crate::mcp::dev::plan::process_pending_phase_compression(chat_session).await {
-		Ok(Some(metrics)) => {
-			chat_session
-				.session
-				.info
-				.compression_stats
-				.add_phase_compression(metrics.messages_removed, metrics.tokens_saved);
-			crate::session::chat::cost_tracker::CostTracker::display_compression_result(
-				"Phase", &metrics,
-			);
-		}
-		Ok(None) => {}
-		Err(e) => {
-			log_info!(
-				"❌ Phase compression failed: {}. Context was not compressed.",
-				e
-			);
+	let phase_compression_occurred =
+		match crate::mcp::dev::plan::process_pending_phase_compression(chat_session).await {
+			Ok(Some(metrics)) => {
+				chat_session
+					.session
+					.info
+					.compression_stats
+					.add_phase_compression(metrics.messages_removed, metrics.tokens_saved);
+				crate::session::chat::cost_tracker::CostTracker::display_compression_result(
+					"Phase", &metrics,
+				);
+				true
+			}
+			Ok(None) => false,
+			Err(e) => {
+				log_info!(
+					"❌ Phase compression failed: {}. Context was not compressed.",
+					e
+				);
+				false
+			}
+		};
+
+	// CRITICAL FIX: After phase compression, check if continuation should trigger
+	// Phase compression can free significant space, allowing plan to continue automatically
+	if phase_compression_occurred && crate::mcp::dev::plan::core::has_active_plan() {
+		log_debug!(
+			"Phase compression completed with active plan - checking if continuation needed"
+		);
+		use crate::session::chat::session_continuation;
+		if session_continuation::check_and_handle_continuation(chat_session, config).await? {
+			// Stop animation before returning
+			animation_cancel.store(true, Ordering::SeqCst);
+			let _ = animation_task.await;
+
+			log_info!("Continuation triggered after phase compression - returning to main loop");
+			return Ok(None);
 		}
 	}
 	// Process project compression (automatic)
-	match crate::mcp::dev::plan::process_pending_project_compression(chat_session).await {
-		Ok(Some(metrics)) => {
-			chat_session
-				.session
-				.info
-				.compression_stats
-				.add_project_compression(metrics.messages_removed, metrics.tokens_saved);
-			crate::session::chat::cost_tracker::CostTracker::display_compression_result(
-				"Project", &metrics,
-			);
-		}
-		Ok(None) => {}
-		Err(e) => {
-			log_info!(
-				"❌ Project compression failed: {}. Context was not compressed.",
-				e
-			);
+	let project_compression_occurred =
+		match crate::mcp::dev::plan::process_pending_project_compression(chat_session).await {
+			Ok(Some(metrics)) => {
+				chat_session
+					.session
+					.info
+					.compression_stats
+					.add_project_compression(metrics.messages_removed, metrics.tokens_saved);
+				crate::session::chat::cost_tracker::CostTracker::display_compression_result(
+					"Project", &metrics,
+				);
+				true
+			}
+			Ok(None) => false,
+			Err(e) => {
+				log_info!(
+					"❌ Project compression failed: {}. Context was not compressed.",
+					e
+				);
+				false
+			}
+		};
+
+	// CRITICAL FIX: After project compression, check if continuation should trigger
+	// Project compression can free significant space, allowing plan to continue automatically
+	// This matches the behavior in main_loop.rs for conversation compression (lines 603-617)
+	if project_compression_occurred && crate::mcp::dev::plan::core::has_active_plan() {
+		log_debug!(
+			"Project compression completed with active plan - checking if continuation needed"
+		);
+		use crate::session::chat::session_continuation;
+		if session_continuation::check_and_handle_continuation(chat_session, config).await? {
+			// Stop animation before returning
+			animation_cancel.store(true, Ordering::SeqCst);
+			let _ = animation_task.await;
+
+			log_info!("Continuation triggered after project compression - returning to main loop");
+			// Return None to signal main loop to continue with the injected continuation request
+			return Ok(None);
 		}
 	}
 
