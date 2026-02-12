@@ -344,6 +344,7 @@ impl ChatSession {
 					regular_prompt_tokens,
 					usage.output_tokens,
 					cached_tokens,
+					usage.reasoning_tokens,
 				);
 
 				// Check if we should automatically move the cache marker

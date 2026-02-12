@@ -43,18 +43,20 @@ impl ChatSession {
 		// Total token usage
 		let total_tokens = self.session.info.input_tokens
 			+ self.session.info.output_tokens
-			+ self.session.info.cached_tokens;
+			+ self.session.info.cached_tokens
+			+ self.session.info.reasoning_tokens;
 		println!(
 			"{} {}",
 			"Total tokens:".yellow(),
 			format_number(total_tokens).bright_white()
 		);
 		println!(
-			"{} {} processed, {} output, {} cached",
+			"{} {} input, {} output, {} cached, {} reasoning",
 			"Breakdown:".yellow(),
 			format_number(self.session.info.input_tokens).bright_blue(),
 			format_number(self.session.info.output_tokens).bright_green(),
-			format_number(self.session.info.cached_tokens).bright_magenta()
+			format_number(self.session.info.cached_tokens).bright_magenta(),
+			format_number(self.session.info.reasoning_tokens).bright_cyan()
 		);
 
 		// Cost information

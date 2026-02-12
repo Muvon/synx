@@ -91,6 +91,7 @@ impl MessageHandler {
 			chat_session.session.info.input_tokens += regular_prompt_tokens;
 			chat_session.session.info.output_tokens += usage.output_tokens;
 			chat_session.session.info.cached_tokens += cached_tokens;
+			chat_session.session.info.reasoning_tokens += usage.reasoning_tokens;
 
 			// Track cost if available
 			if let Some(cost) = usage.cost {

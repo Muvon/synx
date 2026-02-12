@@ -205,6 +205,8 @@ pub struct SessionInfo {
 	pub input_tokens: u64,
 	pub output_tokens: u64,
 	pub cached_tokens: u64, // Added to track cached tokens separately
+	#[serde(default)]
+	pub reasoning_tokens: u64, // Tokens used for thinking/reasoning (OpenAI, MiniMax)
 	pub total_cost: f64,
 	pub duration_seconds: u64,
 	pub layer_stats: Vec<LayerStats>, // Added to track per-layer statistics
@@ -351,6 +353,7 @@ impl Session {
 				input_tokens: 0,
 				output_tokens: 0,
 				cached_tokens: 0,
+				reasoning_tokens: 0,
 				total_cost: 0.0,
 				duration_seconds: 0,
 				layer_stats: Vec::new(), // Initialize empty layer stats
@@ -1149,6 +1152,7 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 			input_tokens: 0,
 			output_tokens: 0,
 			cached_tokens: 0,
+			reasoning_tokens: 0,
 			total_cost: 0.0,
 			duration_seconds: 0,
 			layer_stats: Vec::new(),

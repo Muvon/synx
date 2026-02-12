@@ -393,11 +393,13 @@ impl CacheManager {
 		input_tokens: u64,
 		output_tokens: u64,
 		cached_tokens: u64,
+		reasoning_tokens: u64,
 	) {
 		// Update session totals (lifetime statistics)
 		session.info.input_tokens += input_tokens;
 		session.info.output_tokens += output_tokens;
 		session.info.cached_tokens += cached_tokens;
+		session.info.reasoning_tokens += reasoning_tokens;
 
 		// CRITICAL FIX: For threshold checking, we need to track tokens correctly:
 		// - input_tokens here are the NON-CACHED input tokens processed by the API
@@ -771,6 +773,7 @@ mod tests {
 				input_tokens: 0,
 				output_tokens: 0,
 				cached_tokens: 0,
+				reasoning_tokens: 0,
 				total_cost: 0.0,
 				duration_seconds: 0,
 				layer_stats: Vec::new(),
@@ -792,6 +795,7 @@ mod tests {
 				compression_hint_count: 0,
 				last_compression_hint_shown: 0,
 			},
+
 			messages: Vec::new(),
 			session_file: None,
 		}

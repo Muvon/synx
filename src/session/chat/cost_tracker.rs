@@ -46,6 +46,7 @@ impl CostTracker {
 				regular_prompt_tokens,
 				usage.output_tokens,
 				cached_tokens,
+				usage.reasoning_tokens,
 			);
 
 			// Update cost
@@ -157,17 +158,27 @@ impl CostTracker {
 		let cached = chat_session.session.info.cached_tokens;
 		let non_cached_prompt = chat_session.session.info.input_tokens;
 		let completion = chat_session.session.info.output_tokens;
+		let reasoning = chat_session.session.info.reasoning_tokens;
 
 		// FIXED: Show total prompt tokens (cached + non-cached) as "prompt"
 		// This matches user expectation that prompt tokens should show the actual tokens processed
 		let total_prompt = non_cached_prompt + cached;
-		let total = total_prompt + completion;
+		let total = total_prompt + completion + reasoning;
+
+		// Build token display string
+		let mut token_parts = vec![
+			format!("{} prompt ({} cached)", total_prompt, cached),
+			format!("{} completion", completion),
+		];
+
+		// Add reasoning tokens if present
+		if reasoning > 0 {
+			token_parts.push(format!("{} reasoning", reasoning));
+		}
 
 		log_info!(
-			"tokens: {} prompt ({} cached), {} completion, {} total, ${:.5}",
-			total_prompt,
-			cached,
-			completion,
+			"tokens: {}, {} total, ${:.5}",
+			token_parts.join(", "),
 			total,
 			chat_session.session.info.total_cost
 		);

@@ -643,6 +643,7 @@ fn handle_follow_up_cost_tracking(
 			regular_prompt_tokens,
 			usage.output_tokens,
 			cached_tokens,
+			usage.reasoning_tokens,
 		);
 
 		// Track API time from the follow-up exchange
