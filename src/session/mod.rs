@@ -908,47 +908,66 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 						// This prevents old STATS from overwriting fresh SUMMARY data on resume
 						if stats_timestamp > last_summary_timestamp {
 							if let Some(info) = &mut session_info {
+								// CRITICAL FIX: Only apply STATS values if they're greater than current values
+								// This prevents cached-only requests (where non-cached tokens = 0) from
+								// overwriting the accumulated token counts from the SUMMARY
 								if let Some(total_cost) =
 									json_value.get("total_cost").and_then(|c| c.as_f64())
 								{
-									info.total_cost = total_cost;
+									if total_cost > info.total_cost {
+										info.total_cost = total_cost;
+									}
 								}
 								if let Some(input_tokens) =
 									json_value.get("input_tokens").and_then(|t| t.as_u64())
 								{
-									info.input_tokens = input_tokens;
+									if input_tokens > info.input_tokens {
+										info.input_tokens = input_tokens;
+									}
 								}
 								if let Some(output_tokens) =
 									json_value.get("output_tokens").and_then(|t| t.as_u64())
 								{
-									info.output_tokens = output_tokens;
+									if output_tokens > info.output_tokens {
+										info.output_tokens = output_tokens;
+									}
 								}
 								if let Some(cached_tokens) =
 									json_value.get("cached_tokens").and_then(|t| t.as_u64())
 								{
-									info.cached_tokens = cached_tokens;
+									if cached_tokens > info.cached_tokens {
+										info.cached_tokens = cached_tokens;
+									}
 								}
 								if let Some(tool_calls) =
 									json_value.get("tool_calls").and_then(|t| t.as_u64())
 								{
-									info.tool_calls = tool_calls;
+									if tool_calls > info.tool_calls {
+										info.tool_calls = tool_calls;
+									}
 								}
 								if let Some(api_time) =
 									json_value.get("total_api_time_ms").and_then(|t| t.as_u64())
 								{
-									info.total_api_time_ms = api_time;
+									if api_time > info.total_api_time_ms {
+										info.total_api_time_ms = api_time;
+									}
 								}
 								if let Some(tool_time) = json_value
 									.get("total_tool_time_ms")
 									.and_then(|t| t.as_u64())
 								{
-									info.total_tool_time_ms = tool_time;
+									if tool_time > info.total_tool_time_ms {
+										info.total_tool_time_ms = tool_time;
+									}
 								}
 								if let Some(layer_time) = json_value
 									.get("total_layer_time_ms")
 									.and_then(|t| t.as_u64())
 								{
-									info.total_layer_time_ms = layer_time;
+									if layer_time > info.total_layer_time_ms {
+										info.total_layer_time_ms = layer_time;
+									}
 								}
 							}
 						}
