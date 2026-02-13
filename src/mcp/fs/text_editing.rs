@@ -513,6 +513,35 @@ pub async fn line_replace_spec(
 		.map(|&line| line.to_string())
 		.collect();
 
+	// DUPLICATE DETECTION: Check if replacement content duplicates adjacent lines
+	let mut duplicate_warnings = Vec::new();
+	let content_lines: Vec<&str> = content.lines().collect();
+
+	if !content_lines.is_empty() {
+		// Check if first line of content matches line BEFORE replacement range
+		if start_line > 1 {
+			let line_before = lines[start_line - 2];
+			if content_lines[0].trim() == line_before.trim() && !line_before.trim().is_empty() {
+				duplicate_warnings.push(format!(
+					"⚠️  Line {} (before replacement range) matches first line of your content. Did you mean to include it in your range?",
+					start_line - 1
+				));
+			}
+		}
+
+		// Check if last line of content matches line AFTER replacement range
+		if end_line < lines.len() {
+			let line_after = lines[end_line];
+			let last_content_line = content_lines[content_lines.len() - 1];
+			if last_content_line.trim() == line_after.trim() && !line_after.trim().is_empty() {
+				duplicate_warnings.push(format!(
+					"⚠️  Line {} (after replacement range) matches last line of your content. Did you mean to include it in your range?",
+					end_line + 1
+				));
+			}
+		}
+	}
+
 	// Save the current content for undo
 	save_file_history(path).await?;
 
@@ -591,7 +620,7 @@ pub async fn line_replace_spec(
 	let lines_replaced_count = end_line - start_line + 1;
 	let new_lines_count = content.lines().count();
 
-	let content_message = if lines_replaced_count == 1 && new_lines_count == 1 {
+	let mut content_message = if lines_replaced_count == 1 && new_lines_count == 1 {
 		format!("Successfully replaced line {} with new content", start_line)
 	} else if lines_replaced_count == 1 {
 		format!(
@@ -609,6 +638,12 @@ pub async fn line_replace_spec(
 			lines_replaced_count, start_line, end_line, new_lines_count
 		)
 	};
+
+	// Append duplicate warnings if any
+	if !duplicate_warnings.is_empty() {
+		content_message.push_str("\n\n");
+		content_message.push_str(&duplicate_warnings.join("\n"));
+	}
 
 	Ok(McpToolResult {
 		tool_name: "text_editor".to_string(),

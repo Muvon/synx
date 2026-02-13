@@ -322,6 +322,81 @@ mod tests {
 		assert_eq!(actual_bytes[25], 10u8, "Fourth newline should be byte 10");
 	}
 
+	#[tokio::test]
+	async fn test_line_replace_duplicate_detection_before() {
+		// Test duplicate detection when first line of content matches line before range
+		let temp_file = create_test_file("line 1\nline 2\nline 3\nline 4\n").await;
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({}),
+		};
+
+		// Replace lines 3-4 but include line 2 as first line of content (duplicate)
+		let replacement = "line 2\nnew line 3\nnew line 4";
+		let result = line_replace_spec(&call, temp_file.path(), (3, 4), replacement)
+			.await
+			.unwrap();
+
+		// Should succeed but with warning
+		assert!(result.result.get("error").is_none());
+		let content_msg = result.result.get("content").unwrap().as_str().unwrap();
+		assert!(content_msg.contains("⚠️"));
+		assert!(content_msg.contains("Line 2 (before replacement range)"));
+
+		// Verify file has duplicate
+		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
+		assert_eq!(actual, "line 1\nline 2\nline 2\nnew line 3\nnew line 4\n");
+	}
+
+	#[tokio::test]
+	async fn test_line_replace_duplicate_detection_after() {
+		// Test duplicate detection when last line of content matches line after range
+		let temp_file = create_test_file("line 1\nline 2\nline 3\nline 4\n").await;
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({}),
+		};
+
+		// Replace lines 1-2 but include line 3 as last line of content (duplicate)
+		let replacement = "new line 1\nnew line 2\nline 3";
+		let result = line_replace_spec(&call, temp_file.path(), (1, 2), replacement)
+			.await
+			.unwrap();
+
+		// Should succeed but with warning
+		assert!(result.result.get("error").is_none());
+		let content_msg = result.result.get("content").unwrap().as_str().unwrap();
+		assert!(content_msg.contains("⚠️"));
+		assert!(content_msg.contains("Line 3 (after replacement range)"));
+
+		// Verify file has duplicate
+		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
+		assert_eq!(actual, "new line 1\nnew line 2\nline 3\nline 3\nline 4\n");
+	}
+
+	#[tokio::test]
+	async fn test_line_replace_no_duplicate_warning() {
+		// Test that no warning appears when content is genuinely different
+		let temp_file = create_test_file("line 1\nline 2\nline 3\nline 4\n").await;
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "text_editor".to_string(),
+			parameters: json!({}),
+		};
+
+		let replacement = "new line 2\nnew line 3";
+		let result = line_replace_spec(&call, temp_file.path(), (2, 3), replacement)
+			.await
+			.unwrap();
+
+		// Should succeed without warning
+		assert!(result.result.get("error").is_none());
+		let content_msg = result.result.get("content").unwrap().as_str().unwrap();
+		assert!(!content_msg.contains("⚠️"));
+	}
+
 	// ========== STR_REPLACE TESTS ==========
 
 	async fn test_str_replace(content: &str, old_str: &str, new_str: &str, expected: &str) {

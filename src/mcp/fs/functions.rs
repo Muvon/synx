@@ -142,15 +142,18 @@ pub fn get_text_editor_function() -> McpFunction {
 			- insert_after_line specifies the line number after which to insert (0 for beginning of file)
 			- WARNING: Changes line numbers for all content AFTER insertion point
 
-			`line_replace`: Replace content within specific line range
-			- `{\"command\": \"line_replace\", \"path\": \"src/main.rs\", \"lines\": [5, 8], \"content\": \"fn updated_function() {\\n    // New implementation\\n}\"}`
-			- Replaces lines from lines[0] to lines[1] (inclusive, 1-indexed)
-			- FASTEST option - 3x faster than str_replace (no content searching)
-			- **REMOVE LINES**: Use empty content (\"\" or \"\") to remove lines completely
-			- **USEFUL FOR REFACTORING**: Extract code with `extract_lines`, then remove original with `line_replace` + empty content
-			- CRITICAL: Line numbers change after ANY edit operation
-			- NEVER use line_replace twice without viewing file between operations
-			- ALWAYS use 'view' first to get current line numbers before line_replace
+		`line_replace`: Replace content within specific line range
+		- `{\\\"command\\\": \\\"line_replace\\\", \\\"path\\\": \\\"src/main.rs\\\", \\\"lines\\\": [5, 8], \\\"content\\\": \\\"fn updated_function() {\\\\n    // New implementation\\\\n}\\\"}`
+		- Replaces lines from lines[0] to lines[1] (inclusive, 1-indexed)
+		- FASTEST option - 3x faster than str_replace (no content searching)
+		- **CRITICAL RULE**: Your `content` must ONLY contain lines that are NEW or MODIFIED within the specified range
+		- **DO NOT include unchanged lines** from outside your `lines` range, even for \"context\" - they will create duplicates
+		- **DUPLICATE DETECTION**: Tool warns if your content duplicates adjacent lines (but still applies replacement)
+		- **REMOVE LINES**: Use empty content (\\\"\\\" or \\\"\\\") to remove lines completely
+		- **USEFUL FOR REFACTORING**: Extract code with `extract_lines`, then remove original with `line_replace` + empty content
+		- Line numbers change after ANY edit operation
+		- NEVER use line_replace twice without viewing file between operations
+		- ALWAYS use 'view' first to get current line numbers before line_replace
 
 			`view_many`: View multiple files simultaneously
 			- `{\"command\": \"view_many\", \"paths\": [\"src/main.rs\", \"src/lib.rs\", \"tests/test.rs\"]}`
