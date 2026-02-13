@@ -177,13 +177,22 @@ pub async fn process_tool_results(
 		if crate::mcp::dev::plan::core::get_current_task_start_index().is_none()
 			&& crate::mcp::dev::plan::core::has_active_plan()
 		{
-			// Set start_index to current message count (where next task work will begin)
-			let start_index = chat_session.get_message_count();
-			crate::mcp::dev::plan::set_current_task_start_index(start_index);
-			crate::log_debug!(
-				"Plan task start_index set to: {} (after plan tool execution)",
-				start_index
-			);
+			// CRITICAL: Set start_index to last valid message index (the plan tool result)
+			// Compression will remove messages from (start_index + 1) to end_index
+			// So start_index should point to the plan command result that we want to KEEP
+			// If we have 93 messages (indices 0-92), start_index should be 92 (last message)
+			let message_count = chat_session.get_message_count();
+			if message_count == 0 {
+				crate::log_debug!("Cannot set start_index: no messages in session");
+			} else {
+				let start_index = message_count - 1; // Last valid index
+				crate::mcp::dev::plan::set_current_task_start_index(start_index);
+				crate::log_debug!(
+					"Plan task start_index set to: {} (last message index, total messages: {})",
+					start_index,
+					message_count
+				);
+			}
 		}
 
 		// If compression is pending (plan(next) was called), set the message range

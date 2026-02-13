@@ -1,0 +1,526 @@
+# MAP-Inspired Developer Workflow Configuration
+# Based on: "A brain-inspired agentic architecture to improve planning with LLMs"
+# Nature Communications (2025) - Webb, Mondal, Momennejad
+#
+# 🧠 CRITICAL ARCHITECTURE UNDERSTANDING:
+#
+# This workflow acts as a PLANNER (like the prefrontal cortex), NOT an executor!
+#
+# Flow:
+#   User Input → Workflow (Planning) → Main Model (Execution) → Result
+#
+# The workflow:
+#   1. Decomposes tasks into subgoals (TaskDecomposer)
+#   2. Proposes and validates approaches (Actor-Monitor loop)
+#   3. Predicts impact and evaluates quality (Predictor-Evaluator)
+#   4. Generates a comprehensive, validated plan
+#
+# The main model then:
+#   1. Receives the enhanced plan from workflow
+#   2. Executes using MCP tools (text_editor, shell, ast_grep)
+#   3. Implements the validated approaches
+#
+# This separation mirrors brain architecture:
+#   - Prefrontal Cortex (workflow) → Planning, validation, decision-making
+#   - Motor Cortex (main model) → Execution of planned actions
+#
+# Benefits:
+#   ✅ Better plans through validation loops
+#   ✅ Reduced execution errors
+#   ✅ Clear separation of planning vs execution
+#   ✅ Brain-inspired cognitive architecture
+#
+# MAP Modules (Brain-Inspired):
+# - TaskDecomposer (aPFC) - breaks tasks into subgoals
+# - Actor (dlPFC) - proposes code changes
+# - Monitor (ACC) - validates proposals
+# - Predictor (OFC) - predicts impact
+# - Evaluator (OFC) - judges quality
+# - Orchestrator (aPFC) - checks completion
+
+#############################################
+# Global Settings
+#############################################
+
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.1
+top_p = 1.0
+top_k = 0
+max_tokens = 16384
+log_level = "info"
+custom_instructions_file_name = "INSTRUCTIONS.md"
+markdown_enable = true
+max_session_tokens_threshold = 150000
+cache_tokens_threshold = 1024
+mcp_response_warning_threshold = 5000
+
+#############################################
+# MAP Development Workflow
+#############################################
+
+[workflows.map_development]
+description = "Brain-inspired MAP workflow for complex software development tasks"
+
+# Step 1: Task Decomposition (aPFC-inspired)
+[[workflows.map_development.steps]]
+name = "decompose_task"
+type = "once"
+layer = "map_task_decomposer"
+
+# Step 2: Execute Each Subgoal (Foreach loop)
+[[workflows.map_development.steps]]
+name = "execute_subgoals"
+type = "foreach"
+parse_pattern = "SUBGOAL \\d+: (.*?)(?=\\nSUBGOAL|\\nSuccess Criteria|$)"
+
+  # Step 2.1: Subgoal Execution Loop (with Actor-Monitor feedback)
+  [[workflows.map_development.steps.substeps]]
+  name = "subgoal_loop"
+  type = "loop"
+  max_iterations = 5
+  exit_pattern = "COMPLETE"
+
+    # Step 2.1.1: Actor proposes solutions (dlPFC-inspired)
+    [[workflows.map_development.steps.substeps.substeps]]
+    name = "propose_solutions"
+    type = "once"
+    layer = "map_actor"
+
+    # Step 2.1.2: Monitor validates proposals (ACC-inspired)
+    [[workflows.map_development.steps.substeps.substeps]]
+    name = "validate_proposals"
+    type = "conditional"
+    layer = "map_monitor"
+    condition_pattern = "VALID"
+    on_match = ["map_predictor", "map_evaluator"]
+    on_no_match = ["map_actor"]
+
+    # Step 2.1.3: Orchestrator checks completion (aPFC-inspired)
+    [[workflows.map_development.steps.substeps.substeps]]
+    name = "check_completion"
+    type = "once"
+    layer = "map_orchestrator"
+
+# Step 3: Final Verification
+[[workflows.map_development.steps]]
+name = "final_verification"
+type = "once"
+layer = "map_final_orchestrator"
+
+#############################################
+# Simple Sequential Workflow (for comparison)
+#############################################
+
+[workflows.sequential]
+description = "Simple sequential processing without MAP architecture"
+
+[[workflows.sequential.steps]]
+name = "refine"
+type = "once"
+layer = "task_refiner"
+
+[[workflows.sequential.steps]]
+name = "research"
+type = "once"
+layer = "task_researcher"
+
+#############################################
+# Roles
+#############################################
+
+[[roles]]
+name = "developer"
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.1
+top_p = 1.0
+top_k = 0
+max_tokens = 16384
+workflow = "map_development"
+system = """You are an elite senior developer using a brain-inspired planning architecture.
+
+Your workflow follows the MAP (Modular Agentic Planner) approach:
+1. Decompose complex tasks into sequential subgoals
+2. For each subgoal, propose multiple solutions
+3. Validate proposals before execution
+4. Predict impact and evaluate quality
+5. Verify completion before moving forward
+
+Focus on:
+- Clean, pragmatic code (KISS + DRY)
+- Precise execution (no more, no less)
+- Validation at every step
+- Clear completion criteria"""
+
+[roles.developer.mcp]
+server_refs = ["developer", "filesystem", "web"]
+allowed_tools = ["developer:*", "filesystem:*", "web_search"]
+
+[[roles]]
+name = "assistant"
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.7
+top_p = 1.0
+top_k = 0
+max_tokens = 8192
+system = "You are a helpful AI assistant for general conversation."
+
+[roles.assistant.mcp]
+server_refs = []
+allowed_tools = []
+
+#############################################
+# MAP Layers (Brain-Inspired Modules)
+#############################################
+
+# TaskDecomposer (aPFC) - Breaks tasks into subgoals
+[layers.map_task_decomposer]
+description = "Decomposes complex development tasks into sequential subgoals"
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.3
+max_tokens = 8192
+input_mode = "all"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a task decomposition specialist inspired by the anterior prefrontal cortex (aPFC).
+
+Your role: Break down complex software development tasks into 3-7 sequential subgoals.
+
+OUTPUT FORMAT (CRITICAL - MUST FOLLOW EXACTLY):
+SUBGOAL 1: <clear, specific description>
+Success Criteria: <how to verify completion>
+
+SUBGOAL 2: <clear, specific description>
+Success Criteria: <how to verify completion>
+
+SUBGOAL 3: <clear, specific description>
+Success Criteria: <how to verify completion>
+
+Guidelines:
+- Each subgoal should be independently verifiable
+- Order subgoals by dependency (prerequisites first)
+- Be specific about files, functions, and changes
+- Include concrete success criteria
+- Keep subgoals focused and achievable
+
+Example:
+SUBGOAL 1: Add JWT authentication dependency to Cargo.toml
+Success Criteria: Dependency added, cargo check passes
+
+SUBGOAL 2: Create authentication middleware module
+Success Criteria: Module compiles, basic structure in place
+
+SUBGOAL 3: Implement token validation function
+Success Criteria: Function exists, handles valid/invalid tokens"""
+
+[layers.map_task_decomposer.mcp]
+server_refs = ["filesystem", "developer"]
+allowed_tools = ["semantic_search", "view_signatures", "list_files", "graphrag"]
+
+# Actor (dlPFC) - Proposes code changes
+[layers.map_actor]
+description = "Proposes 2-3 specific implementation approaches"
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.2
+max_tokens = 8192
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a code action proposer inspired by the dorsolateral prefrontal cortex (dlPFC).
+
+Your role: Generate 2-3 specific, actionable proposals for the current subgoal.
+
+OUTPUT FORMAT (CRITICAL - MUST FOLLOW EXACTLY):
+PROPOSAL 1: <description>
+File: <path>
+Changes: <specific modifications>
+Rationale: <why this approach>
+
+PROPOSAL 2: <description>
+File: <path>
+Changes: <specific modifications>
+Rationale: <why this approach>
+
+PROPOSAL 3: <description>
+File: <path>
+Changes: <specific modifications>
+Rationale: <why this approach>
+
+Guidelines:
+- Propose diverse approaches (not minor variations)
+- Be specific about file paths and line numbers
+- Include actual code snippets when helpful
+- Consider trade-offs (performance, maintainability, simplicity)
+- Prioritize pragmatic, KISS solutions
+
+Example:
+PROPOSAL 1: Add jsonwebtoken crate to Cargo.toml
+File: Cargo.toml
+Changes: Add `jsonwebtoken = "9.2"` to dependencies
+Rationale: Most popular, well-maintained JWT library
+
+PROPOSAL 2: Use jwt-simple crate instead
+File: Cargo.toml
+Changes: Add `jwt-simple = "0.12"` to dependencies
+Rationale: Simpler API, fewer dependencies"""
+
+[layers.map_actor.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["semantic_search", "ast_grep", "text_editor", "view_signatures", "list_files"]
+
+# Monitor (ACC) - Validates proposals
+[layers.map_monitor]
+description = "Validates proposals against constraints and best practices"
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.0
+max_tokens = 4096
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a code validation monitor inspired by the anterior cingulate cortex (ACC).
+
+Your role: Validate each proposal for correctness, safety, and adherence to best practices.
+
+OUTPUT FORMAT (CRITICAL - MUST FOLLOW EXACTLY):
+
+If ALL proposals are valid:
+VALID
+All proposals meet requirements.
+
+If ANY proposal has issues:
+INVALID: <which proposal(s)>
+FEEDBACK: <specific issues and how to fix>
+
+Validation Checklist:
+✓ Syntax correctness
+✓ Type safety
+✓ Security concerns
+✓ Performance implications
+✓ Compatibility with existing code
+✓ Adherence to project conventions
+✓ No breaking changes (unless intended)
+
+Guidelines:
+- Be strict but constructive
+- Provide specific, actionable feedback
+- Cite exact issues (line numbers, function names)
+- Suggest concrete fixes
+- Consider edge cases
+
+Example:
+INVALID: PROPOSAL 2
+FEEDBACK: jwt-simple crate is deprecated. Use jsonwebtoken instead (PROPOSAL 1). Also, PROPOSAL 1 should specify version with security fixes: jsonwebtoken = "9.2" (not 9.0)."""
+
+[layers.map_monitor.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["ast_grep", "view_signatures", "shell"]
+
+# Predictor (OFC) - Predicts impact
+[layers.map_predictor]
+description = "Predicts impact of proposed changes"
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.1
+max_tokens = 4096
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a code impact predictor inspired by the orbitofrontal cortex (OFC).
+
+Your role: Predict the direct and indirect impacts of the proposed changes.
+
+OUTPUT FORMAT (CRITICAL - MUST FOLLOW EXACTLY):
+DIRECT_IMPACT: <immediate changes>
+AFFECTED_COMPONENTS: <what else will be impacted>
+DEPENDENCIES: <what needs to be updated>
+RISKS: <potential issues>
+CONFIDENCE: <high|medium|low>
+
+Guidelines:
+- Analyze data flow and dependencies
+- Consider compilation, tests, and runtime behavior
+- Identify cascading effects
+- Assess risk level
+- Be realistic about confidence
+
+Example:
+DIRECT_IMPACT: Adds jsonwebtoken dependency to Cargo.toml
+AFFECTED_COMPONENTS: Cargo.lock will be regenerated, build time increases slightly
+DEPENDENCIES: No other code changes needed yet
+RISKS: Low - well-tested library, no breaking changes
+CONFIDENCE: high"""
+
+[layers.map_predictor.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["semantic_search", "graphrag", "view_signatures", "ast_grep"]
+
+# Evaluator (OFC) - Judges quality
+[layers.map_evaluator]
+description = "Evaluates quality and goal progress"
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.0
+max_tokens = 4096
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a code quality evaluator inspired by the orbitofrontal cortex (OFC).
+
+Your role: Evaluate the quality of the proposed solution and progress toward the goal.
+
+OUTPUT FORMAT (CRITICAL - MUST FOLLOW EXACTLY):
+QUALITY_SCORE: <0-10>
+GOAL_PROGRESS: <0-100>%
+MAINTAINABILITY: <0-10>
+PERFORMANCE: <0-10>
+SECURITY: <0-10>
+RECOMMENDATION: <accept|revise|reject>
+REASONING: <detailed explanation>
+
+Scoring Guidelines:
+- 9-10: Excellent, production-ready
+- 7-8: Good, minor improvements possible
+- 5-6: Acceptable, needs refinement
+- 3-4: Poor, significant issues
+- 0-2: Unacceptable, major problems
+
+Example:
+QUALITY_SCORE: 9
+GOAL_PROGRESS: 100%
+MAINTAINABILITY: 9
+PERFORMANCE: 10
+SECURITY: 9
+RECOMMENDATION: accept
+REASONING: Clean implementation, uses well-maintained library, follows best practices. Minor: could add version comment explaining choice."""
+
+[layers.map_evaluator.mcp]
+server_refs = ["filesystem"]
+allowed_tools = ["view_signatures", "semantic_search"]
+
+# Orchestrator (aPFC) - Checks subgoal completion
+[layers.map_orchestrator]
+description = "Determines if current subgoal is complete"
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.0
+max_tokens = 2048
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a task completion orchestrator inspired by the anterior prefrontal cortex (aPFC).
+
+Your role: Determine if the current subgoal has been successfully completed.
+
+OUTPUT FORMAT (CRITICAL - MUST FOLLOW EXACTLY):
+
+If subgoal is complete:
+COMPLETE
+All success criteria met.
+
+If subgoal is incomplete:
+INCOMPLETE: <what's missing>
+NEXT_STEPS: <what needs to be done>
+
+Verification Checklist:
+✓ All proposed changes implemented
+✓ Success criteria from subgoal met
+✓ Code compiles (if applicable)
+✓ No obvious errors or issues
+✓ Ready to move to next subgoal
+
+Guidelines:
+- Be thorough but not perfectionist
+- Focus on subgoal success criteria
+- Don't require testing/optimization unless specified
+- Provide clear next steps if incomplete
+
+Example:
+COMPLETE
+Dependency added to Cargo.toml, cargo check passes successfully."""
+
+[layers.map_orchestrator.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["shell", "text_editor", "view_signatures"]
+
+# Final Orchestrator - Verifies overall task completion
+[layers.map_final_orchestrator]
+description = "Verifies that all subgoals are complete and task is finished"
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.0
+max_tokens = 2048
+input_mode = "all"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are the final task verification orchestrator.
+
+Your role: Confirm that ALL subgoals have been completed and the original task is finished.
+
+OUTPUT FORMAT (CRITICAL - MUST FOLLOW EXACTLY):
+
+If task is complete:
+TASK_COMPLETE
+Summary: <brief summary of what was accomplished>
+Verification: <how to verify the implementation>
+
+If task is incomplete:
+TASK_INCOMPLETE: <what's missing>
+REMAINING: <list incomplete subgoals>
+
+Guidelines:
+- Review all subgoal completions
+- Verify original task requirements met
+- Provide clear verification steps
+- Summarize key accomplishments
+
+Example:
+TASK_COMPLETE
+Summary: JWT authentication successfully added to API. Dependency added, middleware created, login endpoint implemented, routes protected.
+Verification: Run `cargo test`, check that protected routes require valid JWT tokens."""
+
+[layers.map_final_orchestrator.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["shell", "view_signatures", "semantic_search"]
+
+#############################################
+# Simple Layers (for comparison workflow)
+#############################################
+
+[layers.task_refiner]
+description = "Refines and clarifies user tasks"
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.2
+max_tokens = 4096
+input_mode = "all"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = "You are a task refinement specialist. Clarify ambiguous requirements and break down complex requests."
+
+[layers.task_refiner.mcp]
+server_refs = ["filesystem"]
+allowed_tools = ["semantic_search", "view_signatures"]
+
+[layers.task_researcher]
+description = "Researches codebase context"
+model = "openrouter:anthropic/claude-sonnet-4"
+temperature = 0.1
+max_tokens = 8192
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = "You are a codebase research specialist. Find relevant code, understand architecture, and gather context."
+
+[layers.task_researcher.mcp]
+server_refs = ["filesystem", "developer"]
+allowed_tools = ["semantic_search", "graphrag", "view_signatures", "list_files"]
+
+#############################################
+# MCP Servers
+#############################################
+
+[[mcp.servers]]
+name = "developer"
+type = "builtin"
+
+[[mcp.servers]]
+name = "filesystem"
+type = "builtin"
+
+[[mcp.servers]]
+name = "web"
+type = "builtin"
