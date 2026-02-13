@@ -112,12 +112,17 @@ impl ToolExecutionContext<'_> {
 	}
 
 	/// Get current context tokens for animation display
-	pub fn get_current_context_tokens(&self) -> u64 {
+	/// CRITICAL: Must use same calculation as api_executor.rs and tool_result_processor.rs
+	pub async fn get_current_context_tokens(&self, config: &Config, role: &str) -> u64 {
 		match self {
 			ToolExecutionContext::MainSession { chat_session, .. } => {
-				// Estimate current context tokens from messages
-				crate::session::estimate_tokens(
-					&serde_json::to_string(&chat_session.session.messages).unwrap_or_default(),
+				// Use SAME calculation as everywhere else: full context including system + tools
+				let (_, _, _, _, system_prompt) = config.get_role_config(role);
+				let tools = crate::mcp::get_available_functions(config).await;
+				crate::session::estimate_full_context_tokens(
+					&chat_session.session.messages,
+					Some(system_prompt),
+					Some(&tools),
 				) as u64
 			}
 			ToolExecutionContext::Layer { .. } => 0, // Layers don't track context
@@ -131,6 +136,7 @@ pub async fn execute_tools_parallel_unified(
 	context: &mut ToolExecutionContext<'_>,
 	config: &Config,
 	operation_cancelled: Option<tokio::sync::watch::Receiver<bool>>,
+	role: &str,
 ) -> Result<(Vec<crate::mcp::McpToolResult>, u64)> {
 	// Filter tools based on context permissions
 	let allowed_tool_calls: Vec<_> = current_tool_calls
@@ -154,7 +160,14 @@ pub async fn execute_tools_parallel_unified(
 		return Ok((Vec::new(), 0));
 	}
 
-	execute_tools_parallel_internal(allowed_tool_calls, context, config, operation_cancelled).await
+	execute_tools_parallel_internal(
+		allowed_tool_calls,
+		context,
+		config,
+		operation_cancelled,
+		role,
+	)
+	.await
 }
 
 // Execute all tool calls in parallel and collect results (legacy interface for main session)
@@ -164,6 +177,7 @@ pub async fn execute_tools_parallel(
 	config: &Config,
 	tool_processor: &mut ToolProcessor,
 	operation_cancelled: tokio::sync::watch::Receiver<bool>,
+	role: &str,
 ) -> Result<(Vec<crate::mcp::McpToolResult>, u64)> {
 	let mut context = ToolExecutionContext::MainSession {
 		chat_session,
@@ -175,6 +189,7 @@ pub async fn execute_tools_parallel(
 		&mut context,
 		config,
 		Some(operation_cancelled),
+		role,
 	)
 	.await;
 
@@ -187,6 +202,7 @@ async fn execute_tools_parallel_internal(
 	context: &mut ToolExecutionContext<'_>,
 	config: &Config,
 	operation_cancelled: Option<tokio::sync::watch::Receiver<bool>>,
+	role: &str,
 ) -> Result<(Vec<crate::mcp::McpToolResult>, u64)> {
 	let mut tool_tasks = Vec::new();
 	let is_single_tool = current_tool_calls.len() == 1;
@@ -274,7 +290,7 @@ async fn execute_tools_parallel_internal(
 	let animation_cancel = Arc::new(AtomicBool::new(false));
 	let animation_cancel_clone = animation_cancel.clone();
 	let current_cost = context.get_current_cost();
-	let current_context_tokens = context.get_current_context_tokens();
+	let current_context_tokens = context.get_current_context_tokens(config, role).await;
 	let max_threshold = config.max_session_tokens_threshold;
 
 	let animation_task = tokio::spawn(async move {
@@ -846,6 +862,7 @@ pub async fn execute_layer_tool_calls_parallel(
 	layer_name: String,
 	config: &Config,
 	operation_cancelled: Option<tokio::sync::watch::Receiver<bool>>,
+	role: &str,
 ) -> Result<(Vec<crate::mcp::McpToolResult>, u64)> {
 	let mut context = ToolExecutionContext::Layer {
 		session_name,
@@ -853,5 +870,6 @@ pub async fn execute_layer_tool_calls_parallel(
 		layer_name,
 	};
 
-	execute_tools_parallel_unified(tool_calls, &mut context, config, operation_cancelled).await
+	execute_tools_parallel_unified(tool_calls, &mut context, config, operation_cancelled, role)
+		.await
 }

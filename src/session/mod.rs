@@ -793,7 +793,7 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 	let reader = BufReader::new(file);
 	let mut session_info: Option<SessionInfo> = None;
 	let mut last_summary_timestamp: u64 = 0; // Track last SUMMARY timestamp
-	let mut messages = Vec::new();
+	let mut messages: Vec<Message> = Vec::new();
 	let mut restoration_point_found = false;
 	let mut restoration_messages = Vec::new();
 	let mut pending_tool_calls = Vec::new(); // Collect tool calls for reconstruction
@@ -1004,21 +1004,36 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 				// This is a regular message JSON line
 				if let Ok(message) = serde_json::from_str::<Message>(&line) {
 					// If this is the first tool message and we have pending tool calls,
-					// reconstruct the assistant message with tool_calls
+					// reconstruct the assistant message with tool_calls ONLY if not already present
 					if message.role == "tool" && !pending_tool_calls.is_empty() {
-						let assistant_with_tool_calls = Message {
-							role: "assistant".to_string(),
-							content: "".to_string(), // Empty content for tool call messages
-							tool_calls: Some(serde_json::Value::Array(pending_tool_calls.clone())),
-							timestamp: message.timestamp,
-							cached: false,
-							..Default::default()
-						};
-
-						if restoration_point_found {
-							restoration_messages.push(assistant_with_tool_calls);
+						// Check if the last message is already an assistant message with tool_calls
+						let last_is_assistant_with_tool_calls = if restoration_point_found {
+							restoration_messages.last()
 						} else {
-							messages.push(assistant_with_tool_calls);
+							messages.last()
+						}
+						.map(|m| m.role == "assistant" && m.tool_calls.is_some())
+						.unwrap_or(false);
+
+						// Only reconstruct if the assistant message doesn't already exist
+						// This prevents losing thinking content when the Message JSON was already parsed
+						if !last_is_assistant_with_tool_calls {
+							let assistant_with_tool_calls = Message {
+								role: "assistant".to_string(),
+								content: "".to_string(), // Empty content for tool call messages
+								tool_calls: Some(serde_json::Value::Array(
+									pending_tool_calls.clone(),
+								)),
+								timestamp: message.timestamp,
+								cached: false,
+								..Default::default()
+							};
+
+							if restoration_point_found {
+								restoration_messages.push(assistant_with_tool_calls);
+							} else {
+								messages.push(assistant_with_tool_calls);
+							}
 						}
 
 						// Clear pending tool calls since we've reconstructed the assistant message

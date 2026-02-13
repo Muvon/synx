@@ -112,6 +112,15 @@ pub async fn show_loading_animation(
 
 	// Clean finish - removes the spinner completely
 	spinner.finish_and_clear();
+
+	// CRITICAL: Ensure terminal is fully flushed before returning
+	// This prevents race conditions where new animations start before old ones are cleared
+	use std::io::Write;
+	let _ = std::io::stdout().flush();
+
+	// Small delay to ensure terminal has processed the clear
+	tokio::time::sleep(Duration::from_millis(10)).await;
+
 	Ok(())
 }
 

@@ -420,6 +420,7 @@ pub async fn process_response(params: ResponseProcessingParams<'_>) -> Result<()
 						params.config,
 						&mut tool_processor,
 						operation_cancelled_clone.clone(),
+						params.role,
 					)
 					.await
 					{

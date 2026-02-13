@@ -261,11 +261,6 @@ fn convert_message_to_octolib(
 				);
 			}
 		}
-	} else if msg.role == "assistant" && msg.tool_calls.is_some() {
-		// CRITICAL: Log when assistant message with tool calls has no thinking field
-		crate::log_debug!(
-			"WARNING: Assistant message with tool calls has no thinking field! This will cause Moonshot API error."
-		);
 	}
 
 	builder.build()

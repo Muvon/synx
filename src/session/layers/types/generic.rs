@@ -152,13 +152,14 @@ impl GenericLayer {
 
 					// Execute all tool calls in parallel using the unified system
 					let (tool_results, tool_time) = crate::session::chat::response::tool_execution::execute_layer_tool_calls_parallel(
-						current_tool_calls,
-						format!("layer_{}", self.config.name),
-						&self.config,
-						self.get_execution_context(),
-						config,
-						Some(operation_cancelled.clone()),
-					).await?;
+					current_tool_calls,
+					format!("layer_{}", self.config.name),
+					&self.config,
+					self.get_execution_context(),
+					config,
+					Some(operation_cancelled.clone()),
+					"layer", // Layers use "layer" as role
+				).await?;
 
 					total_tool_time_ms += tool_time;
 
