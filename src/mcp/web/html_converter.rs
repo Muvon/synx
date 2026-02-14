@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// HTML to Markdown converter module
+// HTML to Markdown converter module using html2text
 
 use super::super::{McpToolCall, McpToolResult};
 use anyhow::{anyhow, Result};
-use html5ever::parse_document;
-use html5ever::tendril::TendrilSink;
-use markup5ever_rcdom::{Handle, NodeData, RcDom};
+use html2text::from_read;
 use reqwest;
 use serde_json::{json, Value};
+use std::io::Cursor;
 use std::path::Path;
 use tokio::fs as tokio_fs;
 use url::Url;
@@ -97,8 +96,8 @@ async fn convert_single_html_to_md(call: &McpToolCall, source: &str) -> Result<M
 		tool_name: "read_html".to_string(),
 		tool_id: call.tool_id.clone(),
 		result: json!({
-				"success": true,
-				"conversions": [{
+			"success": true,
+			"conversions": [{
 				"source": source,
 				"type": source_type,
 				"markdown": markdown,
@@ -186,222 +185,9 @@ async fn fetch_html_content(source: &str) -> Result<(String, &'static str)> {
 	}
 }
 
-// Convert HTML to Markdown using html5ever parser
+// Convert HTML to plain text using html2text
 fn html_to_markdown(html: &str) -> Result<String> {
-	let dom = parse_document(RcDom::default(), Default::default()).one(html);
-
-	let mut markdown = String::new();
-	walk_node(&dom.document, &mut markdown, 0)?;
-
-	// Clean up the markdown
-	let cleaned = clean_markdown(&markdown);
-	Ok(cleaned)
-}
-
-// Recursively walk the DOM tree and convert to Markdown
-fn walk_node(handle: &Handle, markdown: &mut String, depth: usize) -> Result<()> {
-	let node = handle;
-	match &node.data {
-		NodeData::Document => {
-			// Process children
-			for child in node.children.borrow().iter() {
-				walk_node(child, markdown, depth)?;
-			}
-		}
-		NodeData::Element { name, attrs, .. } => {
-			let tag_name = &name.local;
-			let attrs = attrs.borrow();
-
-			match tag_name.as_ref() {
-				"h1" => {
-					markdown.push_str("\n# ");
-					process_children(node, markdown, depth)?;
-					markdown.push_str("\n\n");
-				}
-				"h2" => {
-					markdown.push_str("\n## ");
-					process_children(node, markdown, depth)?;
-					markdown.push_str("\n\n");
-				}
-				"h3" => {
-					markdown.push_str("\n### ");
-					process_children(node, markdown, depth)?;
-					markdown.push_str("\n\n");
-				}
-				"h4" => {
-					markdown.push_str("\n#### ");
-					process_children(node, markdown, depth)?;
-					markdown.push_str("\n\n");
-				}
-				"h5" => {
-					markdown.push_str("\n##### ");
-					process_children(node, markdown, depth)?;
-					markdown.push_str("\n\n");
-				}
-				"h6" => {
-					markdown.push_str("\n###### ");
-					process_children(node, markdown, depth)?;
-					markdown.push_str("\n\n");
-				}
-				"p" => {
-					markdown.push('\n');
-					process_children(node, markdown, depth)?;
-					markdown.push_str("\n\n");
-				}
-				"strong" | "b" => {
-					markdown.push_str("**");
-					process_children(node, markdown, depth)?;
-					markdown.push_str("**");
-				}
-				"em" | "i" => {
-					markdown.push('*');
-					process_children(node, markdown, depth)?;
-					markdown.push('*');
-				}
-				"code" => {
-					markdown.push('`');
-					process_children(node, markdown, depth)?;
-					markdown.push('`');
-				}
-				"pre" => {
-					markdown.push_str("\n```\n");
-					process_children(node, markdown, depth)?;
-					markdown.push_str("\n```\n\n");
-				}
-				"a" => {
-					// Find href attribute
-					let href = attrs
-						.iter()
-						.find(|attr| &*attr.name.local == "href")
-						.map(|attr| attr.value.to_string());
-
-					if let Some(url) = href {
-						markdown.push('[');
-						process_children(node, markdown, depth)?;
-						markdown.push_str(&format!("]({})", url));
-					} else {
-						process_children(node, markdown, depth)?;
-					}
-				}
-				"ul" => {
-					markdown.push('\n');
-					process_children(node, markdown, depth)?;
-					markdown.push('\n');
-				}
-				"ol" => {
-					markdown.push('\n');
-					process_children(node, markdown, depth)?;
-					markdown.push('\n');
-				}
-				"li" => {
-					if depth > 0 {
-						for _ in 0..(depth - 1) {
-							markdown.push_str("  ");
-						}
-					}
-					markdown.push_str("- ");
-					process_children(node, markdown, depth + 1)?;
-					markdown.push('\n');
-				}
-				"blockquote" => {
-					markdown.push_str("\n> ");
-					process_children(node, markdown, depth)?;
-					markdown.push_str("\n\n");
-				}
-				"br" => {
-					markdown.push_str("  \n");
-				}
-				"hr" => {
-					markdown.push_str("\n---\n\n");
-				}
-				"img" => {
-					// Find src and alt attributes
-					let src = attrs
-						.iter()
-						.find(|attr| &*attr.name.local == "src")
-						.map(|attr| attr.value.to_string());
-					let alt = attrs
-						.iter()
-						.find(|attr| &*attr.name.local == "alt")
-						.map(|attr| attr.value.to_string())
-						.unwrap_or_else(|| "".to_string());
-
-					if let Some(url) = src {
-						markdown.push_str(&format!("![{}]({})", alt, url));
-					}
-				}
-				// Skip common non-content elements
-				"script" | "style" | "head" | "meta" | "link" | "title" => {
-					// Don't process children of these elements
-				}
-				// For all other elements, just process children
-				_ => {
-					process_children(node, markdown, depth)?;
-				}
-			}
-		}
-		NodeData::Text { contents } => {
-			let text = contents.borrow().to_string();
-			// Clean up whitespace in text nodes
-			let cleaned_text = text.trim();
-			if !cleaned_text.is_empty() {
-				markdown.push_str(cleaned_text);
-			}
-		}
-		_ => {
-			// For other node types (comments, etc.), process children
-			for child in node.children.borrow().iter() {
-				walk_node(child, markdown, depth)?;
-			}
-		}
-	}
-	Ok(())
-}
-
-// Helper function to process children of a node
-fn process_children(node: &Handle, markdown: &mut String, depth: usize) -> Result<()> {
-	for child in node.children.borrow().iter() {
-		walk_node(child, markdown, depth)?;
-	}
-	Ok(())
-}
-
-// Clean up the generated Markdown
-fn clean_markdown(markdown: &str) -> String {
-	let mut lines: Vec<&str> = markdown.lines().collect();
-
-	// Remove leading and trailing empty lines
-	while let Some(&first) = lines.first() {
-		if first.trim().is_empty() {
-			lines.remove(0);
-		} else {
-			break;
-		}
-	}
-
-	while let Some(&last) = lines.last() {
-		if last.trim().is_empty() {
-			lines.pop();
-		} else {
-			break;
-		}
-	}
-
-	// Collapse multiple consecutive empty lines into at most two
-	let mut result = Vec::new();
-	let mut empty_count = 0;
-
-	for line in lines {
-		if line.trim().is_empty() {
-			empty_count += 1;
-			if empty_count <= 2 {
-				result.push(line);
-			}
-		} else {
-			empty_count = 0;
-			result.push(line);
-		}
-	}
-
-	result.join("\n")
+	// html2text converts HTML to plain text (not markdown, but similar)
+	// We use width=180 to minimize wrapping
+	from_read(Cursor::new(html), 180).map_err(|e| anyhow::anyhow!("HTML conversion error: {}", e))
 }

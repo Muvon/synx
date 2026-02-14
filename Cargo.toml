@@ -46,7 +46,7 @@ anyhow = "1.0.100"
 serde_json = "1.0.149"
 clap = { version = "4.5.56", features = ["derive"] }
 clap_complete = "4.5.65"
-toml = "0.9.11"
+toml = "1.0"
 lazy_static = "1.5.0"
 fuzzy-matcher = "0.3.7"
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -57,8 +57,7 @@ colored = "3.1.1"
 async-trait = "0.1.89"
 termimad = "0.34.1"
 syntect = "5.3.0"
-html5ever = "0.36.1"
-markup5ever_rcdom = "0.36.0"
+html2text = "0.16"
 url = "2.5.8"
 dirs = "6.0.0"
 glob = "0.3.3"
@@ -78,7 +77,7 @@ futures-util = "0.3"
 oauth2 = { version = "5.0", features = ["reqwest"] }
 keyring = { version = "3" }
 sha2 = "0.10"
-rand = { version = "0.9", features = ["std_rng"] }
+rand = { version = "0.10", features = ["std_rng"] }
 serde_urlencoded = "0.7"
 thiserror = "2.0"
 open = "5"
