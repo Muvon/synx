@@ -749,14 +749,11 @@ fn handle_follow_up_cost_tracking(
 					&chat_session.session.info.name,
 					&chat_session.session.info,
 				);
-			} else {
-				// Only show error if no cost data found
+				// Provider did not provide cost data - this is normal for some providers (e.g., Ollama)
 				let provider_name = &exchange.provider;
-				println!(
-					"{} {} {}",
-					"ERROR:".bright_red(),
-					provider_name.bright_yellow(),
-					"did not provide cost data for tool response API call".bright_red()
+				log_debug!(
+					"{} did not provide cost data for tool response API call",
+					provider_name
 				);
 
 				// Check if usage tracking was explicitly requested (OpenRouter-specific)
@@ -768,15 +765,15 @@ fn handle_follow_up_cost_tracking(
 						.and_then(|i| i.as_bool())
 						.unwrap_or(false);
 
-					println!(
-						"{} {}",
-						"Request had usage.include flag:".bright_yellow(),
+					log_debug!(
+						"{} request had usage.include flag: {}",
+						provider_name,
 						has_usage_flag
 					);
 					if !has_usage_flag {
-						println!(
-							"{}",
-							"Make sure usage.include=true is set for OpenRouter!".bright_yellow()
+						log_debug!(
+							"Make sure usage.include=true is set for {} to get cost data",
+							provider_name
 						);
 					}
 				}

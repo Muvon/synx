@@ -400,14 +400,9 @@ impl ChatSession {
 							self.session.info.total_cost
 						);
 					} else {
-						// ERROR - Provider did not provide cost data
+						// Provider did not provide cost data - this is normal for some providers (e.g., Ollama)
 						let provider_name = &ex.provider;
-						println!(
-							"{} {} {}",
-							"ERROR:".bright_red(),
-							provider_name.bright_yellow(),
-							"did not provide cost data.".bright_red()
-						);
+						log_debug!("{} did not provide cost data.", provider_name);
 
 						// Dump the raw response JSON to debug
 						log_debug!("Raw {} response:", provider_name);
@@ -424,16 +419,15 @@ impl ChatSession {
 								.and_then(|i| i.as_bool())
 								.unwrap_or(false);
 
-							println!(
-								"{} {}",
-								"Request had usage.include flag:".bright_yellow(),
+							log_debug!(
+								"{} request had usage.include flag: {}",
+								provider_name,
 								has_usage_flag
 							);
 							if !has_usage_flag {
-								println!(
-									"{}",
-									"Make sure usage.include=true is set for OpenRouter!"
-										.bright_yellow()
+								log_debug!(
+									"Make sure usage.include=true is set for {} to get cost data",
+									provider_name
 								);
 							}
 						}
