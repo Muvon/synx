@@ -44,7 +44,7 @@ pub fn estimate_tokens(text: &str) -> usize {
 /// - Base overhead: 3 tokens per message
 /// - role, content, tool_calls, thinking, name, images
 ///
-/// Based on: https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb
+/// Based on: <https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb>
 pub fn estimate_message_tokens(message: &crate::session::Message) -> usize {
 	let mut tokens = 0;
 

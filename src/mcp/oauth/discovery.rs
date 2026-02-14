@@ -8,7 +8,7 @@
 //! 1. Client requests MCP server without auth → 401 Unauthorized
 //! 2. Parse WWW-Authenticate header for resource_metadata URL
 //! 3. Fetch Protected Resource Metadata document
-//! 4. Extract authorization_servers[0] (primary auth server)
+//! 4. Extract authorization_servers\[0\] (primary auth server)
 //! 5. Fetch Authorization Server Metadata from /.well-known/oauth-authorization-server
 //! 6. Build OAuthConfig from discovered endpoints
 
@@ -151,7 +151,7 @@ pub async fn fetch_protected_resource_metadata(
 /// we construct the OAuth endpoints using standard patterns.
 ///
 /// # Arguments
-/// * `issuer` - The authorization server URL (e.g., "https://github.com/login/oauth")
+/// * `issuer` - The authorization server URL (e.g., "<https://github.com/login/oauth>")
 ///
 /// # Returns
 /// * `Ok(AuthServerMetadata)` - Constructed metadata with OAuth endpoints
@@ -266,7 +266,7 @@ fn get_known_client_id(issuer: &str, server_name: &str) -> String {
 /// 8. Cache the result for future use
 ///
 /// # Arguments
-/// * `server_url` - The MCP server URL (e.g., "https://api.githubcopilot.com/mcp/")
+/// * `server_url` - The MCP server URL (e.g., "<https://api.githubcopilot.com/mcp/>")
 /// * `server_name` - The server name for logging and client_id
 ///
 /// # Returns

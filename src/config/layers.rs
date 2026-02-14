@@ -25,7 +25,7 @@ pub struct LayersConfig {
 
 impl LayersConfig {
 	/// Check if this config should be skipped during serialization
-	/// This helps avoid writing empty [layers] sections when only core layers exist
+	/// This helps avoid writing empty \[layers\] sections when only core layers exist
 	pub fn is_default_for_serialization(&self) -> bool {
 		self.layers.is_empty()
 	}
