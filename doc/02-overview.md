@@ -311,4 +311,4 @@ export OCTOMIND_ROLES__DEVELOPER__MAX_TOKENS="16384"
 
 ---
 
-**Octomind v0.13.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.
+**Octomind v0.17.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.

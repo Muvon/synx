@@ -18,7 +18,7 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 
 ## Current Architecture Overview
 
-**Octomind v0.16.0** implements a session-first architecture with the following core components:
+**Octomind v0.17.0** implements a session-first architecture with the following core components:
 
 ### Session-First Design
 - **Interactive AI Conversations**: All functionality accessed through natural language sessions
@@ -233,6 +233,6 @@ Default values
 
 ---
 
-**Octomind v0.16.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.
+**Octomind v0.17.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.
 
 **© 2025 Muvon Un Limited** | Apache License 2.0

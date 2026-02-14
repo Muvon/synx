@@ -1048,7 +1048,7 @@ server_refs = []  # Reference servers from registry
 
 [developer.commands.review]
 name = "review"
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 system_prompt = "You are a code review expert..."
 temperature = 0.1
 input_mode = "all"  # Gets full conversation context
@@ -1116,7 +1116,7 @@ enabled = true
 providers = ["core"]
 
 [openrouter]
-model = "anthropic/claude-3.5-sonnet"
+model = "anthropic/claude-sonnet-4"
 ```
 
 **New format (required):**
@@ -1130,7 +1130,7 @@ name = "developer"
 type = "builtin"
 
 [developer.config]
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 ```
 
 ### Automatic Migration
@@ -1143,8 +1143,8 @@ Octomind automatically migrates legacy configurations on load, but it's recommen
 
 1. **Invalid model format**
   ```
-  Error: Invalid model format 'anthropic/claude-3.5-sonnet'
-  Solution: Use 'openrouter:anthropic/claude-3.5-sonnet'
+  Error: Invalid model format 'anthropic/claude-sonnet-4'
+  Solution: Use 'openrouter:anthropic/claude-sonnet-4'
   ```
 
 2. **Missing API keys**

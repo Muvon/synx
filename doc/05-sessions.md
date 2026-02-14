@@ -155,7 +155,7 @@ octomind session --role=documentation-writer
 ```toml
 # Code reviewer role
 [code-reviewer]
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 enable_layers = true
 system = "You are a code review expert focused on security and best practices."
 
@@ -166,7 +166,7 @@ allowed_tools = ["text_editor", "list_files"]
 
 # Security analyst role
 [security-analyst]
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 enable_layers = true
 system = "You are a security expert focused on finding vulnerabilities and security issues."
 
@@ -714,7 +714,7 @@ You can create custom layers with any combination of settings:
 ```toml
 [[layers]]
 name = "custom_analyzer"
-model = "openrouter:anthropic/claude-3.5-sonnet"
+model = "openrouter:anthropic/claude-sonnet-4"
 system_prompt = "You are a specialized code analyzer..."
 temperature = 0.1
 input_mode = "Last"

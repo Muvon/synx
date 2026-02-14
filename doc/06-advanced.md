@@ -497,7 +497,7 @@ The `call_llm` tool enables direct LLM calls with runtime parameters, bypassing 
 
 **Parameters:**
 - `prompt` (string, required): The input/prompt to process
-- `model` (string, required): Model in 'provider:model' format (e.g., 'openai:gpt-4o', 'openrouter:anthropic/claude-3.5-sonnet')
+- `model` (string, required): Model in 'provider:model' format (e.g., 'openai:gpt-4o', 'openrouter:anthropic/claude-sonnet-4')
 - `system` (string, required): System prompt for the LLM
 - `temperature` (number, optional): Temperature for randomness (0.0-2.0, default: 0.7)
 
@@ -507,7 +507,7 @@ The `call_llm` tool enables direct LLM calls with runtime parameters, bypassing 
 {"prompt": "Explain quantum computing", "model": "openai:gpt-4o", "system": "You are a helpful assistant"}
 
 // With temperature for creative output
-{"prompt": "Write a poem", "model": "openrouter:anthropic/claude-3.5-sonnet", "system": "You are a creative writer", "temperature": 1.2}
+{"prompt": "Write a poem", "model": "openrouter:anthropic/claude-sonnet-4", "system": "You are a creative writer", "temperature": 1.2}
 ```
 
 **Note:** Response size is controlled by global `mcp_response_tokens_threshold` setting.
