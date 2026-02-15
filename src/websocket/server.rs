@@ -19,7 +19,7 @@ use crate::config::Config;
 use crate::session::cancellation::SessionCancellation;
 use crate::session::chat::session::{
 	execute_api_call_and_process_response, prepare_for_api_call, process_layers_if_enabled,
-	setup_and_initialize_session, setup_system_prompt_and_cache, ChatSession,
+	setup_and_initialize_session, setup_system_prompt_and_cache, ChatSession, GenericSessionArgs,
 };
 use crate::session::output::{OutputMode, WebSocketSink};
 use crate::{log_debug, log_error, log_info};
@@ -217,31 +217,7 @@ async fn process_client_message(
 			drop(sessions_lock);
 			log_debug!("Loading session from disk: {}", session_id);
 
-			// Use the same session loading logic as CLI
-			// Note: Fields are read via Debug formatting in extract_session_params()
-			#[allow(dead_code)] // Fields accessed via Debug trait reflection
-			#[derive(Debug)]
-			struct ResumeArgs {
-				name: Option<String>,
-				resume: Option<String>,
-				resume_recent: bool,
-				model: Option<String>,
-				max_tokens: Option<u32>,
-				temperature: Option<f32>,
-				role: String,
-				max_retries: Option<u32>,
-			}
-
-			let args = ResumeArgs {
-				name: None,
-				resume: Some(session_id.clone()),
-				resume_recent: false,
-				model: None,
-				max_tokens: None,
-				temperature: None,
-				role: role.to_string(),
-				max_retries: None,
-			};
+			let args = GenericSessionArgs::resume(session_id.clone(), role.to_string());
 
 			match setup_and_initialize_session(&args, config).await {
 				Ok((session, config_for_role, session_role, _first_message_processed)) => {
@@ -274,32 +250,7 @@ async fn process_client_message(
 		drop(sessions_lock); // Release lock before creating session
 		log_debug!("Creating new session with role: {}", role);
 
-		// Use the same session initialization as CLI
-		// Create a dummy args struct for session initialization
-		// Note: Fields are read via Debug formatting in extract_session_params()
-		#[allow(dead_code)] // Fields accessed via Debug trait reflection
-		#[derive(Debug)]
-		struct DummyArgs {
-			name: Option<String>,
-			resume: Option<String>,
-			resume_recent: bool,
-			model: Option<String>,
-			max_tokens: Option<u32>,
-			temperature: Option<f32>,
-			role: String,
-			max_retries: Option<u32>,
-		}
-
-		let args = DummyArgs {
-			name: None,
-			resume: None,
-			resume_recent: false,
-			model: None,
-			max_tokens: None,
-			temperature: None,
-			role: role.to_string(),
-			max_retries: None,
-		};
+		let args = GenericSessionArgs::new(role.to_string());
 
 		let (session, config_for_role, session_role, _first_message_processed) =
 			setup_and_initialize_session(&args, config).await?;

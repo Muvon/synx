@@ -29,6 +29,52 @@ pub type SessionParams = (
 	String,         // output_mode (plain or jsonl)
 );
 
+/// Generic session arguments that can be used by any caller (CLI, WebSocket, etc.)
+#[derive(Debug, Clone)]
+pub struct GenericSessionArgs {
+	pub name: Option<String>,
+	pub resume: Option<String>,
+	pub resume_recent: bool,
+	pub model: Option<String>,
+	pub max_tokens: Option<u32>,
+	pub temperature: Option<f32>,
+	pub role: String,
+	pub max_retries: Option<u32>,
+	pub mode: String,
+}
+
+impl GenericSessionArgs {
+	/// Create new session args with defaults
+	pub fn new(role: String) -> Self {
+		Self {
+			name: None,
+			resume: None,
+			resume_recent: false,
+			model: None,
+			max_tokens: None,
+			temperature: None,
+			role,
+			max_retries: None,
+			mode: "plain".to_string(),
+		}
+	}
+
+	/// Create args for resuming a session
+	pub fn resume(session_id: String, role: String) -> Self {
+		Self {
+			name: None,
+			resume: Some(session_id),
+			resume_recent: false,
+			model: None,
+			max_tokens: None,
+			temperature: None,
+			role,
+			max_retries: None,
+			mode: "plain".to_string(),
+		}
+	}
+}
+
 // Extract session parameters from Debug format with proper fallbacks
 pub fn extract_session_params<T: std::fmt::Debug>(args: &T, _config: &Config) -> SessionParams {
 	let args_str = format!("{:?}", args);
