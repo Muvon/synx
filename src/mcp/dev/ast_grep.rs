@@ -294,8 +294,33 @@ pub async fn execute_ast_grep_command(call: &McpToolCall) -> Result<McpToolResul
 	}
 
 	// Expand glob patterns to actual file paths first
+	// CRITICAL: Handle both glob patterns AND plain directory paths
 	let expanded_paths_result = if let Some(file_paths) = &paths {
-		crate::utils::glob::expand_glob_patterns_filtered(file_paths, None)
+		// Check if paths contain glob patterns or are plain directories/files
+		let has_glob_patterns = file_paths
+			.iter()
+			.any(|p| p.contains('*') || p.contains('?'));
+
+		if has_glob_patterns {
+			// Use glob expansion for patterns
+			crate::utils::glob::expand_glob_patterns_filtered(file_paths, None)
+		} else {
+			// Plain paths - verify they exist and pass through
+			let mut verified_paths = Vec::new();
+			for path in file_paths {
+				let path_obj = std::path::Path::new(path);
+				if path_obj.exists() {
+					verified_paths.push(path.clone());
+				} else {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						format!("Path does not exist: {}", path),
+					));
+				}
+			}
+			Ok(verified_paths)
+		}
 	} else {
 		Ok(vec![])
 	};
