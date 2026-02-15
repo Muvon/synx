@@ -79,14 +79,10 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	// Set up advanced cancellation system for proper CTRL+C handling
 	// Enhanced processing state tracking for smart cancellation
 	#[derive(Debug, Clone, PartialEq)]
-	#[allow(dead_code)] // Some variants may not be used after refactoring
 	enum ProcessingState {
 		Idle,                 // No operation in progress
 		ReadingInput,         // Reading user input
-		ProcessingLayers,     // Processing through layers
-		CallingAPI,           // Making API call
-		ExecutingTools,       // Executing tools
-		ProcessingResponse,   // Processing response
+		CallingAPI,           // Making API call (includes layers, tools, response processing)
 		CompletedWithResults, // Completed successfully with results to keep
 	}
 
@@ -153,17 +149,6 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					// Nothing to clean up - just reset and continue
 					log_debug!("Cancelled during idle state - no cleanup needed");
 				}
-				ProcessingState::ProcessingLayers => {
-					// Layers processing was interrupted - remove only the current user message if it was added
-					if let Some(op) = operation {
-						if let Some(user_idx) = op.user_message_index {
-							if user_idx < chat_session.session.messages.len() {
-								chat_session.session.messages.truncate(user_idx);
-								log_debug!("Removed incomplete user message due to layer processing cancellation");
-							}
-						}
-					}
-				}
 				ProcessingState::CallingAPI => {
 					// API call was interrupted - cleanup depends on whether assistant message was added
 					if let Some(op) = operation {
@@ -199,17 +184,6 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 							}
 						}
 					}
-				}
-
-				ProcessingState::ExecutingTools => {
-					// Tool execution was interrupted - cleanup is now handled immediately in response.rs
-					// This ensures conversation state integrity without waiting for next loop iteration
-					log_debug!("Tool execution cancelled - cleanup handled immediately during response processing");
-				}
-				ProcessingState::ProcessingResponse => {
-					// Response processing was interrupted - minimal cleanup
-					// Most work is already done, just ensure consistency
-					log_debug!("Cancelled during response processing - preserving completed work");
 				}
 				ProcessingState::CompletedWithResults => {
 					// Operation completed successfully - nothing to clean up

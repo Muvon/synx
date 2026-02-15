@@ -218,8 +218,9 @@ async fn process_client_message(
 			log_debug!("Loading session from disk: {}", session_id);
 
 			// Use the same session loading logic as CLI
+			// Note: Fields are read via Debug formatting in extract_session_params()
+			#[allow(dead_code)] // Fields accessed via Debug trait reflection
 			#[derive(Debug)]
-			#[allow(dead_code)]
 			struct ResumeArgs {
 				name: Option<String>,
 				resume: Option<String>,
@@ -275,8 +276,9 @@ async fn process_client_message(
 
 		// Use the same session initialization as CLI
 		// Create a dummy args struct for session initialization
+		// Note: Fields are read via Debug formatting in extract_session_params()
+		#[allow(dead_code)] // Fields accessed via Debug trait reflection
 		#[derive(Debug)]
-		#[allow(dead_code)] // Fields are read via Debug formatting
 		struct DummyArgs {
 			name: Option<String>,
 			resume: Option<String>,

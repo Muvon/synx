@@ -24,10 +24,6 @@ use crate::session::{estimate_tokens, Message};
 #[derive(Debug, Clone)]
 pub struct SemanticChunk {
 	pub content: String,
-	#[allow(dead_code)]
-	pub start_idx: usize,
-	#[allow(dead_code)]
-	pub end_idx: usize,
 	pub importance: f64,
 	pub chunk_type: ChunkType,
 	pub discourse_relation: DiscourseRelation,
@@ -58,7 +54,7 @@ pub enum DiscourseRelation {
 pub fn chunk_messages(messages: &[Message]) -> Vec<SemanticChunk> {
 	let mut chunks = Vec::new();
 
-	for (idx, msg) in messages.iter().enumerate() {
+	for msg in messages.iter() {
 		// Skip system messages
 		if msg.role == "system" {
 			continue;
@@ -78,8 +74,6 @@ pub fn chunk_messages(messages: &[Message]) -> Vec<SemanticChunk> {
 
 			chunks.push(SemanticChunk {
 				content: segment,
-				start_idx: idx,
-				end_idx: idx,
 				importance,
 				chunk_type,
 				discourse_relation,
@@ -659,16 +653,12 @@ mod tests {
 		let chunks = vec![
 			SemanticChunk {
 				content: "Critical info".to_string(),
-				start_idx: 0,
-				end_idx: 0,
 				importance: 10.0,
 				chunk_type: ChunkType::Critical,
 				discourse_relation: DiscourseRelation::None,
 			},
 			SemanticChunk {
 				content: "Context info".to_string(),
-				start_idx: 1,
-				end_idx: 1,
 				importance: 5.0,
 				chunk_type: ChunkType::Context,
 				discourse_relation: DiscourseRelation::None,
@@ -687,24 +677,18 @@ mod tests {
 		let chunks = vec![
 			SemanticChunk {
 				content: "We tried approach A".to_string(),
-				start_idx: 0,
-				end_idx: 0,
 				importance: 5.0,
 				chunk_type: ChunkType::Context,
 				discourse_relation: DiscourseRelation::None,
 			},
 			SemanticChunk {
 				content: "However, approach B is better".to_string(),
-				start_idx: 1,
-				end_idx: 1,
 				importance: 8.0, // Higher importance
 				chunk_type: ChunkType::Context,
 				discourse_relation: DiscourseRelation::Contrast,
 			},
 			SemanticChunk {
 				content: "Unrelated info".to_string(),
-				start_idx: 2,
-				end_idx: 2,
 				importance: 3.0,
 				chunk_type: ChunkType::Context,
 				discourse_relation: DiscourseRelation::None,
@@ -715,7 +699,6 @@ mod tests {
 		let selected = select_chunks_within_budget(&chunks, 100);
 
 		// Should include both chunks in the contrast pair
-		assert!(selected.len() >= 2);
 		let has_approach_a = selected.iter().any(|c| c.content.contains("approach A"));
 		let has_approach_b = selected.iter().any(|c| c.content.contains("approach B"));
 		assert!(
@@ -730,32 +713,24 @@ mod tests {
 		let chunks = vec![
 			SemanticChunk {
 				content: "First, we setup the environment".to_string(),
-				start_idx: 0,
-				end_idx: 0,
 				importance: 7.0,
 				chunk_type: ChunkType::Context,
 				discourse_relation: DiscourseRelation::Sequence,
 			},
 			SemanticChunk {
 				content: "Then, we installed dependencies".to_string(),
-				start_idx: 1,
-				end_idx: 1,
 				importance: 7.0,
 				chunk_type: ChunkType::Context,
 				discourse_relation: DiscourseRelation::Sequence,
 			},
 			SemanticChunk {
 				content: "Finally, we ran the tests".to_string(),
-				start_idx: 2,
-				end_idx: 2,
 				importance: 7.0,
 				chunk_type: ChunkType::Context,
 				discourse_relation: DiscourseRelation::Sequence,
 			},
 			SemanticChunk {
 				content: "Critical result: all tests passed".to_string(),
-				start_idx: 3,
-				end_idx: 3,
 				importance: 10.0,
 				chunk_type: ChunkType::Critical,
 				discourse_relation: DiscourseRelation::None,
@@ -763,7 +738,6 @@ mod tests {
 		];
 
 		let selected = select_chunks_within_budget(&chunks, 200);
-
 		// Should compress sequence to just the last step
 		let sequence_chunks: Vec<_> = selected
 			.iter()

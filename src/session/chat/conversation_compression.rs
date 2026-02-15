@@ -887,12 +887,6 @@ fn format_compressed_entry_with_context(
 	)
 }
 
-/// Format final compressed entry (legacy, without file context)
-#[allow(dead_code)]
-fn format_compressed_entry(preserved: &str, context: &str, compression_id: String) -> String {
-	format_compressed_entry_with_context(preserved, context, "", compression_id)
-}
-
 /// Find which messages to compress (keep last 4 turns = 2 exchanges raw)
 ///
 /// CRITICAL: Must not cut between assistant with tool_calls and its tool results
