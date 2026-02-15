@@ -196,28 +196,28 @@ async fn calculate_compression_net_benefit(
 	};
 
 	// SCENARIO A: NO compression
-	// Each call pays for ENTIRE accumulated context (which grows each call)
+	// Each call pays: cache_read(base) + input(new_tokens), base grows each turn
 	let mut total_cost_no_compress = 0.0;
-	let mut accumulated_context = total_tokens;
+	let mut base_context = total_tokens;
 
-	for i in 0..estimated_future_turns as i32 {
-		// Pay for ENTIRE accumulated context using SESSION model pricing
-		let context_cost = if i == 0 {
-			// First call: everything is already cached from previous session calls
-			session_pricing.calculate_cost(0, 0, accumulated_context as u64, 0)
-		} else {
-			// Subsequent calls: all cached (but GROWING)
-			session_pricing.calculate_cost(0, 0, accumulated_context as u64, 0)
-		};
+	for _ in 0..estimated_future_turns as i32 {
+		// Pay cache_read for base (already cached) + input for NEW tokens
+		let context_cost = session_pricing.calculate_cost(
+			avg_new_tokens_per_call as u64, // NEW tokens: input price
+			0,                              // No cache write
+			base_context as u64,            // BASE: cache_read price
+			0,                              // No output in context calculation
+		);
 
 		total_cost_no_compress += context_cost;
 
-		// Add new tokens to accumulated context (they'll be paid for in ALL future calls)
-		accumulated_context += avg_new_tokens_per_call;
+		// New tokens become part of base for next call
+		base_context += avg_new_tokens_per_call;
 	}
 
 	// SCENARIO B: WITH compression
 	// 1. Compression cost (one-time) using DECISION model pricing
+	let ignore_cost = config.compression.decision.ignore_cost;
 	let compression_cost = if same_model {
 		// Same model: session context is already cached, only decision prompt is new
 		decision_pricing.calculate_cost(
@@ -237,25 +237,35 @@ async fn calculate_compression_net_benefit(
 	};
 
 	// 2. Future calls with SMALLER accumulated context using SESSION model pricing
-	let mut total_cost_with_compress = compression_cost;
-	let mut accumulated_context_compressed = compressed_tokens;
+	// If ignore_cost=true, we don't count compression_cost in benefit calculation
+	let mut total_cost_with_compress = if ignore_cost { 0.0 } else { compression_cost };
+	let mut base_context_compressed = compressed_tokens;
 
-	for i in 0..estimated_future_turns as i32 {
-		// Pay for ENTIRE accumulated context (but starting from smaller base)
-		let context_cost = if i == 0 {
-			// First call after compression: cache write
-			session_pricing.calculate_cost(accumulated_context_compressed as u64, 0, 0, 0)
+	for call_num in 0..estimated_future_turns as i32 {
+		// First call after compression: cache_write for base (fresh cache)
+		// Subsequent calls: cache_read for base
+		let (input_tokens, cache_write, cache_read) = if call_num == 0 {
+			// First call: write the compressed base to cache, pay input for NEW tokens
+			(
+				avg_new_tokens_per_call as u64,
+				base_context_compressed as u64,
+				0,
+			)
 		} else {
-			// Subsequent calls: cached (but GROWING from smaller base)
-			session_pricing.calculate_cost(0, 0, accumulated_context_compressed as u64, 0)
+			// Subsequent calls: read cached base, pay input for NEW tokens
+			(
+				avg_new_tokens_per_call as u64,
+				0,
+				base_context_compressed as u64,
+			)
 		};
 
+		let context_cost = session_pricing.calculate_cost(input_tokens, cache_write, cache_read, 0);
 		total_cost_with_compress += context_cost;
 
-		// Add new tokens to accumulated context (same growth rate as scenario A)
-		accumulated_context_compressed += avg_new_tokens_per_call;
+		// New tokens become part of base for next call
+		base_context_compressed += avg_new_tokens_per_call;
 	}
-
 	let net_benefit = total_cost_no_compress - total_cost_with_compress;
 
 	log_debug!(
@@ -268,10 +278,12 @@ async fn calculate_compression_net_benefit(
 		Avg new tokens/call: {:.0} (output_tokens={}, api_calls={})\n  \
 		Future calls: {:.0}\n  \
 		SCENARIO A (no compress): ${:.5}\n    \
-		- Pays for growing context: {:.0} → {:.0} tokens over {} calls (all cached)\n  \
+		- Per call: cache_read(base) + input({:.0} new tokens)\n    \
+		- Base grows: {:.0} → {:.0} tokens over {} calls\n  \
 		SCENARIO B (compress): ${:.5}\n    \
-		- Compression cost: ${:.5} (using {}, {} uncached, {} cached)\n    \
-		- Pays for growing context: {:.0} → {:.0} tokens over {} calls\n  \
+		- Compression cost: ${:.5} (using {}, {} uncached, {} cached) {}\n    \
+		- Per call: cache_read/write(base) + input({:.0} new tokens)\n    \
+		- Base grows: {:.0} → {:.0} tokens over {} calls\n  \
 		Net benefit: ${:.5} → {}",
 		decision_model,
 		decision_pricing.input_price_per_1m,
@@ -295,16 +307,19 @@ async fn calculate_compression_net_benefit(
 		session.session.info.total_api_calls,
 		estimated_future_turns,
 		total_cost_no_compress,
+		avg_new_tokens_per_call,
 		total_tokens,
-		total_tokens + (avg_new_tokens_per_call * (estimated_future_turns - 1.0)),
+		base_context,
 		estimated_future_turns as i32,
 		total_cost_with_compress,
 		compression_cost,
 		decision_model,
 		if same_model { decision_prompt_tokens as u64 } else { total_tokens as u64 },
 		if same_model { (total_tokens - decision_prompt_tokens) as u64 } else { 0 },
+		if ignore_cost { "[IGNORED]" } else { "" },
+		avg_new_tokens_per_call,
 		compressed_tokens,
-		compressed_tokens + (avg_new_tokens_per_call * (estimated_future_turns - 1.0)),
+		base_context_compressed,
 		estimated_future_turns as i32,
 		net_benefit,
 		if net_benefit > 0.0 {
