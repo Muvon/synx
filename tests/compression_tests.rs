@@ -266,7 +266,10 @@ mod adaptive_compression_tests {
 	/// Returns (TempDir, Config) - TempDir must be kept alive for config to remain valid
 	fn create_isolated_config() -> (tempfile::TempDir, Config) {
 		let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
-		let config_path = temp_dir.path().join("config.toml");
+		// Canonicalize to resolve symlinks (critical on macOS where /var -> /private/var)
+		let canonical_path =
+			std::fs::canonicalize(temp_dir.path()).expect("Failed to canonicalize temp dir");
+		let config_path = canonical_path.join("config.toml");
 
 		// Set env var to use isolated config directory
 		std::env::set_var("OCTOMIND_CONFIG_PATH", config_path.to_str().unwrap());
