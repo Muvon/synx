@@ -217,6 +217,11 @@ impl AnimationManager {
 
 			// Clean up spinner when done
 			if let Some(s) = spinner {
+				// CRITICAL: Disable steady tick first to stop background drawing thread
+				// This prevents race condition where tick thread draws after finish_and_clear
+				s.disable_steady_tick();
+				// Small yield to ensure background thread stops
+				tokio::task::yield_now().await;
 				s.finish_and_clear();
 			}
 
