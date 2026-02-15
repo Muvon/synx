@@ -142,7 +142,6 @@ async fn calculate_compression_net_benefit(
 	// Get decision model (used for compression) and session model (used for future calls)
 	let decision_model = &config.compression.decision.model;
 	let session_model = &session.model;
-
 	// Get pricing for both models using provider factory
 	let decision_pricing = get_model_pricing(decision_model, config);
 	let session_pricing = get_model_pricing(session_model, config);
@@ -159,6 +158,22 @@ async fn calculate_compression_net_benefit(
 			return -1.0; // Negative = don't compress
 		}
 	};
+
+	// SPECIAL CASE: Session model has zero pricing (free/local models like ollama)
+	// When pricing is $0.00, cost-based analysis shows no benefit, but user configured
+	// pressure levels for context management (not cost). Compress anyway when threshold exceeded.
+	let session_is_free = session_pricing.input_price_per_1m == 0.0
+		&& session_pricing.output_price_per_1m == 0.0
+		&& session_pricing.cache_write_price_per_1m == 0.0
+		&& session_pricing.cache_read_price_per_1m == 0.0;
+
+	if session_is_free {
+		log_debug!(
+			"Session model '{}' has zero pricing - compressing for context management (threshold exceeded)",
+			session_model
+		);
+		return 1.0; // Positive = compress (context management benefit)
+	}
 
 	// Calculate average NEW tokens per API call from session history
 	// CRITICAL: Use OUTPUT tokens only - they represent true incremental growth
@@ -268,6 +283,7 @@ async fn calculate_compression_net_benefit(
 	}
 	let net_benefit = total_cost_no_compress - total_cost_with_compress;
 
+	// Log detailed analysis (this point is only reached for paid models)
 	log_debug!(
 		"Compression analysis (REAL PRICING):\n  \
 		Decision model: {} (input: ${:.2}/1M, output: ${:.2}/1M, cache_write: ${:.2}/1M, cache_read: ${:.2}/1M)\n  \
