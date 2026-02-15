@@ -286,6 +286,7 @@ fn get_interactive_input() -> Result<String> {
 
 	let mut line_editor = Reedline::create()
 		.with_history(history)
+		.use_bracketed_paste(true)
 		.with_edit_mode(edit_mode);
 
 	let prompt = octomind::session::chat::ChatPrompt::new(
