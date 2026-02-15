@@ -244,15 +244,10 @@ fn convert_message_to_octolib(
 	if let Some(ref thinking_value) = msg.thinking {
 		match serde_json::from_value::<octolib::ThinkingBlock>(thinking_value.clone()) {
 			Ok(thinking_block) => {
-				crate::log_debug!(
-					"Successfully converted thinking for {} message: {} chars",
-					msg.role,
-					thinking_block.content.len()
-				);
 				builder = builder.thinking(thinking_block);
 			}
 			Err(e) => {
-				// Log deserialization failure for debugging
+				// Only log failures - success is expected and too verbose
 				crate::log_debug!(
 					"Failed to deserialize thinking field for {} message: {}. Value: {:?}",
 					msg.role,
