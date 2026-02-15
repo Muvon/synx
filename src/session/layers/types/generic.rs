@@ -455,6 +455,8 @@ impl GenericLayer {
 
 		// Use AnimationManager for animation
 		let animation_manager = crate::session::chat::get_animation_manager();
+		// CRITICAL: Connect cancellation receiver for INSTANT Ctrl+C response
+		animation_manager.set_cancel_receiver(operation_cancelled.clone());
 		animation_manager
 			.start_with_params(current_cost, current_context_tokens, max_threshold)
 			.await;

@@ -19,12 +19,14 @@
 //! - Dynamically updates cost and context values in real-time
 //! - Provides clean cancellation and cleanup
 //! - Prevents animation stuck bugs
+//! - Responds INSTANTLY to Ctrl+C cancellation (no delays)
 
 use crate::log_debug;
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 /// Shared animation state for dynamic updates
@@ -93,6 +95,8 @@ pub struct AnimationManager {
 	cancel_flag: Arc<AtomicBool>,
 	/// Shared animation state for dynamic updates
 	state: AnimationState,
+	/// Optional cancellation receiver from session (for instant Ctrl+C response)
+	cancel_rx: Arc<std::sync::Mutex<Option<watch::Receiver<bool>>>>,
 }
 
 impl AnimationManager {
@@ -102,6 +106,7 @@ impl AnimationManager {
 			current_task: Arc::new(std::sync::Mutex::new(None)),
 			cancel_flag: Arc::new(AtomicBool::new(false)),
 			state: AnimationState::new(),
+			cancel_rx: Arc::new(std::sync::Mutex::new(None)),
 		}
 	}
 
@@ -110,10 +115,24 @@ impl AnimationManager {
 		self.state.clone()
 	}
 
+	/// Set cancellation receiver from session (for instant Ctrl+C response)
+	/// This allows the animation to respond immediately to Ctrl+C without waiting for stop_current()
+	pub fn set_cancel_receiver(&self, rx: watch::Receiver<bool>) {
+		*self.cancel_rx.lock().unwrap() = Some(rx);
+	}
+
+	/// Clear cancellation receiver (call when animation stops)
+	pub fn clear_cancel_receiver(&self) {
+		*self.cancel_rx.lock().unwrap() = None;
+	}
+
 	/// Stop current animation (if any)
 	pub async fn stop_current(&self) {
 		// Set cancellation flag
 		self.cancel_flag.store(true, Ordering::SeqCst);
+
+		// Clear the cancellation receiver to prevent stale references
+		self.clear_cancel_receiver();
 
 		// Wait for current task to complete
 		let task = {
@@ -199,13 +218,26 @@ impl AnimationManager {
 		let cancel_flag = self.cancel_flag.clone();
 		let current_task = self.current_task.clone();
 		let state = self.state.clone();
+		let cancel_rx = self.cancel_rx.lock().unwrap().clone();
 
 		let task = tokio::spawn(async move {
 			// Animation loop with truly dynamic cost/context updates
 			let mut spinner: Option<indicatif::ProgressBar> = None;
 			let start_time = std::time::Instant::now();
 
-			while !cancel_flag.load(Ordering::SeqCst) {
+			'animation: loop {
+				// Check cancellation flags FIRST for instant response
+				if cancel_flag.load(Ordering::SeqCst) {
+					break 'animation;
+				}
+
+				// Check session cancellation receiver if available (INSTANT Ctrl+C response)
+				if let Some(ref rx) = cancel_rx {
+					if *rx.borrow() {
+						break 'animation;
+					}
+				}
+
 				// Read live cost/context from shared state (dynamic updates!)
 				let current_cost = state.get_cost();
 				let current_context_tokens = state.get_context_tokens();
@@ -262,8 +294,44 @@ impl AnimationManager {
 					s.set_message(message);
 				}
 
-				// Sleep before next check
-				tokio::time::sleep(Duration::from_millis(100)).await;
+				// CRITICAL FIX: Use tokio::select! for INSTANT cancellation response
+				// This allows the animation to break immediately on Ctrl+C instead of waiting up to 100ms
+				tokio::select! {
+					// Sleep for animation update interval
+					_ = tokio::time::sleep(Duration::from_millis(100)) => {
+						// Normal sleep completed, continue loop
+					}
+					// INSTANT cancellation from session's watch channel
+					_ = async {
+						if let Some(ref rx) = cancel_rx {
+							let mut rx_clone = rx.clone();
+							// Wait for cancellation signal
+							while !*rx_clone.borrow() {
+								if rx_clone.changed().await.is_err() {
+									break;
+								}
+							}
+						} else {
+							// No receiver - wait forever
+							std::future::pending::<()>().await;
+						}
+					} => {
+						// Cancellation received - break immediately
+						log_debug!("Animation cancelled via session cancellation channel");
+						break 'animation;
+					}
+					// INSTANT cancellation from stop_current() call
+					_ = async {
+						while !cancel_flag.load(Ordering::SeqCst) {
+							tokio::task::yield_now().await;
+							tokio::time::sleep(Duration::from_millis(10)).await;
+						}
+					} => {
+						// stop_current() was called - break immediately
+						log_debug!("Animation cancelled via stop_current()");
+						break 'animation;
+					}
+				}
 			}
 
 			// Clean up spinner when done

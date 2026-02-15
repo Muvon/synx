@@ -50,6 +50,10 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 	anim_state.update_cost(current_cost);
 	anim_state.update_context_tokens(current_context_tokens);
 	anim_state.update_max_threshold(max_threshold);
+
+	// CRITICAL: Connect session cancellation to animation for INSTANT Ctrl+C response
+	// This allows the animation to break immediately when user presses Ctrl+C
+	animation_manager.set_cancel_receiver(operation_rx.clone());
 	animation_manager.start_animation(&mode).await;
 
 	// Clone operation_rx for response processing
