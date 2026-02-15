@@ -14,17 +14,14 @@
 
 // Context reduction for session optimization
 
-use super::animation::show_smart_animation;
 use crate::config::Config;
 use crate::mcp::get_available_functions;
+use crate::session::chat::get_animation_manager;
 use crate::session::chat::session::ChatSession;
 use crate::session::estimate_full_context_tokens;
 use crate::session::output::{OutputMode, SilentSink};
 use anyhow::Result;
 use colored::*;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-
 /// Process context reduction - smart truncation with summarization
 /// Simply adds a summarization prompt and lets the normal session flow handle it
 pub async fn perform_context_reduction(
@@ -56,9 +53,8 @@ pub async fn perform_context_reduction(
 
 	chat_session.add_user_message(summarization_prompt)?;
 
-	// Create a separate flag for animation control to avoid conflicts with user cancellation detection
-	let animation_cancel = Arc::new(AtomicBool::new(false));
-	let animation_cancel_clone = animation_cancel.clone();
+	// Use AnimationManager for animation
+	let animation_manager = get_animation_manager();
 	let current_cost = chat_session.session.info.total_cost;
 	let max_threshold = config.max_session_tokens_threshold;
 
@@ -71,15 +67,9 @@ pub async fn perform_context_reduction(
 		Some(&tools),
 	) as u64;
 
-	let animation_task = tokio::spawn(async move {
-		let _ = show_smart_animation(
-			animation_cancel_clone,
-			current_cost,
-			current_context_tokens,
-			max_threshold,
-		)
+	animation_manager
+		.start_with_params(current_cost, current_context_tokens, max_threshold)
 		.await;
-	});
 
 	// Use the same API flow as the normal session
 	let api_result = crate::session::chat_completion_with_provider(
@@ -97,9 +87,8 @@ pub async fn perform_context_reduction(
 	)
 	.await;
 
-	// Stop the animation using the separate flag (not the operation_cancelled flag)
-	animation_cancel.store(true, Ordering::SeqCst);
-	let _ = animation_task.await;
+	// Stop the animation
+	animation_manager.stop_current().await;
 
 	// Process the response with the normal flow (handles tool calls, etc.)
 	let response_result = match api_result {

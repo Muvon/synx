@@ -21,6 +21,7 @@
 //! - Prevents animation stuck bugs
 
 use crate::log_debug;
+use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -129,7 +130,6 @@ impl AnimationManager {
 		// Reset cancellation flag for next animation
 		self.cancel_flag.store(false, Ordering::SeqCst);
 	}
-
 	/// Start new animation (stops any existing animation first)
 	///
 	/// This ensures only one animation runs at a time, preventing:
@@ -148,12 +148,58 @@ impl AnimationManager {
 			return;
 		}
 
+		self.start_internal().await;
+	}
+
+	/// Start animation with explicit cost/context (stops any existing animation first)
+	///
+	/// Use this for standalone animations where you have specific cost/context values.
+	/// Automatically detects interactive vs non-interactive mode.
+	pub async fn start_with_params(&self, cost: f64, context_tokens: u64, max_threshold: usize) {
+		// Stop any existing animation first
+		self.stop_current().await;
+
+		// Don't show animation in non-interactive mode
+		if !std::io::stdin().is_terminal() {
+			// Show static line for non-interactive mode
+			use crate::config::with_thread_config;
+			let should_print =
+				with_thread_config(|config| config.runtime_output_mode.as_deref() != Some("jsonl"))
+					.unwrap_or(true);
+
+			if should_print {
+				if cost > 0.0 {
+					println!(
+						" ── cost: ${:.5} ────────────────────────────────────────",
+						cost
+					);
+				} else if max_threshold > 0 {
+					let percentage =
+						(context_tokens as f64 / max_threshold as f64 * 100.0).min(100.0);
+					println!(
+						" ── context: {:.1}% ────────────────────────────────────────",
+						percentage
+					);
+				}
+			}
+			return;
+		}
+
+		// Update state with provided values
+		self.state.update_cost(cost);
+		self.state.update_context_tokens(context_tokens);
+		self.state.update_max_threshold(max_threshold);
+
+		self.start_internal().await;
+	}
+
+	/// Internal animation start logic
+	async fn start_internal(&self) {
 		// Clone references for animation task
 		let cancel_flag = self.cancel_flag.clone();
 		let current_task = self.current_task.clone();
 		let state = self.state.clone();
 
-		// Spawn new animation task with dynamic updates
 		let task = tokio::spawn(async move {
 			// Animation loop with truly dynamic cost/context updates
 			let mut spinner: Option<indicatif::ProgressBar> = None;
@@ -172,6 +218,11 @@ impl AnimationManager {
 					format!("[${:.2}|{:.1}%] Working …", current_cost, percentage)
 				} else if current_cost > 0.0 {
 					format!("[${:.2}|∞] Working …", current_cost)
+				} else if max_threshold > 0 {
+					// No cost but still show context percentage
+					let percentage =
+						(current_context_tokens as f64 / max_threshold as f64 * 100.0).min(100.0);
+					format!("[{:.1}%] Working …", percentage)
 				} else {
 					"Working …".to_string()
 				};

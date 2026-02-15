@@ -24,12 +24,11 @@
 //! - Triggered BEFORE user message is added to avoid breaking conversation flow
 
 use crate::config::Config;
+use crate::session::chat::get_animation_manager;
 use crate::session::chat::session::ChatSession;
 use crate::session::estimate_tokens;
 use crate::{log_debug, log_info};
 use anyhow::Result;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 /// Check if we should ask AI about compression
 /// Returns (should_compress, target_ratio) tuple
@@ -475,26 +474,15 @@ pub async fn check_and_compress_conversation(
 	}
 
 	// Show animation immediately to avoid perceived lag during decision/summary call
-
-	let animation_cancel = Arc::new(AtomicBool::new(false));
-	let animation_cancel_clone = animation_cancel.clone();
+	let animation_manager = get_animation_manager();
 	let current_cost = session.session.info.total_cost;
 	let max_threshold = config.max_session_tokens_threshold;
 
 	// UNIFIED TOKEN CALCULATION - Use the single source of truth
 	let current_context_tokens = session.get_full_context_tokens(config).await as u64;
-	let animation_task = tokio::spawn(async move {
-		let _ = crate::session::chat::animation::show_smart_animation(
-			animation_cancel_clone,
-			current_cost,
-			current_context_tokens,
-			max_threshold,
-		)
+	animation_manager
+		.start_with_params(current_cost, current_context_tokens, max_threshold)
 		.await;
-	});
-
-	// Give animation time to start (avoid race condition)
-	tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
 	log_debug!("Compression check triggered - asking AI for decision and summary in one call");
 
@@ -506,8 +494,7 @@ pub async fn check_and_compress_conversation(
 
 	if start_idx >= end_idx {
 		log_debug!("No messages to compress (range invalid)");
-		animation_cancel.store(true, Ordering::SeqCst);
-		let _ = animation_task.await;
+		animation_manager.stop_current().await;
 		return Ok(false);
 	}
 
@@ -543,8 +530,7 @@ pub async fn check_and_compress_conversation(
 
 	if !should_compress {
 		log_debug!("AI decided compression not beneficial at this point");
-		animation_cancel.store(true, Ordering::SeqCst);
-		let _ = animation_task.await;
+		animation_manager.stop_current().await;
 		return Ok(false);
 	}
 
@@ -560,9 +546,7 @@ pub async fn check_and_compress_conversation(
 		tokens_before,
 	)?;
 
-	animation_cancel.store(true, Ordering::SeqCst);
-	let _ = animation_task.await;
-
+	animation_manager.stop_current().await;
 	Ok(true)
 }
 

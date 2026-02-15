@@ -296,7 +296,16 @@ pub fn read_user_input(
 		if let Some(pct) = context_pct {
 			format!("[${:.2}|{:.1}%]", estimated_cost, pct)
 		} else {
-			format!("[{:.2}|∞]", estimated_cost)
+			format!("[${:.2}|∞]", estimated_cost)
+		}
+	} else if max_session_tokens_threshold > 0 {
+		// No cost but still show context percentage
+		let context_pct =
+			calculate_context_percentage(current_context_tokens, max_session_tokens_threshold);
+		if let Some(pct) = context_pct {
+			format!("[{:.1}%]", pct)
+		} else {
+			String::new()
 		}
 	} else {
 		String::new()

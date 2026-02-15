@@ -29,8 +29,7 @@ use std::fs::{self, OpenOptions};
 use std::io::IsTerminal;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 #[derive(Args, Debug)]
 pub struct AskArgs {
@@ -436,14 +435,8 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 					};
 
 					// Show animation while processing (no cost display)
-					let cancel_flag = Arc::new(AtomicBool::new(false));
-					let animation_cancel = cancel_flag.clone();
-
-					// Start animation task
-					let animation_task = tokio::spawn(async move {
-						use octomind::session::chat::show_smart_animation;
-						let _ = show_smart_animation(animation_cancel, 0.0, 0, 0).await;
-					});
+					let animation_manager = octomind::session::chat::get_animation_manager();
+					animation_manager.start_with_params(0.0, 0, 0).await;
 
 					// Execute the query
 					let query_result = execute_single_query(SingleQueryParams {
@@ -461,8 +454,7 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 					.await;
 
 					// Cancel animation
-					cancel_flag.store(true, Ordering::SeqCst);
-					let _ = animation_task.await;
+					animation_manager.stop_current().await;
 
 					match query_result {
 						Ok(response) => {

@@ -14,18 +14,14 @@
 
 // Layered response processing implementation
 
-use super::animation::show_smart_animation;
 use crate::config::Config;
 use crate::mcp::get_available_functions;
+use crate::session::chat::get_animation_manager;
 use crate::session::chat::session::ChatSession;
 use crate::session::estimate_full_context_tokens;
 use anyhow::Result;
 use colored::*;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-
 // Process a response using the layered architecture
-// Returns the final processed text that should be used as input for the main model
 pub async fn process_layered_response(
 	input: &str,
 	chat_session: &mut ChatSession,
@@ -61,10 +57,8 @@ pub async fn process_layered_response(
 		}
 	}
 
-	// Create a task to show loading animation with current cost
-	// Use a separate flag for animation to avoid conflicts with user cancellation detection
-	let animation_cancel = Arc::new(AtomicBool::new(false));
-	let animation_cancel_clone = animation_cancel.clone();
+	// Use AnimationManager for animation
+	let animation_manager = get_animation_manager();
 	let current_cost = chat_session.session.info.total_cost;
 	let max_threshold = config.max_session_tokens_threshold;
 
@@ -77,15 +71,9 @@ pub async fn process_layered_response(
 		Some(&tools),
 	) as u64;
 
-	let animation_task = tokio::spawn(async move {
-		let _ = show_smart_animation(
-			animation_cancel_clone,
-			current_cost,
-			current_context_tokens,
-			max_threshold,
-		)
+	animation_manager
+		.start_with_params(current_cost, current_context_tokens, max_threshold)
 		.await;
-	});
 
 	// Display status message BEFORE processing starts - cleaner flow
 	if config.get_log_level().is_debug_enabled() {
@@ -127,9 +115,8 @@ pub async fn process_layered_response(
 			{
 				Ok((output, _progress)) => output, // Ignore progress in layered response
 				Err(e) => {
-					// Stop the animation using the separate animation flag
-					animation_cancel.store(true, Ordering::SeqCst);
-					let _ = animation_task.await;
+					// Stop the animation
+					animation_manager.stop_current().await;
 					return Err(e);
 				}
 			}
@@ -142,9 +129,8 @@ pub async fn process_layered_response(
 		input.to_string()
 	};
 
-	// Stop the animation using the separate animation flag
-	animation_cancel.store(true, Ordering::SeqCst);
-	let _ = animation_task.await;
+	// Stop the animation
+	animation_manager.stop_current().await;
 
 	// Return the processed output from workflow for use in the main model conversation
 	// This output already includes the results of any function calls handled by each layer
