@@ -181,13 +181,33 @@ pub fn expand_glob_patterns_filtered(
 				}
 			}
 		} else {
-			// Not a glob pattern, add as-is if it exists and passes filters
+			// Not a glob pattern, handle as direct path (file or directory)
 			let path_obj = Path::new(pattern);
-			if path_obj.exists() && path_obj.is_file() {
-				let path_str = pattern;
-				if !is_dotfile_or_in_dot_directory(path_str) {
-					expanded_paths.push(pattern.clone());
-					pattern_matches += 1;
+			if path_obj.exists() {
+				if path_obj.is_file() {
+					// It's a file, add it directly
+					let path_str = pattern;
+					if !is_dotfile_or_in_dot_directory(path_str) {
+						expanded_paths.push(pattern.clone());
+						pattern_matches += 1;
+					}
+				} else if path_obj.is_dir() {
+					// It's a directory, add all files from it recursively
+					// Normalize the directory path for matching
+					let normalized_dir = pattern.trim_end_matches('/').trim_end_matches('\\');
+					for file_path in &all_files {
+						// Check if file is under this directory
+						let file_path_normalized =
+							file_path.strip_prefix("./").unwrap_or(file_path);
+						if file_path_normalized.starts_with(&format!("{}/", normalized_dir))
+							|| file_path_normalized.starts_with(&format!("{}\\", normalized_dir))
+							|| file_path_normalized == normalized_dir
+								&& !is_dotfile_or_in_dot_directory(file_path)
+						{
+							expanded_paths.push(file_path.clone());
+							pattern_matches += 1;
+						}
+					}
 				}
 			}
 		}
