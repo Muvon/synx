@@ -182,8 +182,5 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 		}
 	}
 
-	// Stop animation after ALL processing completes (including tool execution)
-	animation_manager.stop_current().await;
-
 	Ok(())
 }

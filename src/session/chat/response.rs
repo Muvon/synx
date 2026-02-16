@@ -23,6 +23,7 @@ use crate::log_debug;
 use crate::providers::ThinkingBlock;
 use crate::session::chat::assistant_output::print_assistant_response;
 use crate::session::chat::display_thinking;
+use crate::session::chat::get_animation_manager;
 use crate::session::chat::session::ChatSession;
 use crate::session::chat::session_continuation;
 use crate::session::ProviderExchange;
@@ -344,6 +345,11 @@ pub async fn process_response<S: OutputSink>(
 ) -> Result<()> {
 	// Check if operation has been cancelled at the very start
 	check_cancellation(&params.operation_cancelled)?;
+
+	// CRITICAL FIX: Stop animation BEFORE any output to prevent ghost text
+	// The animation must be stopped before printing assistant response to avoid
+	// the spinner text remaining visible on the terminal after the response is printed
+	get_animation_manager().stop_current().await;
 
 	// Debug logging for finish_reason and tool calls
 	log_response_debug(params.config, &params.finish_reason, &params.tool_calls);
