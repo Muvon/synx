@@ -14,8 +14,6 @@
 
 // Project context module for gathering and managing contextual information
 
-use anyhow::Result;
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -96,9 +94,10 @@ impl ProjectContext {
 		Some(Self::build_tree_structure(&files_list))
 	}
 
-	/// Get list of files using git, ripgrep, or manual fallback
+	/// Get list of files using ONLY git (no fallbacks to avoid massive context)
 	fn get_files_list(project_dir: &Path) -> Option<String> {
-		// Try git ls-files first (respects .gitignore)
+		// ONLY use git ls-files - if not in git repo, return None
+		// This prevents massive file trees from being included in context
 		let git_check = Command::new("git")
 			.args(["rev-parse", "--is-inside-work-tree"])
 			.current_dir(project_dir)
@@ -118,19 +117,8 @@ impl ProjectContext {
 			}
 		}
 
-		// Fallback to ripgrep
-		if let Ok(output) = Command::new("rg")
-			.args(["--files"])
-			.current_dir(project_dir)
-			.output()
-		{
-			if output.status.success() {
-				return Some(String::from_utf8_lossy(&output.stdout).to_string());
-			}
-		}
-
-		// Last fallback: manual listing
-		Self::list_files_manually(project_dir).ok()
+		// No git repository - return None to skip file tree entirely
+		None
 	}
 
 	/// Build a tree structure from a list of file paths
@@ -217,34 +205,6 @@ impl ProjectContext {
 		}
 
 		render_tree(&root, "")
-	}
-
-	/// Manual file listing as a fallback
-	fn list_files_manually(dir: &Path) -> Result<String> {
-		let mut result = String::new();
-
-		fn visit_dir(dir: &Path, base: &Path, result: &mut String) -> Result<()> {
-			if dir.join(".git").exists() || dir.join("node_modules").exists() {
-				return Ok(());
-			}
-
-			for entry in fs::read_dir(dir)? {
-				let entry = entry?;
-				let path = entry.path();
-				let relative = path.strip_prefix(base)?.to_string_lossy().to_string();
-
-				if path.is_file() {
-					result.push_str(&relative);
-					result.push('\n');
-				} else if path.is_dir() {
-					visit_dir(&path, base, result)?;
-				}
-			}
-			Ok(())
-		}
-
-		visit_dir(dir, dir, &mut result)?;
-		Ok(result)
 	}
 
 	/// Get git status if available
