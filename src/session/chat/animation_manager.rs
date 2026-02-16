@@ -128,22 +128,21 @@ impl AnimationManager {
 
 	/// Stop current animation (if any)
 	pub async fn stop_current(&self) {
-		// Set cancellation flag
+		// Set cancellation flag - the tokio::select! will detect this instantly
 		self.cancel_flag.store(true, Ordering::SeqCst);
 
-		// Clear the cancellation receiver to prevent stale references
+		// Clear the cancellation receiver
 		self.clear_cancel_receiver();
 
-		// Wait for current task to complete
+		// Wait for task to finish gracefully (cleanup will run properly)
 		let task = {
 			let mut guard = self.current_task.lock().unwrap();
 			guard.take()
 		};
 
 		if let Some(task) = task {
-			log_debug!("Stopping current animation...");
+			// Wait for graceful shutdown - cleanup code will run
 			let _ = task.await;
-			log_debug!("Animation stopped");
 		}
 
 		// Reset cancellation flag for next animation
@@ -324,7 +323,7 @@ impl AnimationManager {
 					_ = async {
 						while !cancel_flag.load(Ordering::SeqCst) {
 							tokio::task::yield_now().await;
-							tokio::time::sleep(Duration::from_millis(10)).await;
+
 						}
 					} => {
 						// stop_current() was called - break immediately

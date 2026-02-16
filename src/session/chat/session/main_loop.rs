@@ -134,6 +134,12 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		if cancellation.is_cancelled() {
 			log_debug!("Ctrl+C detected - performing smart cleanup based on operation state");
 
+			// CRITICAL FIX: Stop animation IMMEDIATELY before any cleanup
+			// This ensures the spinner stops instantly and user sees clean prompt
+			use crate::session::chat::get_animation_manager;
+			let animation_manager = get_animation_manager();
+			animation_manager.stop_current().await;
+
 			// CRITICAL FIX: Display cost information before cleanup
 			// This ensures users see the cost spent before cancellation
 			// Skip in JSONL mode
@@ -684,18 +690,39 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		}
 
 		// Execute API call and process response using helper function
+		// CRITICAL FIX: Use tokio::select! to race API call against cancellation
+		// This allows INSTANT Ctrl+C response instead of waiting for API to complete
 		let user_message_index_for_error = user_message_index;
 		let model_for_error = chat_session.model.clone();
-		match execute_api_call_and_process_response(
-			&mut chat_session,
-			&current_config,
-			&role,
-			operation_rx.clone(),
-			OutputMode::Interactive,
-			SilentSink,
-		)
-		.await
-		{
+
+		let api_result = tokio::select! {
+			// API call branch
+			result = execute_api_call_and_process_response(
+				&mut chat_session,
+				&current_config,
+				&role,
+				operation_rx.clone(),
+				OutputMode::Interactive,
+				SilentSink,
+			) => result,
+			// Cancellation branch - INSTANT response
+			_ = async {
+				let mut cancel_rx = cancellation.operation_receiver();
+				while !*cancel_rx.borrow() {
+					if cancel_rx.changed().await.is_err() {
+						break;
+					}
+				}
+			} => {
+				// Ctrl+C pressed - stop animation and return to prompt immediately
+				use crate::session::chat::get_animation_manager;
+				get_animation_manager().stop_current().await;
+				log_debug!("API call cancelled by user - returning to prompt");
+				continue;
+			}
+		};
+
+		match api_result {
 			Ok(_) => {
 				// CRITICAL FIX: Check for cancellation BEFORE marking as completed
 				// If cancelled during HTTP request, we need to remove the user message

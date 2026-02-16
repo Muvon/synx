@@ -43,29 +43,16 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 	let max_threshold = config.max_session_tokens_threshold;
 	let current_context_tokens = chat_session.get_full_context_tokens(config).await as u64;
 
-	// Update animation state and start animation
-	use crate::session::chat::get_animation_manager;
-	let animation_manager = get_animation_manager();
-	let anim_state = animation_manager.get_state();
-	anim_state.update_cost(current_cost);
-	anim_state.update_context_tokens(current_context_tokens);
-	anim_state.update_max_threshold(max_threshold);
-
-	// CRITICAL: Connect session cancellation to animation for INSTANT Ctrl+C response
-	// This allows the animation to break immediately when user presses Ctrl+C
-	animation_manager.set_cancel_receiver(operation_rx.clone());
-	animation_manager.start_animation(&mode).await;
-
 	// Clone operation_rx for response processing
 	let operation_rx_for_response = operation_rx.clone();
 
-	// Check spending threshold for interactive mode
+	// CRITICAL FIX: Check spending threshold BEFORE starting animation
+	// This prevents animation from covering the Y/N prompt
 	if mode.is_interactive() {
 		match chat_session.check_spending_threshold(config) {
 			Ok(should_continue) => {
 				if !should_continue {
 					// User chose not to continue due to spending threshold
-					animation_manager.stop_current().await;
 					return Ok(());
 				}
 			}
@@ -84,7 +71,6 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 			Ok(should_continue) => {
 				if !should_continue {
 					// Request spending threshold exceeded - stop execution
-					animation_manager.stop_current().await;
 					return Ok(());
 				}
 			}
@@ -98,6 +84,18 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 			}
 		}
 	}
+
+	// NOW start animation after spending checks passed
+	use crate::session::chat::get_animation_manager;
+	let animation_manager = get_animation_manager();
+	let anim_state = animation_manager.get_state();
+	anim_state.update_cost(current_cost);
+	anim_state.update_context_tokens(current_context_tokens);
+	anim_state.update_max_threshold(max_threshold);
+
+	// CRITICAL: Connect session cancellation to animation for INSTANT Ctrl+C response
+	animation_manager.set_cancel_receiver(operation_rx.clone());
+	animation_manager.start_animation(&mode).await;
 
 	// Make API call
 	let messages = chat_session.session.messages.clone();
