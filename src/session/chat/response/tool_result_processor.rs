@@ -483,15 +483,10 @@ pub async fn process_tool_results(
 			// Handle cost tracking from follow-up API call
 			handle_follow_up_cost_tracking(chat_session, &response.exchange, config);
 
-			// CRITICAL FIX: Update animation state after cost tracking
-			// This is the ONLY place where we should update animation during multi-turn tool calls
-			// We update AFTER receiving response and tracking cost, not before making requests
-			let current_cost = chat_session.session.info.total_cost;
-			let current_context_tokens = chat_session.get_full_context_tokens(config).await as u64;
-			animation_manager.get_state().update_cost(current_cost);
-			animation_manager
-				.get_state()
-				.update_context_tokens(current_context_tokens);
+			// NOTE: Animation state is NOT updated here to prevent flickering.
+			// The animation was started by api_executor.rs with initial values,
+			// and the animation loop reads from shared state every 100ms.
+			// Updating mid-flight causes race conditions and visible flicker.
 
 			// Display rate limit information if available
 			display_rate_limit_info(&response.exchange);
