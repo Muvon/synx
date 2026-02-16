@@ -453,8 +453,9 @@ pub async fn process_tool_results(
 	let follow_up_result =
 		make_follow_up_api_call(chat_session, config, operation_cancelled.clone()).await;
 
-	// Stop global animation and wait for completion
-	animation_manager.stop_current().await;
+	// NOTE: Don't stop animation here - only stop when we're actually done with tools
+	// If there are more tools to call, the animation should continue running
+	// Animation will be stopped after checking should_continue_conversation
 
 	// Show cost breakdown for intermediate results (after tool calls, before follow-up AI call)
 	// Always show simple cost line, detailed breakdown only at info log level
@@ -483,10 +484,15 @@ pub async fn process_tool_results(
 			// Handle cost tracking from follow-up API call
 			handle_follow_up_cost_tracking(chat_session, &response.exchange, config);
 
-			// NOTE: Animation state is NOT updated here to prevent flickering.
-			// The animation was started by api_executor.rs with initial values,
-			// and the animation loop reads from shared state every 100ms.
-			// Updating mid-flight causes race conditions and visible flicker.
+			// CRITICAL FIX: Update animation state after cost tracking
+			// This ensures the animation shows updated cost/tokens during multi-hop tool loops
+			// The animation loop reads from shared state every 100ms, so this keeps it current
+			let current_cost = chat_session.session.info.total_cost;
+			let current_context_tokens = chat_session.get_full_context_tokens(config).await as u64;
+			animation_manager.get_state().update_cost(current_cost);
+			animation_manager
+				.get_state()
+				.update_context_tokens(current_context_tokens);
 
 			// Display rate limit information if available
 			display_rate_limit_info(&response.exchange);
@@ -500,7 +506,8 @@ pub async fn process_tool_results(
 					response.thinking,    // CRITICAL FIX: Include thinking from follow-up response for Moonshot
 				)))
 			} else {
-				// If no more tools, return None to break out of loop
+				// If no more tools, stop animation and return
+				animation_manager.stop_current().await;
 				Ok(Some((
 					response.content,
 					response.exchange,
@@ -533,6 +540,9 @@ pub async fn process_tool_results(
 			// Additional context if error contains provider information
 			log_debug!("Model: {}", chat_session.model);
 			log_debug!("Temperature: {}", chat_session.temperature);
+
+			// Stop animation on error before returning
+			animation_manager.stop_current().await;
 
 			Err(e)
 		}
