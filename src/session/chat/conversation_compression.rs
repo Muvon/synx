@@ -569,9 +569,26 @@ async fn ask_ai_decision_and_summary(
 	// If there are context chunks, include them for summarization
 	if !context_chunks.is_empty() {
 		decision_prompt.push_str(
-			"If YES, provide:\n\
-			1. A 2-3 sentence summary preserving logical structure\n\
-			2. CRITICAL file contexts needed to continue work (if any)\n\n\
+			"If YES, provide a structured summary that PRESERVES ALL CRITICAL CONTEXT for continuing:\n\
+			\n\
+			**USER INTENT** (1-2 sentences):\n\
+			What did the user ask for? What is the goal or objective?\n\
+			\n\
+			**PROGRESS** (2-3 sentences):\n\
+			What was completed? What is currently in progress? Include counts if applicable (e.g., 'Step 2 of 5 done').\n\
+			\n\
+			**CURRENT WORK** (2-3 sentences):\n\
+			What is being worked on RIGHT NOW? What was just being investigated or discussed?\n\
+			\n\
+			**KEY ENTITIES** (preserve exactly):\n\
+			- Resources: files, documents, URLs, or references being used\n\
+			- Names: specific terms, identifiers, or labels involved\n\
+			- Issues: any problems encountered and their status\n\
+			- Decisions: choices made with reasoning\n\
+			\n\
+			**NEXT STEPS** (1-2 sentences):\n\
+			What needs to happen next to continue?\n\
+			\n\
 			**Context chunks to analyze:**\n\n",
 		);
 
@@ -596,19 +613,30 @@ async fn ask_ai_decision_and_summary(
 		decision_prompt.push_str(
 			"\n\n**Response format:**\n\
 			YES\n\
-			[Your 2-3 sentence summary here]\n\n\
-			**OPTIONAL: If specific file contexts are needed to continue work, include them:**\n\
+			**USER INTENT**: [What the user asked for - 1-2 sentences]\n\
+			**PROGRESS**: [What was completed, what's in progress - include counts if applicable]\n\
+			**CURRENT WORK**: [What is being worked on RIGHT NOW]\n\
+			**KEY ENTITIES**:\n\
+			- Resources: [files, documents, URLs, or references being used]\n\
+			- Names: [specific terms, identifiers, or labels involved]\n\
+			- Issues: [any problems encountered and their status]\n\
+			- Decisions: [choices made with reasoning]\n\
+			**NEXT STEPS**: [What needs to happen next]\n\
+			\n\
+			**OPTIONAL: If specific file contexts are needed to continue, include them:**\n\
 			<context>\n\
 			filename:startline:endline\n\
 			filename:startline:endline\n\
-			</context>\n\n\
+			</context>\n\
+			\n\
 			**Format requirements for file contexts:**\n\
 			- Use <context> tags around file references\n\
 			- Each line: filepath:number:number (no spaces)\n\
 			- Use paths from project root (src/main.rs not ./src/main.rs)\n\
 			- Line numbers must be positive, start ≤ end ≤ 10000\n\
 			- Maximum 5 file ranges\n\
-			- Only include files CRITICAL for continuing the work\n\n\
+			- Only include files CRITICAL for continuing\n\
+			\n\
 			OR respond with 'NO' if compression is not beneficial.",
 		);
 	} else {
