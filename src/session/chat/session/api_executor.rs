@@ -116,8 +116,8 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 	.with_cancellation_token(operation_rx);
 	let api_result = chat_completion_with_validation(validation_params).await;
 
-	// Stop global animation
-	animation_manager.stop_current().await;
+	// DON'T stop animation here - let it continue through response processing
+	// Animation will be stopped after ALL processing completes (including tool execution)
 
 	// CRITICAL FIX: Check for cancellation after API call completion
 	// This prevents the race condition where Ctrl+C is pressed after API completes
@@ -178,9 +178,14 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 			}
 		}
 		Err(e) => {
+			// Stop animation on error before returning
+			animation_manager.stop_current().await;
 			return Err(e);
 		}
 	}
+
+	// Stop animation after ALL processing completes (including tool execution)
+	animation_manager.stop_current().await;
 
 	Ok(())
 }

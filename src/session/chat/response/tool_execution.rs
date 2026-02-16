@@ -259,18 +259,25 @@ async fn execute_tools_with_context(
 	// Extract just the tasks for parallel execution
 	let tasks: Vec<_> = tool_tasks.into_iter().map(|(_, task, _, _)| task).collect();
 
-	// Start animation (uses state already set by api_executor.rs)
-	// CRITICAL FIX: Don't recalculate animation parameters here to avoid flickering
-	// Animation state is set once at request start in api_executor.rs and remains stable
+	// Check if animation is already running (started by api_executor.rs)
+	// Only start new animation if none is running (e.g., standalone tool execution)
 	use crate::session::chat::get_animation_manager;
 	let animation_manager = get_animation_manager();
-	animation_manager.start_animation(&mode).await;
+	let animation_was_running = animation_manager.is_running();
+
+	if !animation_was_running {
+		// Start animation only if not already running
+		// This handles standalone tool execution (not part of main API flow)
+		animation_manager.start_animation(&mode).await;
+	}
 
 	// Use tokio::select! for immediate cancellation response
 	tokio::select! {
 		task_results = futures::future::join_all(tasks) => {
-			// Stop global animation
-			animation_manager.stop_current().await;
+			// Stop animation only if we started it (not if it was already running from api_executor)
+			if !animation_was_running {
+				animation_manager.stop_current().await;
+			}
 
 			// All tasks completed before cancellation
 			for ((tool_name, tool_id, tool_index), task_result) in task_info.into_iter().zip(task_results) {
@@ -503,8 +510,10 @@ async fn execute_tools_with_context(
 				std::future::pending::<()>().await;
 			}
 		} => {
-			// Stop global animation
-			animation_manager.stop_current().await;
+			// Stop animation only if we started it (not if it was already running from api_executor)
+			if !animation_was_running {
+				animation_manager.stop_current().await;
+			}
 
 			// Cancellation occurred - provide immediate feedback
 			use colored::*;
