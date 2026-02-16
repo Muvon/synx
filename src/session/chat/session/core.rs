@@ -972,7 +972,7 @@ impl ChatSession {
 		}
 
 		// Calculate context pressure
-		let current_tokens = estimate_full_context_tokens(&self.session.messages, None, None);
+		let current_tokens = estimate_full_context_tokens(&self.session.messages, None);
 		let max_tokens = config.max_session_tokens_threshold;
 
 		if max_tokens == 0 {
@@ -1097,7 +1097,7 @@ impl ChatSession {
 	/// Direct calls to estimate_full_context_tokens() should be replaced with this method.
 	///
 	/// # Arguments
-	/// * `config` - Configuration to get system prompt and fetch tools if not cached
+	/// * `config` - Configuration to fetch tools if not cached
 	///
 	/// # Returns
 	/// Total context tokens including messages + system prompt + tool definitions
@@ -1107,15 +1107,9 @@ impl ChatSession {
 			self.cached_tools = Some(crate::mcp::get_available_functions(config).await);
 		}
 
-		// Get system prompt for the role
-		let (_, _, _, _, system_prompt) = config.get_role_config(&self.role);
-
-		// Use the unified calculation with cached tools
-		estimate_full_context_tokens(
-			&self.session.messages,
-			Some(system_prompt),
-			self.cached_tools.as_deref(),
-		)
+		// System prompt is already included in session.messages (first message with role="system")
+		// No need to pass it separately - estimate_full_context_tokens counts all messages
+		estimate_full_context_tokens(&self.session.messages, self.cached_tools.as_deref())
 	}
 
 	/// Invalidate tool cache (call when MCP configuration changes)

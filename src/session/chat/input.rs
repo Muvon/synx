@@ -137,20 +137,14 @@ fn add_completion_menu_keybindings(keybindings: &mut Keybindings) {
 pub async fn calculate_current_context_tokens(
 	messages: &[crate::session::Message],
 	config: &Config,
-	role: &str,
+	_role: &str,
 ) -> u64 {
-	// Get system prompt for the role
-	let (_, _, _, _, system_prompt) = config.get_role_config(role);
-
 	// Get available tools
 	let tools = get_available_functions(config).await;
 
 	// Calculate actual context tokens
-	estimate_full_context_tokens(messages, Some(system_prompt), Some(&tools)) as u64
+	estimate_full_context_tokens(messages, Some(&tools)) as u64
 }
-
-// Read user input with support for multiline input, command completion, and persistent history
-// show_status_line controls whether to display the context/cost status line (only on first interaction)
 pub fn read_user_input(
 	estimated_cost: f64,
 	octomind_config: &Config,

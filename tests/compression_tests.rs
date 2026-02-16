@@ -377,7 +377,7 @@ mod adaptive_compression_tests {
 		assert_eq!(session.info.current_total_tokens, 500);
 
 		// But the ACTUAL full context should be much larger
-		let full_context_tokens = estimate_full_context_tokens(&session.messages, None, None);
+		let full_context_tokens = estimate_full_context_tokens(&session.messages, None);
 
 		// Full context should be significantly larger than cache counter
 		assert!(
@@ -414,7 +414,7 @@ mod adaptive_compression_tests {
 		let session = create_test_session(50); // Should generate > 1000 tokens
 
 		// Calculate what the function should see
-		let full_context = estimate_full_context_tokens(&session.messages, None, None) as usize;
+		let full_context = estimate_full_context_tokens(&session.messages, None) as usize;
 		let cache_counter = session.info.current_total_tokens as usize;
 
 		// Verify our test setup: full context > threshold, cache counter < threshold
@@ -498,8 +498,8 @@ mod adaptive_compression_tests {
 		// Verify that estimate_full_context_tokens is consistent
 		let session = create_test_session(10);
 
-		let tokens1 = estimate_full_context_tokens(&session.messages, None, None);
-		let tokens2 = estimate_full_context_tokens(&session.messages, None, None);
+		let tokens1 = estimate_full_context_tokens(&session.messages, None);
+		let tokens2 = estimate_full_context_tokens(&session.messages, None);
 
 		assert_eq!(tokens1, tokens2, "Token estimation should be deterministic");
 
@@ -512,13 +512,13 @@ mod adaptive_compression_tests {
 		// Verify that cache counter behavior doesn't affect compression logic
 		let mut session = create_test_session(20);
 
-		let full_context_before = estimate_full_context_tokens(&session.messages, None, None);
+		let full_context_before = estimate_full_context_tokens(&session.messages, None);
 
 		// Simulate cache checkpoint (resets counter to 0)
 		session.info.current_total_tokens = 0;
 		session.info.current_non_cached_tokens = 0;
 
-		let full_context_after = estimate_full_context_tokens(&session.messages, None, None);
+		let full_context_after = estimate_full_context_tokens(&session.messages, None);
 
 		// Full context should be unchanged by cache counter reset
 		assert_eq!(

@@ -1512,25 +1512,17 @@ pub async fn chat_completion_with_validation(
 	let max_input_tokens = provider.get_max_input_tokens(&actual_model);
 
 	// Calculate EXACTLY what we're about to send to the API using enhanced token counting
-	let total_input_tokens = if let Some(ref session) = params.chat_session {
-		// Get system prompt for the role from ChatSession
-		let (_, _, _, _, system_prompt) = params.config.get_role_config(&session.role);
-
-		// Get tool definitions
-		let tools = crate::mcp::get_available_functions(params.config).await;
-
+	let total_input_tokens = if params.chat_session.is_some() {
 		// Use enhanced token counting that includes system prompt + tools
+		let tools = crate::mcp::get_available_functions(params.config).await;
 		estimate_full_context_tokens(
 			params.messages,
-			Some(system_prompt),
 			if tools.is_empty() { None } else { Some(&tools) },
 		)
 	} else {
 		// Fallback for cases without chat session - use basic counting
 		estimate_session_tokens(params.messages)
 	};
-
-	// Check if our total input exceeds what the provider can handle
 	if total_input_tokens > max_input_tokens {
 		crate::log_error!(
 			"⚠️  Input too large for {} {} ({} tokens, max {} tokens)",

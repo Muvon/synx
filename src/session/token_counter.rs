@@ -108,18 +108,10 @@ pub fn estimate_session_tokens(messages: &[crate::session::Message]) -> usize {
 // This provides accurate estimates that match what's actually sent to API providers
 pub fn estimate_full_context_tokens(
 	messages: &[crate::session::Message],
-	system_prompt: Option<&str>,
 	tools: Option<&[crate::mcp::McpFunction]>,
 ) -> usize {
-	// Start with session tokens
+	// Start with session tokens (includes all messages including system message)
 	let mut total = estimate_session_tokens(messages);
-
-	// Add system prompt tokens if present
-	if let Some(prompt) = system_prompt {
-		total += estimate_tokens(prompt);
-		// Add API formatting overhead for system message
-		total += 10;
-	}
 
 	// Add tool definition tokens if present
 	if let Some(tool_list) = tools {
@@ -215,8 +207,10 @@ pub async fn validate_session_token_threshold(
 	let minimum_tokens = calculate_minimum_session_tokens(config, role, current_dir).await?;
 	let threshold = config.max_session_tokens_threshold;
 
-	// Get detailed breakdown for error message
+	// Get system prompt for the role
 	let (_, _, _, _, system_prompt) = config.get_role_config(role);
+
+	// Get detailed breakdown for error message
 	let system_tokens = estimate_tokens(system_prompt);
 
 	// Calculate tool tokens

@@ -59,13 +59,9 @@ pub async fn perform_context_reduction(
 	let max_threshold = config.max_session_tokens_threshold;
 
 	// Calculate actual current context tokens for percentage display
-	let (_, _, _, _, system_prompt) = config.get_role_config(role);
 	let tools = get_available_functions(config).await;
-	let current_context_tokens = estimate_full_context_tokens(
-		&chat_session.session.messages,
-		Some(system_prompt),
-		Some(&tools),
-	) as u64;
+	let current_context_tokens =
+		estimate_full_context_tokens(&chat_session.session.messages, Some(&tools)) as u64;
 
 	animation_manager
 		.start_with_params(current_cost, current_context_tokens, max_threshold)
