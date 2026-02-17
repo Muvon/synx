@@ -139,12 +139,16 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			let animation_manager = get_animation_manager();
 			animation_manager.stop_current().await;
 
-			// CRITICAL FIX: Display cost information before cleanup
-			// This ensures users see the cost spent before cancellation
-			// Skip in JSONL mode
-			if current_config.runtime_output_mode.as_deref() != Some("jsonl") {
-				CostTracker::display_cost_line(&chat_session);
-			}
+			// CRITICAL FIX: Use suspend to prevent ghost lines
+			// This ensures spinner is properly hidden before cost display
+			animation_manager.with_suspended_spinner(|| {
+				// Display cost information before cleanup
+				// This ensures users see the cost spent before cancellation
+				// Skip in JSONL mode
+				if current_config.runtime_output_mode.as_deref() != Some("jsonl") {
+					CostTracker::display_cost_line(&chat_session);
+				}
+			});
 
 			let current_state = processing_state.lock().unwrap().clone();
 			let operation = current_operation.lock().unwrap().clone();

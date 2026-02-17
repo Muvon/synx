@@ -99,6 +99,8 @@ pub struct AnimationManager {
 	cancel_rx: Arc<std::sync::Mutex<Option<watch::Receiver<bool>>>>,
 	/// Suspended flag - prevents animation from starting during user prompts
 	suspended: Arc<AtomicBool>,
+	/// Shared spinner reference for suspend/resume operations
+	spinner: Arc<std::sync::Mutex<Option<indicatif::ProgressBar>>>,
 }
 
 impl AnimationManager {
@@ -110,6 +112,7 @@ impl AnimationManager {
 			state: AnimationState::new(),
 			cancel_rx: Arc::new(std::sync::Mutex::new(None)),
 			suspended: Arc::new(AtomicBool::new(false)),
+			spinner: Arc::new(std::sync::Mutex::new(None)),
 		}
 	}
 
@@ -146,6 +149,25 @@ impl AnimationManager {
 	pub fn is_suspended(&self) -> bool {
 		self.suspended.load(Ordering::SeqCst)
 	}
+
+	/// Execute a function while temporarily suspending the spinner
+	/// This prevents output from interfering with the animation
+	/// If no spinner is active, just executes the function normally
+	pub fn with_suspended_spinner<F, R>(&self, f: F) -> R
+	where
+		F: FnOnce() -> R,
+	{
+		let spinner_guard = self.spinner.lock().unwrap();
+		if let Some(ref spinner) = *spinner_guard {
+			// Spinner is active - use indicatif's suspend to hide it temporarily
+			spinner.suspend(f)
+		} else {
+			// No spinner active - just execute normally
+			drop(spinner_guard);
+			f()
+		}
+	}
+
 	pub fn clear_cancel_receiver(&self) {
 		*self.cancel_rx.lock().unwrap() = None;
 	}
@@ -255,6 +277,7 @@ impl AnimationManager {
 		let current_task = self.current_task.clone();
 		let state = self.state.clone();
 		let cancel_rx = self.cancel_rx.lock().unwrap().clone();
+		let spinner_ref = self.spinner.clone();
 
 		let task = tokio::spawn(async move {
 			// Animation loop with truly dynamic cost/context updates
@@ -309,6 +332,9 @@ impl AnimationManager {
 					);
 					s.set_message(base_message.clone());
 					s.enable_steady_tick(Duration::from_millis(50));
+
+					// Store spinner reference for suspend operations
+					*spinner_ref.lock().unwrap() = Some(s.clone());
 					spinner = Some(s);
 				}
 
@@ -371,6 +397,9 @@ impl AnimationManager {
 			}
 
 			// Clean up spinner when done
+			// Clear shared spinner reference first
+			*spinner_ref.lock().unwrap() = None;
+
 			if let Some(s) = spinner {
 				// CRITICAL: Disable steady tick first to stop background drawing thread
 				// This prevents race condition where tick thread draws after finish_and_clear
