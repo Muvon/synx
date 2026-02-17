@@ -722,7 +722,7 @@ builtin = true
 
 [layers.mcp]
 server_refs = ["developer", "filesystem", "web"]
-allowed_tools = ["search_code", "view_signatures", "list_files"]
+allowed_tools = ["list_files"]
 
 [[layers]]
 name = "reducer"
@@ -1117,11 +1117,10 @@ Octomind provides commands for managing session context:
 **Purpose**: Complete and finalize a development task with full preservation of context for future work.
 
 **What it does**:
-- **Memorizes** important information for future reference using the `memorize` tool
-- **Summarizes** the entire conversation preserving all technical details, decisions, and context
-- **Auto-commits** changes using octocode (if available) - similar to `git add` for task finalization
-- **Preserves** all files modified, commands used, and task completion status
-- **Resets** layer processing for the next task while maintaining full context
+- **Reduces context** by summarizing the conversation to preserve essential information
+- **Clears plan data** from the current task
+- **Re-adds initial messages** (welcome message and custom instructions file)
+- **Resets layer processing** for the next task while maintaining full context
 - Uses the **current model** (not a cheaper reducer layer)
 
 **When to use**:

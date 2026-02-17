@@ -34,12 +34,6 @@ Octomind provides four built-in MCP servers with comprehensive development capab
 - `list_files(directory="...", pattern="...", content="...", ...)` - Directory listing with filtering and content search
 - `batch_edit(path="...", operations=[...])` - Multiple file operations atomically
 - `extract_lines(from_path="...", from_range=[start, end], append_path="...", append_line=N)` - Extract and move code blocks
-- `semantic_search(query="...", ...)` - Semantic code search using descriptive queries
-- `view_signatures(files=[...])` - Extract function signatures and class definitions
-- `graphrag(operation="...", ...)` - Advanced relationship-aware code analysis
-- `memorize(title="...", content="...", ...)` - Store important information for future reference
-- `remember(query="...", limit=5, ...)` - Search and retrieve stored memories
-- `forget(confirm=true, query="...", ...)` - Permanently remove specific memories
 
 **Web Server** (`src/mcp/web/`):
 - `web_search(query="...", count=20, ...)` - Search the web using Brave Search API
@@ -103,7 +97,7 @@ The `plan` tool enables interactive, step-by-step task management inside Octomin
 - Visual progress feedback within session
 - Clean error handling and robust MCP protocol support
 
-See `src/mcp/dev/plan/` for code, and test integration in `src/session/chat/session/runner.rs`.
+See `src/mcp/dev/plan/` for code, and test integration in `src/session/chat/session/main_loop.rs`.
 - Single tool: clean header, no index
 - Multiple tools: indexed headers
 
@@ -163,110 +157,12 @@ Execute shell commands with output capture, foreground/background execution:
 - `update_all` (boolean, default: false): Apply rewrites to all matches without confirmation
 - `update_all` (boolean, default: false): Apply rewrites to all matches without confirmation
 
-#### semantic_search — Semantic Code Search
-
-Search codebase using semantic search to find relevant code snippets by describing what the code does, not exact symbol names:
-
-```json
-// Find authentication patterns
-{"query": ["user authentication flow", "login validation", "jwt token handling"]}
-
-// Find database patterns
-{"query": ["database connection pooling", "query result caching"], "max_results": 5}
-```
-
-**Parameters:**
-- `query` (string or array, required): Descriptive search terms about functionality (not symbol names)
-- `max_results` (integer, default: 3): Maximum number of results to return
-- `mode` (string, default: "all"): Scope of search - "code", "text", "docs", or "all"
-- `language` (string, optional): Filter by programming language
-- `detail_level` (string, default: "partial"): "signatures", "partial", or "full"
-- `threshold` (number, 0.0-1.0): Similarity threshold for results
-
-**Best Practices:**
-- Use descriptive phrases about functionality: "user authentication" not "login_user"
-- Multiple related terms improve results: ["database patterns", "query optimization"]
-- Use "signatures" mode for quick overview, "full" for complete implementations
-
-#### view_signatures — Extract Code Structure
-
-Extract and view function signatures, class definitions, and other meaningful code structures:
-
-```json
-{"files": ["src/main.rs", "src/lib.rs"]}
-{"files": ["**/*.py"], "max_tokens": 2000}
-```
-
-**Parameters:**
-- `files` (array, required): File paths or glob patterns to analyze
-- `max_tokens` (integer, default: 2000): Maximum tokens in output before truncation
-
-**Supported Languages:**
-Rust, JavaScript, TypeScript, Python, Go, C++, PHP, Ruby, Bash, JSON, CSS, Svelte, Markdown
-
-#### graphrag — Relationship-Aware Code Analysis
-
-Advanced GraphRAG operations for understanding code relationships and architecture:
-
-```json
-{"operation": "search", "query": "How does user authentication flow through the system?"}
-{"operation": "get-node", "node_id": "src/main.rs"}
-{"operation": "get-relationships", "node_id": "src/auth/mod.rs"}
-{"operation": "find-path", "source_id": "src/main.rs", "target_id": "src/db/mod.rs"}
-{"operation": "overview", "max_depth": 3}
-```
-
-**Parameters:**
-- `operation` (string, required): "search", "get-node", "get-relationships", "find-path", or "overview"
-- `query` (string, required for search): Semantic query about code functionality
-- `node_id` (string, required for get-node/get-relationships): File path or file/symbol path
-- `source_id` (string, required for find-path): Starting node identifier
-- `target_id` (string, required for find-path): Target node identifier
-- `max_depth` (integer, default: 3): Maximum path depth for find-path/overview
-- `max_tokens` (integer, default: 2000): Maximum tokens allowed in output
-
-**Use Cases:**
-- `search`: Find files by describing what they do
-- `get-node`: Get detailed information about a specific file or symbol
-- `get-relationships`: See what components depend on or are related to a file
-- `find-path`: Trace connection paths between two components
-- `overview`: Get graph statistics and structure
-
-**Pattern Syntax Examples:**
-
-*JavaScript/TypeScript:*
-- Function calls: `console.log($$$)`, `$OBJ.$METHOD($$$)`
-- Functions: `function $NAME($ARGS) { $$$ }`
-- Arrow functions: `($ARGS) => $BODY`
-- Variables: `const $VAR = $VALUE`
-
-*PHP:*
-- Function calls: `$NAME($$$)`
-- Method calls: `$OBJ->$METHOD($$$)`
-- Classes: `class $NAME { $$$ }`
-
-*Rust:*
-- Macros: `println!($$$)`
-- Functions: `fn $NAME($ARGS) { $$$ }`
-- Structs: `struct $NAME { $$$ }`
-
-#### Memory Tools (type: "builtin")
-- **memorize**: Store important information, insights, or context for future reference
-- **remember**: Search and retrieve stored memories using semantic search
-- **forget**: Permanently remove specific memories
 
 #### Filesystem Tools (type: "builtin")
 - **text_editor**: Read, write, edit files with multiple operations (view, create, str_replace, insert, line_replace, undo_edit, view_many, batch_edit)
 - **extract_lines**: Extract lines from source file and append to target file without modifying source (perfect for refactoring)
 - **list_files**: Browse directory structures with pattern matching and content search
-- **semantic_search**: Search codebase using semantic search to find relevant code snippets by describing functionality
-- **view_signatures**: Extract and view function signatures, class definitions, and other meaningful code structures
-- **graphrag**: Advanced relationship-aware GraphRAG operations for code analysis (search, get-node, get-relationships, find-path, overview)
-
-#### Memory Tools (type: "builtin")
-- **memorize**: Store important information, insights, or context for future reference with title, content, importance, and tags
-- **remember**: Search and retrieve stored memories using semantic search with limit and memory_type filters
-- **forget**: Permanently remove specific memories by ID or query matching
+- **batch_edit**: Multiple file operations atomically
 
 #### Web Tools (type: "builtin")
 - **web_search**: Search the web using Brave Search API with configurable parameters
@@ -429,7 +325,7 @@ output_mode = "none"  # Return only the gathered context (cleanest for tool use)
 
 [agents.mcp]
 server_refs = ["filesystem", "octocode"]
-allowed_tools = ["text_editor", "list_files", "semantic_search", "view_signatures"]
+allowed_tools = ["text_editor", "list_files"]
 
 [[agents]]
 name = "code_reviewer"
@@ -806,7 +702,7 @@ builtin = true
 
 [layers.mcp]
 server_refs = ["developer", "filesystem", "octocode"]
-allowed_tools = ["search_code", "view_signatures", "list_files"]
+allowed_tools = ["list_files"]
 
 [[layers]]
 name = "reducer"

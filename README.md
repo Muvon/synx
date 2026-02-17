@@ -69,9 +69,8 @@ octomind session
 
 - **Shell**: Execute commands
 - **Editor**: Edit files, batch changes
-- **Search**: ast_grep, semantic search
+- **Search**: ast_grep
 - **Web**: Search, read HTML
-- **Memory**: memorize, remember, memory_graph
 
 ---
 

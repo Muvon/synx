@@ -39,10 +39,10 @@ cargo build                           # Build when needed
 | Roles | `src/config/roles.rs` + template `[[roles]]` |
 | MCP servers | `src/config/mcp.rs` + template `[[mcp.servers]]` |
 | Layers | `src/session/layers/` + template `[[layers]]` |
-| Session behavior | `src/session/chat/session/runner.rs`, `src/session/chat/session/commands/` |
+| Session behavior | `src/session/chat/session/main_loop.rs`, `src/session/chat/session/core.rs`, `src/session/chat/session/commands/` |
 | Continuation | `src/session/chat/continuation/` (modular: detection, injection, processing, file_context, constants) |
 | MCP tools | `src/mcp/mod.rs` (routing), `src/mcp/*/functions.rs` (definitions), `src/mcp/*/core.rs` (implementations) |
-| Providers | `src/providers/mod.rs` (octolib bridge) |
+| Providers | `src/providers.rs` (octolib bridge) |
 | Workflows | `src/session/workflows/`, `doc/10-workflows.md` |
 | File utilities | `src/utils/file_parser.rs`, `src/utils/file_renderer.rs` |
 

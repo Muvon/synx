@@ -533,7 +533,7 @@ output_mode = "append"  # Adds research findings to session
 
 [layers.mcp]
 server_refs = ["filesystem", "octocode"]
-allowed_tools = ["list_files", "semantic_search", "view_signatures"]
+allowed_tools = ["list_files"]
 ```
 
 ### Custom Layer Configuration
@@ -583,7 +583,7 @@ output_mode = "none"  # Return only the gathered context (cleanest for tool use)
 
 [agents.mcp]
 server_refs = ["filesystem", "octocode"]
-allowed_tools = ["text_editor", "list_files", "semantic_search", "view_signatures"]
+allowed_tools = ["text_editor", "list_files"]
 
 [[agents]]
 name = "code_reviewer"
@@ -627,9 +627,9 @@ allowed_tools = []
 
 ## MCP Configuration
 
-### New Server Registry Configuration
+### Server Registry Configuration
 
-The MCP system has been significantly improved with a new server registry approach that eliminates configuration duplication. Servers are now defined once in a central registry and referenced by roles and commands:
+The MCP system uses a server registry approach that eliminates configuration duplication. Servers are defined once in a central registry and referenced by roles and commands:
 
 ```toml
 # MCP Server Configuration - Define servers in main MCP section
@@ -696,7 +696,7 @@ server_refs = ["developer", "filesystem"]  # Default servers
 
 ### Migration from Legacy Configuration
 
-The MCP configuration has evolved through several iterations. The new server registry approach is the recommended method:
+The MCP configuration supports multiple formats. The server registry approach is the recommended method:
 
 **Oldest format (no longer supported):**
 ```toml
@@ -823,14 +823,7 @@ code_model = "jina-embeddings-v2-base-code"
 text_model = "jina-embeddings-v3"
 ```
 
-## GraphRAG Configuration
 
-```toml
-[graphrag]
-enabled = true
-description_model = "openrouter:openai/gpt-4.1-nano"
-relationship_model = "openrouter:openai/gpt-4.1-nano"
-```
 
 ## Token Management
 

@@ -81,7 +81,7 @@ octomind session --model "openai:o1-preview"
 ```
 
 #### Responses API Behavior
-OpenAI direct uses the Responses API. Octomind tracks the provider response_id automatically and, after the first request, sends only new user/system messages or tool outputs instead of the full history.
+OpenAI direct uses the Responses API. Octomind tracks the provider response_id automatically and, after the first request, sends only incremental user/system messages or tool outputs instead of the full history.
 
 #### Vision Support
 ```bash
@@ -620,7 +620,7 @@ model = "anthropic:claude-sonnet-4"
 # Validate current config
 octomind config --validate
 
-# Update to new format
+# Update to preferred format
 octomind config --openrouter-model "openrouter:anthropic/claude-sonnet-4"
 ```
 

@@ -337,7 +337,7 @@ Success Criteria: <verification>"""
 
 [layers.task_decomposer.mcp]
 server_refs = ["filesystem"]
-allowed_tools = ["semantic_search", "view_signatures"]
+allowed_tools = ["list_files"]
 ```
 
 ## Usage

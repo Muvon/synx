@@ -18,12 +18,6 @@ Octomind provides **four** built-in MCP servers with comprehensive development c
 - `list_files(directory="...", pattern="...", content="...", ...)` - Directory listing with filtering and content search
 - `batch_edit(path="...", operations=[...])` - Multiple file operations atomically
 - `extract_lines(from_path="...", from_range=[start, end], append_path="...", append_line=N)` - Extract and move code blocks
-- `semantic_search(query="...", ...)` - Semantic code search by describing functionality
-- `view_signatures(files=[...])` - Extract function signatures and class definitions
-- `graphrag(operation="...", ...)` - Relationship-aware code analysis
-- `memorize(title="...", content="...", ...)` - Store important information for future reference
-- `remember(query="...", limit=5, ...)` - Search and retrieve stored memories
-- `forget(confirm=true, query="...", ...)` - Permanently remove specific memories
 
 **Web Server** (`src/mcp/web/`):
 - `web_search(query="...", count=20, ...)` - Search the web using Brave Search API

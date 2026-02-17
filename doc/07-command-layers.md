@@ -286,7 +286,7 @@ Command 'estimate' not found in configuration
 
 ### Tool Execution Errors
 ```
-Tool execution failed: Unknown tool 'list_files'. Available tools: search_code, memorize, remember, forget
+Tool execution failed: Unknown tool 'list_files'. Available tools: text_editor, batch_edit, list_files, extract_lines
 ```
 - **Tool routing issue**: The tool is being sent to the wrong server
 - **Solution**: Check your MCP server configuration and ensure proper server references
