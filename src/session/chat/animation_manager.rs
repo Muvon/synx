@@ -427,7 +427,9 @@ impl Default for AnimationManager {
 }
 
 /// Global animation manager instance
-static GLOBAL_ANIMATION_MANAGER: std::sync::OnceLock<AnimationManager> = std::sync::OnceLock::new();
+/// Made public so terminal_output module can access it for spinner suspension
+pub static GLOBAL_ANIMATION_MANAGER: std::sync::OnceLock<AnimationManager> =
+	std::sync::OnceLock::new();
 
 /// Get global animation manager instance
 pub fn get_animation_manager() -> &'static AnimationManager {

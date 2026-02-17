@@ -15,7 +15,7 @@
 // Chat session module
 // Chat session module
 mod animation;
-mod animation_manager;
+pub mod animation_manager;
 pub mod assistant_output;
 mod command_executor;
 mod commands;

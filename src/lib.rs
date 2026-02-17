@@ -14,6 +14,77 @@
 
 #![recursion_limit = "1024"]
 
+// ============================================================================
+// SPINNER-AWARE PRINT MACROS
+// ============================================================================
+// These macros shadow std::println!, std::print!, std::eprintln!, std::eprint!
+// at the crate root level. They automatically suspend the animation spinner
+// before printing to prevent output interference.
+//
+// IMPORTANT: These must be defined BEFORE any module declarations to ensure
+// they shadow std macros in textual scope throughout the entire crate.
+//
+// NOTE: We use `format!` outside the closure to evaluate arguments in the
+// caller's context, allowing `?` operator to work correctly.
+
+/// Spinner-aware println! - suspends animation before printing
+#[macro_export]
+macro_rules! println {
+	() => {
+		$crate::utils::terminal_output::with_suspended_spinner(|| {
+			std::println!()
+		})
+	};
+	($($arg:tt)*) => {{
+		let s = ::std::format!($($arg)*);
+		$crate::utils::terminal_output::with_suspended_spinner(|| {
+			std::println!("{}", s)
+		})
+	}};
+}
+
+/// Spinner-aware print! - suspends animation before printing
+#[macro_export]
+macro_rules! print {
+	($($arg:tt)*) => {{
+		let s = ::std::format!($($arg)*);
+		$crate::utils::terminal_output::with_suspended_spinner(|| {
+			std::print!("{}", s)
+		})
+	}};
+}
+
+/// Spinner-aware eprintln! - suspends animation before printing
+#[macro_export]
+macro_rules! eprintln {
+	() => {
+		$crate::utils::terminal_output::with_suspended_spinner(|| {
+			std::eprintln!()
+		})
+	};
+	($($arg:tt)*) => {{
+		let s = ::std::format!($($arg)*);
+		$crate::utils::terminal_output::with_suspended_spinner(|| {
+			std::eprintln!("{}", s)
+		})
+	}};
+}
+
+/// Spinner-aware eprint! - suspends animation before printing
+#[macro_export]
+macro_rules! eprint {
+	($($arg:tt)*) => {{
+		let s = ::std::format!($($arg)*);
+		$crate::utils::terminal_output::with_suspended_spinner(|| {
+			std::eprint!("{}", s)
+		})
+	}};
+}
+
+// ============================================================================
+// MODULE DECLARATIONS
+// ============================================================================
+
 // Main lib.rs file that exports our modules
 pub mod config;
 pub mod directories;

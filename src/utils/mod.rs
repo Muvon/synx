@@ -17,4 +17,5 @@
 pub mod file_parser;
 pub mod file_renderer;
 pub mod glob;
+pub mod terminal_output;
 pub mod truncation;
