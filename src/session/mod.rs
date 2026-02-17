@@ -838,6 +838,7 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 						restoration_point_found = true;
 						messages.clear();
 						restoration_messages.clear();
+						pending_tool_calls.clear(); // Clear stale tool calls from before restoration
 					}
 					"COMPRESSION_POINT" => {
 						// Found a compression point - messages before this were compressed
@@ -847,6 +848,7 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 						} else {
 							messages.clear();
 						}
+						pending_tool_calls.clear(); // Clear stale tool calls from before compression
 
 						// Log compression restoration for debugging
 						if let (Some(comp_type), Some(msgs_removed)) = (
@@ -870,17 +872,18 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 							if restoration_point_found {
 								restoration_messages.truncate(target_count);
 								crate::log_debug!(
-								"Session restoration: Found TRUNCATION_POINT - truncated restoration messages to {}",
-								target_count
-							);
+									"Session restoration: Found TRUNCATION_POINT - truncated restoration messages to {}",
+									target_count
+								);
 							} else {
 								messages.truncate(target_count);
 								crate::log_debug!(
-								"Session restoration: Found TRUNCATION_POINT - truncated messages to {}",
-								target_count
-							);
+									"Session restoration: Found TRUNCATION_POINT - truncated messages to {}",
+									target_count
+								);
 							}
 						}
+						pending_tool_calls.clear(); // Clear stale tool calls from before truncation
 					}
 					"COMMAND" => {
 						// Commands are processed separately in extract_runtime_state_from_log
@@ -894,6 +897,7 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 						} else {
 							messages.clear();
 						}
+						pending_tool_calls.clear(); // Clear stale tool calls from before replace
 
 						// Log the replace operation for debugging
 						if let Some(command) = json_value.get("command").and_then(|c| c.as_str()) {
