@@ -97,6 +97,8 @@ pub struct AnimationManager {
 	state: AnimationState,
 	/// Optional cancellation receiver from session (for instant Ctrl+C response)
 	cancel_rx: Arc<std::sync::Mutex<Option<watch::Receiver<bool>>>>,
+	/// Suspended flag - prevents animation from starting during user prompts
+	suspended: Arc<AtomicBool>,
 }
 
 impl AnimationManager {
@@ -107,6 +109,7 @@ impl AnimationManager {
 			cancel_flag: Arc::new(AtomicBool::new(false)),
 			state: AnimationState::new(),
 			cancel_rx: Arc::new(std::sync::Mutex::new(None)),
+			suspended: Arc::new(AtomicBool::new(false)),
 		}
 	}
 
@@ -122,6 +125,27 @@ impl AnimationManager {
 	}
 
 	/// Clear cancellation receiver (call when animation stops)
+	/// Suspend animation - stops current animation and prevents new ones from starting
+	/// Use this before displaying user prompts to prevent animation from covering the prompt
+	pub async fn suspend(&self) {
+		// Set suspended flag FIRST to prevent any race conditions
+		self.suspended.store(true, Ordering::SeqCst);
+		// Then stop current animation
+		self.stop_current().await;
+		log_debug!("Animation suspended - user prompt imminent");
+	}
+
+	/// Resume animation - allows animation to start again
+	/// Call this after user input is complete
+	pub fn resume(&self) {
+		self.suspended.store(false, Ordering::SeqCst);
+		log_debug!("Animation resumed");
+	}
+
+	/// Check if animation is suspended
+	pub fn is_suspended(&self) -> bool {
+		self.suspended.load(Ordering::SeqCst)
+	}
 	pub fn clear_cancel_receiver(&self) {
 		*self.cancel_rx.lock().unwrap() = None;
 	}
@@ -157,7 +181,22 @@ impl AnimationManager {
 	///
 	/// **Pro-level feature**: Dynamically reads live cost/context from shared state
 	/// during animation loop for real-time updates during long operations.
+	/// Start new animation (stops any existing animation first)
+	///
+	/// This ensures only one animation runs at a time, preventing:
+	/// - Overlapping animations
+	/// - Animation stuck bugs
+	/// - Stale cost/context values
+	///
+	/// **Pro-level feature**: Dynamically reads live cost/context from shared state
+	/// during animation loop for real-time updates during long operations.
 	pub async fn start_animation(&self, mode: &crate::session::output::OutputMode) {
+		// Check if suspended - don't start animation during user prompts
+		if self.is_suspended() {
+			log_debug!("Animation start requested but manager is suspended (user prompt active)");
+			return;
+		}
+
 		// Stop any existing animation first
 		self.stop_current().await;
 
@@ -168,8 +207,6 @@ impl AnimationManager {
 
 		self.start_internal().await;
 	}
-
-	/// Start animation with explicit cost/context (stops any existing animation first)
 	///
 	/// Use this for standalone animations where you have specific cost/context values.
 	/// Automatically detects interactive vs non-interactive mode.
@@ -342,10 +379,6 @@ impl AnimationManager {
 				tokio::task::yield_now().await;
 				s.finish_and_clear();
 			}
-
-			// Ensure terminal is flushed
-			use std::io::Write;
-			let _ = std::io::stdout().flush();
 		});
 
 		// Store task reference

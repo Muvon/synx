@@ -53,9 +53,16 @@ pub async fn process_tool_results(
 	// Animation state is set once at request start in api_executor.rs and remains stable
 	use crate::session::chat::get_animation_manager;
 	let animation_manager = get_animation_manager();
-	animation_manager
-		.start_animation(&crate::session::output::OutputMode::Interactive)
-		.await;
+
+	// DEFENSE: Don't start animation if suspended (e.g., during user prompt)
+	// This prevents animation from covering prompts in race conditions
+	if !animation_manager.is_suspended() {
+		animation_manager
+			.start_animation(&crate::session::output::OutputMode::Interactive)
+			.await;
+	} else {
+		log_debug!("Animation suspended during tool result processing - not restarting");
+	}
 
 	// 🔍 PERFORMANCE DEBUG: Track where time is spent during tool result processing
 	let processing_start = std::time::Instant::now();

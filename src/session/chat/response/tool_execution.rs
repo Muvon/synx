@@ -605,12 +605,12 @@ async fn handle_large_tool_results(
 		return Ok(processed_results);
 	}
 
-	// CRITICAL: Stop animation before prompting user
-	// Animation may still be running from api_executor.rs if tool execution didn't stop it
-	// We must stop it here to prevent animation from covering the prompt
+	// CRITICAL: Suspend animation before prompting user
+	// This prevents animation from covering the prompt and from being restarted
+	// by other code paths while waiting for user input
 	use crate::session::chat::get_animation_manager;
 	let animation_manager = get_animation_manager();
-	animation_manager.stop_current().await;
+	animation_manager.suspend().await;
 
 	// Interactive mode - show batched warning
 	println!(
@@ -659,6 +659,9 @@ async fn handle_large_tool_results(
 	let mut input = String::new();
 	stdin().read_line(&mut input).unwrap_or_default();
 	let input = input.trim();
+
+	// Resume animation now that user input is complete
+	animation_manager.resume();
 
 	let mut processed_results = results;
 
