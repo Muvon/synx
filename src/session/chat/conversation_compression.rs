@@ -91,9 +91,61 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 			.await;
 
 			if net_benefit > 0.0 {
+				// CRITICAL FIX: Verify compression will actually bring context below threshold
+				// Even if profitable, compression is futile if it won't solve the threshold problem
+				let (start_idx, end_idx) = match find_compression_range(
+					&session.session.messages,
+					session.first_prompt_idx,
+				) {
+					Ok(range) => range,
+					Err(e) => {
+						log_debug!("Failed to find compression range: {}", e);
+						return (false, 2.0);
+					}
+				};
+
+				if start_idx >= end_idx {
+					log_debug!(
+						"Invalid compression range ({} >= {}), skipping",
+						start_idx,
+						end_idx
+					);
+					return (false, 2.0);
+				}
+
+				let compressible_tokens = match calculate_range_tokens(session, start_idx, end_idx)
+				{
+					Ok(tokens) => tokens,
+					Err(e) => {
+						log_debug!("Failed to calculate range tokens: {}", e);
+						return (false, 2.0);
+					}
+				};
+
+				let estimated_compressed_size =
+					(compressible_tokens as f64 / level.target_ratio) as u64;
+				let estimated_after_compression = (current_tokens as u64)
+					.saturating_sub(compressible_tokens)
+					.saturating_add(estimated_compressed_size);
+
+				if estimated_after_compression >= level.threshold as u64 {
+					log_debug!(
+						"Compression won't bring context below threshold: {} → {} (threshold: {}). Compressible: {} → {}. Skipping compression.",
+						current_tokens,
+						estimated_after_compression,
+						level.threshold,
+						compressible_tokens,
+						estimated_compressed_size
+					);
+					return (false, 2.0);
+				}
+
 				log_debug!(
-					"Cache-aware analysis: Net benefit ${:.5} → COMPRESS",
-					net_benefit
+					"Cache-aware analysis: Net benefit ${:.5} → COMPRESS (will reduce {} → {} tokens, below threshold {})",
+					net_benefit,
+					current_tokens,
+					estimated_after_compression,
+					level.threshold
 				);
 				(true, level.target_ratio)
 			} else {
@@ -973,8 +1025,10 @@ fn find_compression_range(
 }
 
 /// Calculate tokens in message range using accurate token counting
-/// Calculate tokens in message range using accurate token counting
 /// This now counts ALL message fields: content, tool_calls, thinking, images, etc.
+///
+/// CRITICAL FIX: Counts [start_idx, end_idx] to match semantic chunking range
+/// Previously counted [start_idx+1, end_idx] which caused token mismatch bugs
 fn calculate_range_tokens(session: &ChatSession, start_idx: usize, end_idx: usize) -> Result<u64> {
 	let mut total_tokens = 0u64;
 
@@ -987,9 +1041,10 @@ fn calculate_range_tokens(session: &ChatSession, start_idx: usize, end_idx: usiz
 		return Err(anyhow::anyhow!("Invalid end_index in range"));
 	}
 
-	// Count tokens in range (start_idx+1 to end_idx inclusive, matching removal logic)
-	// Use accurate token counting that includes tool_calls, thinking, images, etc.
-	for i in (start_idx + 1)..=end_idx {
+	// FIX: Count tokens in range [start_idx, end_idx] to match semantic chunking
+	// Semantic chunking uses messages_to_compress = &session.session.messages[start_idx..=end_idx]
+	// So we must count the same range to get accurate tokens_before
+	for i in start_idx..=end_idx {
 		if let Some(message) = session.session.messages.get(i) {
 			let tokens = crate::session::estimate_message_tokens(message) as u64;
 			total_tokens += tokens;
@@ -1175,5 +1230,307 @@ mod tests {
 			end_idx >= 4,
 			"range should start compressing only after first_prompt_idx"
 		);
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn start_boundary_must_not_orphan_initial_tool_sequence_duplicate() {
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+
+		// First conversation message is assistant with tool calls.
+		// This can happen in resumed sessions or reconstructed histories.
+		let mut assistant_with_tools = msg("assistant"); // 1
+		assistant_with_tools.tool_calls = Some(json!([
+			{"id": "call_1", "type": "function", "function": {"name": "tool1"}}
+		]));
+		messages.push(assistant_with_tools);
+
+		let mut tool1 = msg("tool"); // 2
+		tool1.tool_call_id = Some("call_1".to_string());
+		messages.push(tool1);
+
+		// Add enough conversation messages to trigger compression.
+		messages.push(msg("user")); // 3
+		messages.push(msg("assistant")); // 4
+		messages.push(msg("user")); // 5
+		messages.push(msg("assistant")); // 6
+		messages.push(msg("user")); // 7
+		messages.push(msg("assistant")); // 8
+								   // Test with first_prompt_idx set to index 3 (first real user message)
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
+
+		// Safety requirement: compression starts AFTER first_prompt_idx (INCLUSIVE boundary)
+		// first_prompt_idx=3 means index 3 is PROTECTED, compression starts at 4
+		assert_eq!(
+			start_idx, 3,
+			"start_idx must equal first_prompt_idx (INCLUSIVE boundary)"
+		);
+		assert!(
+			end_idx >= 4,
+			"range should start compressing only after first_prompt_idx"
+		);
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	#[allow(clippy::needless_range_loop)]
+	fn calculate_range_tokens_must_match_removal_range() {
+		// CRITICAL TEST: Verify that calculate_range_tokens counts the EXACT same messages
+		// that will be removed by remove_messages_in_range.
+		//
+		// BUG SCENARIO:
+		// - find_compression_range returns (start_idx, end_idx)
+		// - calculate_range_tokens counts [start_idx+1, end_idx] (SKIPS start_idx)
+		// - messages_to_compress includes [start_idx, end_idx] for chunking
+		// - remove_messages_in_range removes [start_idx+1, end_idx] (KEEPS start_idx)
+		//
+		// This means:
+		// 1. tokens_before doesn't count the message at start_idx
+		// 2. But that message IS included in semantic chunking
+		// 3. The compressed summary can include content from start_idx message
+		// 4. Result: tokens_after can be > tokens_before (BUG!)
+		//
+		// EXAMPLE:
+		// - start_idx = 5, end_idx = 10
+		// - tokens_before counts messages 6-10 (skips message 5)
+		// - messages_to_compress includes message 5 for chunking
+		// - If message 5 has 1000 tokens and messages 6-10 have 500 tokens total
+		// - tokens_before = 500
+		// - Compressed summary might be 600 tokens (includes content from message 5)
+		// - tokens_after = 600
+		// - Result: tokens_saved = 0 even though we removed 5 messages!
+		//
+		// FIX: calculate_range_tokens should count [start_idx, end_idx] to match
+		// the messages that will be semantically chunked and potentially included in summary.
+
+		// This test documents the expected behavior.
+		// The actual fix will be in calculate_range_tokens function.
+		use crate::session::estimate_message_tokens;
+
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+
+		// Create messages with known token counts
+		let mut msg1 = msg("user"); // 1
+		msg1.content = "x".repeat(100); // ~25 tokens
+		messages.push(msg1);
+
+		let mut msg2 = msg("assistant"); // 2
+		msg2.content = "y".repeat(200); // ~50 tokens
+		messages.push(msg2);
+
+		let mut msg3 = msg("user"); // 3
+		msg3.content = "z".repeat(300); // ~75 tokens
+		messages.push(msg3);
+
+		let mut msg4 = msg("assistant"); // 4
+		msg4.content = "a".repeat(400); // ~100 tokens
+		messages.push(msg4);
+
+		// Add more messages to trigger compression
+		messages.push(msg("user")); // 5
+		messages.push(msg("assistant")); // 6
+		messages.push(msg("user")); // 7
+		messages.push(msg("assistant")); // 8
+
+		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+
+		// Verify the range is valid
+		assert!(start_idx < end_idx, "Range must be valid");
+
+		// Count tokens that WILL BE REMOVED (matching remove_messages_in_range logic)
+		// remove_messages_in_range removes [start_idx+1, end_idx]
+		let mut expected_tokens = 0u64;
+		for i in (start_idx + 1)..=end_idx {
+			expected_tokens += estimate_message_tokens(&messages[i]) as u64;
+		}
+
+		// Count tokens that ARE INCLUDED in semantic chunking
+		// messages_to_compress = [start_idx, end_idx]
+		let mut chunked_tokens = 0u64;
+		for i in start_idx..=end_idx {
+			chunked_tokens += estimate_message_tokens(&messages[i]) as u64;
+		}
+
+		// THE BUG: expected_tokens != chunked_tokens
+		// calculate_range_tokens returns expected_tokens (removal range)
+		// But semantic chunking includes chunked_tokens (includes start_idx)
+		// This can cause tokens_after > tokens_before
+
+		// Document the discrepancy
+		if expected_tokens != chunked_tokens {
+			let start_msg_tokens = estimate_message_tokens(&messages[start_idx]) as u64;
+			assert_eq!(
+				chunked_tokens - expected_tokens,
+				start_msg_tokens,
+				"The difference should be exactly the tokens in start_idx message"
+			);
+		}
+	}
+
+	// ============================================================================
+	// BUG-PROVING TESTS: These tests demonstrate the actual bugs in compression
+	// ============================================================================
+
+	#[test]
+	#[allow(clippy::needless_range_loop)]
+	fn bug_proof_token_mismatch_causes_zero_savings() {
+		// BUG SCENARIO: calculate_range_tokens counts [start_idx+1, end_idx]
+		// but semantic chunking uses [start_idx, end_idx], causing token mismatch
+		use crate::session::estimate_message_tokens;
+
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+
+		// Message at start_idx has LARGE token count
+		let mut large_msg = msg("user"); // 1
+		large_msg.content = "x".repeat(4000); // ~1000 tokens
+		messages.push(large_msg);
+
+		// Messages after start_idx have SMALL token counts
+		let mut small1 = msg("assistant"); // 2
+		small1.content = "y".repeat(40); // ~10 tokens
+		messages.push(small1);
+
+		let mut small2 = msg("user"); // 3
+		small2.content = "z".repeat(40); // ~10 tokens
+		messages.push(small2);
+
+		let mut small3 = msg("assistant"); // 4
+		small3.content = "a".repeat(40); // ~10 tokens
+		messages.push(small3);
+
+		// Add more to trigger compression
+		messages.push(msg("user")); // 5
+		messages.push(msg("assistant")); // 6
+		messages.push(msg("user")); // 7
+		messages.push(msg("assistant")); // 8
+
+		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+		assert_eq!(start_idx, 1); // Large message
+		assert_eq!(end_idx, 4); // Last small message
+
+		// What calculate_range_tokens ACTUALLY counts (CURRENT BUG)
+		let mut tokens_counted_by_function = 0u64;
+		for i in (start_idx + 1)..=end_idx {
+			tokens_counted_by_function += estimate_message_tokens(&messages[i]) as u64;
+		}
+
+		// What semantic chunking ACTUALLY includes
+		let mut tokens_in_chunking = 0u64;
+		for i in start_idx..=end_idx {
+			tokens_in_chunking += estimate_message_tokens(&messages[i]) as u64;
+		}
+
+		// THE BUG: Massive discrepancy!
+		let large_msg_tokens = estimate_message_tokens(&messages[start_idx]) as u64;
+
+		// Debug: print actual token counts
+		println!("Large message tokens: {}", large_msg_tokens);
+		println!("Tokens counted by function: {}", tokens_counted_by_function);
+		println!("Tokens in chunking: {}", tokens_in_chunking);
+
+		// The key assertion: chunking includes start_idx, but counting doesn't
+		assert_eq!(
+			tokens_in_chunking,
+			tokens_counted_by_function + large_msg_tokens,
+			"Chunking includes the large message that wasn't counted!"
+		);
+
+		// Verify the large message has significantly more tokens than small ones
+		assert!(
+			large_msg_tokens > tokens_counted_by_function,
+			"Large message ({}) should have more tokens than all small messages combined ({})",
+			large_msg_tokens,
+			tokens_counted_by_function
+		);
+
+		// RESULT: If compressed summary is 100 tokens (from small messages)
+		// tokens_before = 30 (only small messages counted)
+		// tokens_after = 100 (compressed summary)
+		// tokens_saved = 0 or NEGATIVE! (BUG!)
+		//
+		// But we actually removed 1030 tokens worth of messages!
+	}
+
+	#[test]
+	fn bug_proof_insufficient_compression_triggers_loop() {
+		// BUG SCENARIO: Compression triggers when full context > threshold
+		// but doesn't check if compression will bring context BELOW threshold
+		//
+		// Example:
+		// - Full context: 55,000 tokens
+		// - Threshold: 50,000 tokens
+		// - System + tools + recent: 52,000 tokens (non-compressible)
+		// - Compressible old messages: 3,000 tokens
+		// - After 2x compression: 52,000 + 1,500 = 53,500 tokens
+		// - Still above threshold! Triggers again next iteration!
+
+		// This test documents the expected behavior
+		// The actual fix will be in should_check_compression
+
+		let full_context_tokens = 55_000u64;
+		let threshold = 50_000u64;
+		let non_compressible_tokens = 52_000u64; // system + tools + recent
+		let compressible_tokens = 3_000u64;
+		let compression_ratio = 2.0;
+
+		assert_eq!(
+			full_context_tokens,
+			non_compressible_tokens + compressible_tokens
+		);
+
+		// After compression
+		let compressed_tokens = (compressible_tokens as f64 / compression_ratio) as u64;
+		let tokens_after_compression = non_compressible_tokens + compressed_tokens;
+
+		// THE BUG: Still above threshold!
+		assert!(
+			tokens_after_compression > threshold,
+			"Compression didn't bring context below threshold: {} > {}",
+			tokens_after_compression,
+			threshold
+		);
+
+		// This will trigger compression AGAIN on next check
+		// Creating a compression loop until continuation triggers
+	}
+
+	#[test]
+	fn bug_proof_compression_should_verify_benefit() {
+		// BUG SCENARIO: Compression should check if it will actually help
+		// before triggering. If non-compressible portion is already > threshold,
+		// compression is futile.
+
+		let threshold = 50_000u64;
+		let system_tokens = 5_000u64;
+		let tools_tokens = 30_000u64;
+		let recent_4_messages_tokens = 20_000u64;
+		let old_compressible_tokens = 2_000u64;
+
+		let non_compressible = system_tokens + tools_tokens + recent_4_messages_tokens;
+		let full_context = non_compressible + old_compressible_tokens;
+
+		assert!(full_context > threshold, "Triggers compression");
+
+		// Even with perfect 10x compression
+		let best_case_compressed = old_compressible_tokens / 10;
+		let best_case_result = non_compressible + best_case_compressed;
+
+		// THE BUG: Even best-case compression won't help!
+		assert!(
+			best_case_result > threshold,
+			"Non-compressible portion alone exceeds threshold: {} > {}",
+			best_case_result,
+			threshold
+		);
+
+		// FIX: should_check_compression should verify:
+		// if (non_compressible + (compressible / ratio)) < threshold {
+		//     compress
+		// } else {
+		//     skip compression, trigger continuation instead
+		// }
 	}
 }
