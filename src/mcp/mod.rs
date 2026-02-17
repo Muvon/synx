@@ -1049,6 +1049,13 @@ pub async fn handle_large_response(
 			));
 		}
 
+		// CRITICAL: Stop animation before prompting user
+		// Animation may still be running from api_executor.rs
+		// We must stop it here to prevent animation from covering the prompt
+		use crate::session::chat::get_animation_manager;
+		let animation_manager = get_animation_manager();
+		animation_manager.stop_current().await;
+
 		// Interactive terminal mode - ask user for confirmation before proceeding
 		print!(
 			"{}",
