@@ -17,65 +17,6 @@
 use super::super::{McpFunction, McpToolCall, McpToolResult};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::fs::OpenOptions;
-use std::io::Write;
-
-// Function to add command to shell history
-fn add_to_shell_history(command: &str) -> Result<()> {
-	// Get the shell and history file path
-	let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-	let home = std::env::var("HOME")?;
-
-	// Try to get HISTFILE environment variable first, fallback to default locations
-	let history_file = if let Ok(histfile) = std::env::var("HISTFILE") {
-		histfile
-	} else if shell.contains("zsh") {
-		format!("{}/.zsh_history", home)
-	} else if shell.contains("bash") {
-		format!("{}/.bash_history", home)
-	} else if shell.contains("fish") {
-		format!("{home}/.local/share/fish/fish_history")
-	} else {
-		// Default to bash history
-		format!("{}/.bash_history", home)
-	};
-
-	// For zsh, we need to add timestamp and format correctly
-	let history_entry = if shell.contains("zsh") {
-		let timestamp = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap_or_default()
-			.as_secs();
-		format!(": {timestamp}:0;{command}\n")
-	} else if shell.contains("fish") {
-		let timestamp = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap_or_default()
-			.as_secs();
-		format!("- cmd: {command}\n  when: {timestamp}\n")
-	} else {
-		// Bash format
-		format!("{command}\n")
-	};
-
-	// Append to history file
-	match OpenOptions::new()
-		.create(true)
-		.append(true)
-		.open(&history_file)
-	{
-		Ok(mut file) => {
-			let _ = file.write_all(history_entry.as_bytes());
-			let _ = file.flush();
-		}
-		Err(_) => {
-			// If we can't write to history file, just continue silently
-			// This prevents the tool from failing if history file is not writable
-		}
-	}
-
-	Ok(())
-}
 
 // Define the shell function for the MCP protocol with enhanced description
 pub fn get_shell_function() -> McpFunction {
@@ -178,8 +119,9 @@ pub async fn execute_shell_command(call: &McpToolCall) -> Result<McpToolResult> 
 		.and_then(|v| v.as_bool())
 		.unwrap_or(false);
 
-	// Add command to shell history before execution
-	let _ = add_to_shell_history(&command);
+	// NOTE: We do NOT add MCP tool commands to shell history
+	// Only direct user commands via `octomind shell` CLI should persist to history
+	// (see src/commands/shell.rs for user-initiated shell history)
 
 	// Use tokio::process::Command for better cancellation support
 	let mut cmd = if cfg!(target_os = "windows") {
