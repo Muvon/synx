@@ -169,6 +169,9 @@ pub struct ChatSession {
 	// Token calculation cache - SINGLE SOURCE OF TRUTH for context token counting
 	// This cache ensures all systems (display, compression, continuation) use identical calculations
 	pub cached_tools: Option<Vec<crate::mcp::McpFunction>>, // Cached tool definitions for consistent token counting
+	// First user prompt index - compression NEVER goes below this (INCLUSIVE boundary)
+	// Set once when first user message is added, protects bootstrap/instructions forever
+	pub first_prompt_idx: Option<usize>,
 }
 
 /// Parameters for creating a new ChatSession
@@ -278,6 +281,7 @@ impl ChatSession {
 			compression_hint_count: 0,          // Initialize compression hint counter
 			last_compression_hint_shown: 0,     // Initialize last hint timestamp
 			cached_tools: None,                 // Initialize tool cache (populated on first use)
+			first_prompt_idx: None,             // Initialize first prompt index (set on first user message)
 		}
 	}
 
@@ -460,6 +464,7 @@ impl ChatSession {
 						compression_hint_count,              // Restore from session.info
 						last_compression_hint_shown: last_compression_hint, // Restore from session.info
 						cached_tools: None,                  // Initialize tool cache (populated on first use)
+						first_prompt_idx: None,              // Will be detected from existing messages
 					};
 
 					// Apply runtime state from session log (legacy support)

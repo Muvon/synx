@@ -488,7 +488,8 @@ pub async fn check_and_compress_conversation(
 
 	// OPTIMIZATION: Do semantic chunking BEFORE AI call (local, no API cost)
 	// This allows us to send context chunks to AI in the same call as decision
-	let (start_idx, end_idx) = find_compression_range(&session.session.messages)?;
+	let (start_idx, end_idx) =
+		find_compression_range(&session.session.messages, session.first_prompt_idx)?;
 
 	// end_idx is already safe from find_compression_range
 
@@ -544,7 +545,8 @@ pub async fn check_and_compress_conversation(
 		&preserved_text,
 		&context_summary,
 		tokens_before,
-	)?;
+	)
+	.await?;
 
 	animation_manager.stop_current().await;
 	Ok(true)
@@ -742,7 +744,7 @@ async fn ask_ai_decision_and_summary(
 
 /// Apply compression by replacing message range with compressed summary
 /// Also parses and injects file contexts if provided by AI
-fn apply_compression(
+async fn apply_compression(
 	session: &mut ChatSession,
 	start_idx: usize,
 	end_idx: usize,
@@ -919,7 +921,11 @@ fn format_compressed_entry_with_context(
 /// Find which messages to compress (keep last 4 turns = 2 exchanges raw)
 ///
 /// CRITICAL: Must not cut between assistant with tool_calls and its tool results
-fn find_compression_range(messages: &[crate::session::Message]) -> Result<(usize, usize)> {
+/// CRITICAL: Compression NEVER goes below first_prompt_idx (INCLUSIVE boundary)
+fn find_compression_range(
+	messages: &[crate::session::Message],
+	first_prompt_idx: Option<usize>,
+) -> Result<(usize, usize)> {
 	// Find system message index
 	let system_idx = messages
 		.iter()
@@ -943,7 +949,9 @@ fn find_compression_range(messages: &[crate::session::Message]) -> Result<(usize
 	let preserve_count = 4;
 	let compress_count = conversation_indices.len() - preserve_count;
 
-	let start_idx = system_idx + 1; // Start after system message
+	// CRITICAL: Start boundary is first_prompt_idx (INCLUSIVE - never compress this or before)
+	// If not set, fall back to system_idx + 1 (safe default)
+	let start_idx = first_prompt_idx.unwrap_or(system_idx + 1);
 
 	// CRITICAL FIX: The end_idx must be the last MESSAGE INDEX (not conversation index)
 	// before the first preserved conversation message.
@@ -957,9 +965,14 @@ fn find_compression_range(messages: &[crate::session::Message]) -> Result<(usize
 	// So end_idx = conversation_indices[compress_count] - 1
 	let end_idx = conversation_indices[compress_count] - 1;
 
+	if start_idx >= end_idx {
+		return Ok((0, 0));
+	}
+
 	Ok((start_idx, end_idx))
 }
 
+/// Calculate tokens in message range using accurate token counting
 /// Calculate tokens in message range using accurate token counting
 /// This now counts ALL message fields: content, tool_calls, thinking, images, etc.
 fn calculate_range_tokens(session: &ChatSession, start_idx: usize, end_idx: usize) -> Result<u64> {
@@ -1024,7 +1037,7 @@ mod tests {
 		messages.push(msg("user")); // 8
 		messages.push(msg("assistant")); // 9
 
-		let (start_idx, end_idx) = find_compression_range(&messages).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
 
 		// conversation_indices = [1, 2, 4, 5, 6, 7, 8, 9] (8 messages)
 		// Keep last 4: [6, 7, 8, 9]
@@ -1062,7 +1075,7 @@ mod tests {
 		messages.push(msg("user")); // 8
 		messages.push(msg("assistant")); // 9
 
-		let (start_idx, end_idx) = find_compression_range(&messages).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
 
 		// conversation_indices = [1, 2, 3, 4, 6, 7, 8, 9] (8 messages)
 		// Keep last 4: [6, 7, 8, 9]
@@ -1111,7 +1124,7 @@ mod tests {
 		messages.push(msg("assistant")); // 9
 		messages.push(msg("user")); // 10
 
-		let (start_idx, end_idx) = find_compression_range(&messages).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
 
 		// conversation_indices = [1, 2, 4, 6, 7, 8, 9, 10] (8 messages)
 		// Keep last 4: [7, 8, 9, 10]
@@ -1121,6 +1134,46 @@ mod tests {
 		assert_eq!(
 			end_idx, 6,
 			"Must include all messages including tool results before first preserved"
+		);
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn start_boundary_must_not_orphan_initial_tool_sequence() {
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+
+		// First conversation message is assistant with tool calls.
+		// This can happen in resumed sessions or reconstructed histories.
+		let mut assistant_with_tools = msg("assistant"); // 1
+		assistant_with_tools.tool_calls = Some(json!([
+			{"id": "call_1", "type": "function", "function": {"name": "tool1"}}
+		]));
+		messages.push(assistant_with_tools);
+
+		let mut tool1 = msg("tool"); // 2
+		tool1.tool_call_id = Some("call_1".to_string());
+		messages.push(tool1);
+
+		// Add enough conversation messages to trigger compression.
+		messages.push(msg("user")); // 3
+		messages.push(msg("assistant")); // 4
+		messages.push(msg("user")); // 5
+		messages.push(msg("assistant")); // 6
+		messages.push(msg("user")); // 7
+		messages.push(msg("assistant")); // 8
+								   // Test with first_prompt_idx set to index 3 (first real user message)
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
+
+		// Safety requirement: compression starts AFTER first_prompt_idx (INCLUSIVE boundary)
+		// first_prompt_idx=3 means index 3 is PROTECTED, compression starts at 4
+		assert_eq!(
+			start_idx, 3,
+			"start_idx must equal first_prompt_idx (INCLUSIVE boundary)"
+		);
+		assert!(
+			end_idx >= 4,
+			"range should start compressing only after first_prompt_idx"
 		);
 	}
 }

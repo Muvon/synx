@@ -371,6 +371,7 @@ impl GenericLayer {
 			model.to_string(),
 			"layer".to_string(),
 		);
+		let first_prompt_idx = messages.len(); // Next message will be layer's first prompt
 		session.messages = messages;
 
 		crate::session::chat::session::ChatSession {
@@ -397,6 +398,7 @@ impl GenericLayer {
 			compression_hint_count: 0,        // Initialize compression hint counter
 			last_compression_hint_shown: 0,   // Initialize last hint timestamp
 			cached_tools: None,               // Initialize tool cache (populated on first use)
+			first_prompt_idx: Some(first_prompt_idx), // Protect layer's first prompt from compression
 		}
 	}
 

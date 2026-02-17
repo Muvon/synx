@@ -581,8 +581,6 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				.as_millis()
 		);
 
-		let user_message_index = chat_session.session.messages.len();
-
 		// CONVERSATION COMPRESSION: Check if AI should compress older exchanges
 		// This happens BEFORE user message is added to ensure user's new request is not broken by summarization
 		// AI decides if compression is beneficial based on conversation history
@@ -652,6 +650,10 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		// between adding the message and starting the API call
 		*processing_state.lock().unwrap() = ProcessingState::CallingAPI;
 
+		// CRITICAL: Capture user message insertion index AFTER compression/continuation mutations.
+		// This keeps error rollback truncation aligned with current session layout.
+		let user_message_index = chat_session.session.messages.len();
+
 		// Add user message for standard processing flow
 		// CRITICAL FIX: Add user message unless continuation is pending or layers modified session
 		// Logic:
@@ -659,6 +661,12 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		// - workflow_modified_session = true: Layers added messages to session → Skip (avoid duplicates)
 		// - workflow_modified_session = false: Layers didn't add messages → Add user message (needed for conversation)
 		if !chat_session.continuation_pending && !workflow_modified_session {
+			// CRITICAL: Set first_prompt_idx if not already set (INCLUSIVE boundary for compression)
+			// This protects bootstrap/instructions forever - compression NEVER goes below this index
+			if chat_session.first_prompt_idx.is_none() {
+				chat_session.first_prompt_idx = Some(user_message_index);
+			}
+
 			// Append constraints if configured
 			let final_input_with_constraints = super::utils::append_constraints_if_exists(
 				&final_input,
