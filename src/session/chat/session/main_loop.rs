@@ -155,36 +155,31 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					log_debug!("Cancelled during idle state - no cleanup needed");
 				}
 				ProcessingState::CallingAPI => {
-					// API call was interrupted - cleanup depends on whether assistant message was added
+					// API call was interrupted - determine if we're in multi-turn conversation
+					// Multi-turn = tools were already executed and we're processing follow-up response
+					// Check: Are there ANY tool messages in the current operation's context?
 					if let Some(op) = operation {
-						if let Some(assistant_idx) = op.assistant_message_index {
-							// Assistant message was added for THIS operation (could be first or follow-up)
-							// This means we're in the middle of processing a response
-							// Check if there are tool results after the assistant message
-							let has_tool_results =
-								chat_session.session.messages.len() > assistant_idx + 1;
+						// Check if there are tool messages AFTER the user message for this operation
+						// This indicates tools were executed and we're in a follow-up API call
+						let user_idx = op.user_message_index.unwrap_or(0);
+						let has_tool_messages = chat_session
+							.session
+							.messages
+							.iter()
+							.skip(user_idx)
+							.any(|msg| msg.role == "tool");
 
-							if has_tool_results {
-								// This is a FOLLOW-UP API call (tools were executed, results added)
-								// Keep everything - conversation state is valid
-								log_debug!("API call cancelled during multi-turn (after tools) - preserving conversation state");
-							} else {
-								// This is the FIRST API call - assistant message was added but no tools yet
-								// Remove BOTH user and assistant messages for clean slate
-								if let Some(user_idx) = op.user_message_index {
-									if user_idx < chat_session.session.messages.len() {
-										chat_session.session.messages.truncate(user_idx);
-										log_debug!("Removed user and assistant messages due to first API call cancellation - clean slate for retry");
-									}
-								}
-							}
+						if has_tool_messages {
+							// MULTI-TURN: Tools were executed, conversation state is valid
+							// Keep EVERYTHING - user message, assistant message, tool results
+							log_debug!("Ctrl+C during multi-turn (tools executed) - preserving all conversation state");
 						} else {
-							// Assistant message was NOT added yet - API call cancelled before response
-							// Remove user message for clean slate
+							// FIRST CALL: No tools executed yet
+							// Remove user message (and assistant if added) for clean retry
 							if let Some(user_idx) = op.user_message_index {
 								if user_idx < chat_session.session.messages.len() {
 									chat_session.session.messages.truncate(user_idx);
-									log_debug!("Removed user message due to API call cancellation before response - clean slate for retry");
+									log_debug!("Ctrl+C during first API call - removed user message for clean retry");
 								}
 							}
 						}
