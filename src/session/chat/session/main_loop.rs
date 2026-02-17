@@ -127,10 +127,9 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 	// Main interaction loop
 	loop {
-		// Set processing state to idle
-		*processing_state.lock().unwrap() = ProcessingState::Idle;
-
 		// SMART CANCELLATION: Handle cancellation with surgical cleanup
+		// CRITICAL: Check cancellation BEFORE resetting processing state
+		// This ensures cleanup logic sees the correct state (e.g., CallingAPI)
 		if cancellation.is_cancelled() {
 			log_debug!("Ctrl+C detected - performing smart cleanup based on operation state");
 
@@ -267,6 +266,10 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 			continue;
 		}
+
+		// CRITICAL: Reset processing state to Idle AFTER cancellation cleanup
+		// This ensures cleanup logic sees the correct state during cancellation
+		*processing_state.lock().unwrap() = ProcessingState::Idle;
 
 		// Set state to reading input
 		*processing_state.lock().unwrap() = ProcessingState::ReadingInput;
