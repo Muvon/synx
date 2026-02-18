@@ -86,6 +86,12 @@ pub async fn process_tool_results(
 		// CRITICAL FIX: Extract ONLY the actual tool output, not our custom JSON wrapper
 		let tool_content = extract_tool_content(tool_result);
 
+		// Apply global MCP response token truncation before adding to session
+		let tool_content = crate::utils::truncation::truncate_mcp_response_global(
+			&tool_content,
+			config.mcp_response_tokens_threshold,
+		);
+
 		// PERFORMANCE OPTIMIZATION: Check size before moving content
 		let content_size = tool_content.len();
 		accumulated_content_size += content_size;

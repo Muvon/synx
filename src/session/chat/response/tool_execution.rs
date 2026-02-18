@@ -549,7 +549,9 @@ async fn handle_large_tool_results(
 
 	for (index, result) in results.iter().enumerate() {
 		let estimated_tokens = crate::session::estimate_tokens(&format!("{}", result.result));
-		if estimated_tokens > config.mcp_response_warning_threshold {
+		if config.mcp_response_warning_threshold > 0
+			&& estimated_tokens > config.mcp_response_warning_threshold
+		{
 			large_indices.push((index, estimated_tokens));
 			total_tokens += estimated_tokens;
 		}

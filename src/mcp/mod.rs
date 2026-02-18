@@ -997,7 +997,9 @@ pub async fn handle_large_response(
 ) -> Result<McpToolResult> {
 	// Check if result is large - warn user if it exceeds threshold
 	let estimated_tokens = crate::session::estimate_tokens(&format!("{}", result.result));
-	if estimated_tokens > config.mcp_response_warning_threshold {
+	if config.mcp_response_warning_threshold > 0
+		&& estimated_tokens > config.mcp_response_warning_threshold
+	{
 		// Create a modified result that warns about the size
 		use colored::Colorize;
 		let suppress_cli_output = mode.should_suppress_cli_output();
