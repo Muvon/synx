@@ -364,6 +364,8 @@ mod adaptive_compression_tests {
 				compression_hint_count: 0,
 				last_compression_hint_shown: 0,
 				next_conversation_compression_at_api_call: 0,
+				predicted_turns_at_last_compression: 0.0,
+				api_calls_at_last_compression: 0,
 			},
 			session_file: None,
 		}

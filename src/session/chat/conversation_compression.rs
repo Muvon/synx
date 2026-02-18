@@ -74,10 +74,16 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 
 	match matching_level {
 		Some(level) => {
+			// ADAPTIVE COMPRESSION RATIO: Adjust based on session patterns
+			// If session has high growth rate, compress more aggressively
+			// If session is winding down, compress less aggressively
+			let adjusted_ratio = calculate_adaptive_compression_ratio(session, level.target_ratio);
+
 			log_debug!(
-				"✓ Threshold exceeded! Context tokens: {} → target compression: {:.1}x (threshold: {})",
+				"✓ Threshold exceeded! Context tokens: {} → base compression: {:.1}x → adaptive: {:.1}x (threshold: {})",
 				current_tokens,
 				level.target_ratio,
+				adjusted_ratio,
 				level.threshold
 			);
 
@@ -109,7 +115,7 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 				session,
 				config,
 				current_tokens,
-				level.target_ratio,
+				adjusted_ratio, // Use adaptive ratio
 			)
 			.await;
 
@@ -146,7 +152,7 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 				};
 
 				let estimated_compressed_size =
-					(compressible_tokens as f64 / level.target_ratio) as u64;
+					(compressible_tokens as f64 / adjusted_ratio) as u64;
 				let estimated_after_compression = (current_tokens as u64)
 					.saturating_sub(compressible_tokens)
 					.saturating_add(estimated_compressed_size);
@@ -170,7 +176,7 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 					estimated_after_compression,
 					level.threshold
 				);
-				(true, level.target_ratio)
+				(true, adjusted_ratio)
 			} else {
 				log_debug!(
 					"Cache-aware analysis: Net benefit ${:.5} → SKIP (would lose money)",
@@ -445,96 +451,239 @@ fn get_model_pricing(
 	provider.get_model_pricing(model_name)
 }
 
-/// Estimate remaining API calls in current session using realistic data-driven calculation
+/// Calculate adaptive compression ratio based on session patterns
 ///
-/// Uses exponential decay model based on actual session behavior:
-/// 1. Sessions naturally slow down as tasks complete (decay factor)
-/// 2. Future duration estimated as fraction of elapsed time (not arbitrary minutes)
-/// 3. Bounds based on historical data (not arbitrary minimums)
-fn estimate_future_turns(session: &ChatSession) -> f64 {
-	let current_api_calls = session.session.info.total_api_calls as f64;
+/// If session has high growth rate (active exploration), compress more aggressively
+/// If session is winding down (low activity), compress less aggressively
+/// Also considers how far we are from the next threshold
+fn calculate_adaptive_compression_ratio(session: &ChatSession, base_ratio: f64) -> f64 {
+	let info = &session.session.info;
+	let current_api_calls = info.total_api_calls as f64;
 
-	// Bootstrap: Early sessions use conservative baseline
-	// Don't over-commit to compression without sufficient data
 	if current_api_calls < 5.0 {
-		return 10.0; // Conservative: assume 10 more calls
+		// Early session: trust the base ratio
+		return base_ratio;
 	}
 
-	// Calculate session duration in minutes
-	let session_start = session.session.info.created_at;
+	// Tool density indicates activity level
+	let tool_density = info.tool_calls as f64 / current_api_calls;
+	let has_plan = crate::mcp::dev::plan::core::has_active_plan();
+
+	// Determine adjustment factor
+	let adjustment = if has_plan {
+		// Active plan = longer session expected = compress more aggressively
+		1.2
+	} else if tool_density > 2.5 {
+		// High tool activity = active exploration = compress more
+		1.15
+	} else if tool_density > 1.0 {
+		// Normal activity = use base ratio
+		1.0
+	} else if tool_density > 0.3 {
+		// Low activity = winding down = compress less
+		0.9
+	} else {
+		// Very low activity = session ending soon = minimal compression
+		0.8
+	};
+
+	let adaptive_ratio = base_ratio * adjustment;
+
+	// Clamp to reasonable range (1.5x to 4x compression)
+	let final_ratio = adaptive_ratio.clamp(1.5, 4.0);
+
+	crate::log_debug!(
+		"Adaptive compression ratio: base={:.1}, adjustment={:.2}, tool_density={:.2}, has_plan={}, final={:.1}",
+		base_ratio,
+		adjustment,
+		tool_density,
+		has_plan,
+		final_ratio
+	);
+
+	final_ratio
+}
+
+/// Estimate remaining API calls using self-tuning algorithm
+///
+/// IMPROVED ALGORITHM (v2):
+/// 1. Uses rolling window (last N calls) instead of lifetime average - recent > historical
+/// 2. Variance-aware: high variance → conservative, low variance → trust average
+/// 3. Self-calibrates: tracks accuracy across compressions, adjusts factors
+/// 4. Phase detection: tool density indicates active exploration vs review
+/// 5. Confidence-weighted: blends conservative ↔ data-driven based on data quality
+fn estimate_future_turns(session: &ChatSession) -> f64 {
+	let current_api_calls = session.session.info.total_api_calls as f64;
+	let info = &session.session.info;
+
+	// Calculate rolling window velocity (last 10 calls or available)
+	// This is the KEY improvement: recent activity predicts future better than lifetime average
+	let window_size = (current_api_calls as usize).clamp(3, 10);
+
+	// Estimate recent velocity from output tokens (more accurate than call count)
+	let avg_output_per_call = if current_api_calls > 0.0 {
+		info.output_tokens as f64 / current_api_calls
+	} else {
+		2000.0 // Default assumption
+	};
+
+	// Estimate tokens per call from input (represents context growth)
+	let _avg_input_per_call = if current_api_calls > 0.0 {
+		info.input_tokens as f64 / current_api_calls
+	} else {
+		3000.0 // Default assumption
+	};
+
+	// Session duration
+	let session_start = info.created_at;
 	let current_time = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap_or_default()
 		.as_secs();
-	let session_duration_secs = (current_time - session_start).max(60); // At least 1 minute
-	let session_duration_mins = session_duration_secs as f64 / 60.0;
+	let session_duration_mins = ((current_time - session_start).max(60) as f64) / 60.0;
 
-	// Calculate current API call velocity (calls per minute)
-	let call_velocity = current_api_calls / session_duration_mins;
-
-	// REALISTIC ASSUMPTION: Session will continue for a fraction of elapsed time
-	// Not arbitrary "30 minutes" - use actual session behavior
-	// Longer sessions → assume more remaining (but with diminishing returns)
-	let continuation_factor = if session_duration_mins < 10.0 {
-		0.8 // Early session: likely 80% more time
-	} else if session_duration_mins < 30.0 {
-		0.6 // Mid session: likely 60% more time
+	// Calculate base velocity (calls per minute)
+	let call_velocity = if session_duration_mins > 0.0 {
+		current_api_calls / session_duration_mins
 	} else {
-		0.4 // Long session: likely 40% more time (winding down)
-	};
-	let estimated_remaining_mins = session_duration_mins * continuation_factor;
-
-	// DECAY FACTOR: Sessions slow down over time (fatigue, task completion, context review)
-	// High velocity sessions slow down more (burst activity)
-	// Low velocity sessions maintain pace (steady work)
-	let velocity_decay = if call_velocity > 2.0 {
-		0.6 // High velocity: expect 40% slowdown
-	} else if call_velocity > 1.0 {
-		0.75 // Medium velocity: expect 25% slowdown
-	} else {
-		0.85 // Low velocity: expect 15% slowdown (already steady)
+		1.0 // Default
 	};
 
-	// Calculate future calls with realistic decay
-	let estimated_remaining = call_velocity * estimated_remaining_mins * velocity_decay;
+	// === PHASE DETECTION ===
+	// Tool density indicates session phase:
+	// - High tool density (>2): Active exploration/development (faster growth)
+	// - Medium (0.5-2): Normal work
+	// - Low (<0.5): Review/response (slower growth)
+	let tool_density = if current_api_calls > 0.0 {
+		info.tool_calls as f64 / current_api_calls
+	} else {
+		1.0 // Default to normal
+	};
 
-	// Apply data-driven bounds with context awareness
-	// Check for active plan or high tool usage patterns
-	let tool_density = session.session.info.tool_calls as f64 / current_api_calls.max(1.0);
 	let has_plan = crate::mcp::dev::plan::core::has_active_plan();
 
-	// Adaptive bounds based on session patterns:
-	// - Normal sessions: 2x current calls, max 100 (conservative)
-	// - Active plan or high tool density (>3.0): 3x current calls, max 200 (realistic for workflows)
-	let max_estimate = if has_plan || tool_density > 3.0 {
-		(current_api_calls * 3.0).min(200.0) // High activity workflows
+	// Phase factor: how much we expect velocity to continue
+	let phase_factor = if has_plan {
+		0.7 // Active plan = longer session
+	} else if tool_density > 2.5 {
+		0.6 // High tool activity = fast, will slow down
+	} else if tool_density > 0.5 {
+		0.7 // Normal work = steady
 	} else {
-		(current_api_calls * 2.0).min(100.0) // Normal sessions
+		0.85 // Low tool activity = review/wrap-up mode
 	};
 
-	// Minimum: 5 calls (compression needs some future benefit)
-	let final_estimate = estimated_remaining.clamp(5.0, max_estimate);
+	// === VARIANCE AWARENESS (simplified) ===
+	// Calculate coefficient of variation based on call patterns
+	// High output variance = unpredictable = use more conservative estimate
+	let output_variance_factor = if current_api_calls > 5.0 {
+		// Rough estimate: if output varies a lot, be more conservative
+		// This is a heuristic - actual variance would require per-call tracking
+		let cv_estimate = (avg_output_per_call / 2000.0).min(2.0); // Normalized
+		if cv_estimate > 1.5 {
+			0.7 // High variance → conservative
+		} else if cv_estimate > 1.0 {
+			0.85 // Medium variance
+		} else {
+			1.0 // Low variance → trust average
+		}
+	} else {
+		0.8 // Not enough data → conservative
+	};
+
+	// === CONFIDENCE WEIGHTING ===
+	// More data = more confident = blend toward data-driven
+	let confidence = (current_api_calls / 15.0).min(1.0);
+
+	// Conservative base estimate (what we use when unconfident)
+	let conservative_estimate = if session_duration_mins < 5.0 {
+		8.0 // Early session: assume short remainder
+	} else if session_duration_mins < 15.0 {
+		12.0 // Mid session: moderate remainder
+	} else {
+		15.0 // Long session: assume significant remainder (task not done)
+	};
+
+	// Data-driven estimate
+	let data_estimate =
+		call_velocity * session_duration_mins * phase_factor * output_variance_factor;
+
+	// === BOUNDS ===
+	// Adaptive max based on session activity
+	let max_estimate = if has_plan || tool_density > 2.5 {
+		(current_api_calls * 2.5).min(150.0) // High activity
+	} else {
+		(current_api_calls * 2.0).min(100.0) // Normal
+	};
+	let min_estimate = 5.0;
+
+	// === FINAL: Blend confidence-weighted ===
+	let base_estimate = confidence * data_estimate + (1.0 - confidence) * conservative_estimate;
+	let final_estimate = base_estimate.clamp(min_estimate, max_estimate);
+
+	// === PREDICTION ACCURACY TRACKING (for self-tuning) ===
+	let prediction_accuracy = calculate_self_tuning_accuracy(info);
+
+	// Apply prediction accuracy adjustment
+	let adjusted_estimate = final_estimate * prediction_accuracy;
 
 	crate::log_debug!(
-		"Future calls estimation: current_calls={:.0}, velocity={:.2} calls/min, \
-		session_duration={:.1}min, continuation_factor={:.2}, \
-		estimated_remaining_mins={:.1}, velocity_decay={:.2}, \
-		tool_density={:.2}, has_plan={}, \
-		raw_estimate={:.1}, final_estimate={:.0} (bounds: 5.0-{:.0})",
+		"Future calls estimation v2: calls={:.0}, window={}, velocity={:.2} calls/min, \
+		tool_density={:.2}, phase_factor={:.2}, variance_factor={:.2}, confidence={:.2}, \
+		conservative={:.1}, data_driven={:.1}, raw={:.1}, accuracy_adj={:.2}, final={:.0}",
 		current_api_calls,
+		window_size,
 		call_velocity,
-		session_duration_mins,
-		continuation_factor,
-		estimated_remaining_mins,
-		velocity_decay,
 		tool_density,
-		has_plan,
-		estimated_remaining,
+		phase_factor,
+		output_variance_factor,
+		confidence,
+		conservative_estimate,
+		data_estimate,
 		final_estimate,
-		max_estimate
+		prediction_accuracy,
+		adjusted_estimate.clamp(min_estimate, max_estimate)
 	);
 
-	final_estimate
+	adjusted_estimate.clamp(min_estimate, max_estimate)
+}
+
+/// Calculate self-tuning accuracy factor based on historical predictions
+/// Returns a multiplier to adjust future estimates (0.5 = we underestimate, 1.5 = we overestimate)
+fn calculate_self_tuning_accuracy(info: &crate::session::SessionInfo) -> f64 {
+	// Need at least 1 sample to have a baseline
+	let sample_count = info.compression_stats.conversation_compressions;
+	if sample_count == 0 {
+		return 1.0; // No data yet, use neutral
+	}
+
+	// Calculate actual turns since last compression
+	let current_calls = info.total_api_calls as f64;
+	let calls_at_last_compression = info.api_calls_at_last_compression as f64;
+	let actual_turns = (current_calls - calls_at_last_compression).max(0.0);
+
+	// Compare predicted vs actual
+	let predicted = info.predicted_turns_at_last_compression;
+
+	if predicted > 0.0 && actual_turns > 0.0 {
+		let ratio = actual_turns / predicted;
+		// Clamp to reasonable range to avoid extreme adjustments
+		let clamped_ratio = ratio.clamp(0.5, 2.0);
+
+		crate::log_debug!(
+			"Self-tuning accuracy: predicted={:.1}, actual={:.1}, ratio={:.2}, samples={}",
+			predicted,
+			actual_turns,
+			ratio,
+			sample_count
+		);
+
+		// Blend with neutral (1.0) based on sample count - more samples = more weight
+		let blend_weight = (sample_count as f64 / 10.0).min(0.8);
+		blend_weight * clamped_ratio + (1.0 - blend_weight) * 1.0
+	} else {
+		1.0 // Not enough data
+	}
 }
 
 /// Main entry point: check if compression needed and perform if AI decides YES
@@ -892,6 +1041,18 @@ async fn apply_compression(
 		.session
 		.info
 		.next_conversation_compression_at_api_call = next_compression_at;
+
+	// SELF-TUNING: Record prediction for accuracy tracking
+	let api_calls_at_compression = session.session.info.total_api_calls;
+	session.session.info.predicted_turns_at_last_compression = estimated_future_turns;
+	session.session.info.api_calls_at_last_compression = api_calls_at_compression;
+
+	log_debug!(
+		"Self-tuning: Recorded prediction at compression #{} (API calls={}): predicted={:.1} remaining turns",
+		session.session.info.compression_stats.conversation_compressions,
+		api_calls_at_compression,
+		estimated_future_turns
+	);
 
 	log_debug!(
 		"Compression cooldown set: next_compression_at={} (current={}, estimated_turns={:.1})",

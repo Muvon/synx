@@ -204,7 +204,7 @@ impl Default for Message {
 	}
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SessionInfo {
 	pub name: String,
 	pub created_at: u64,
@@ -257,6 +257,11 @@ pub struct SessionInfo {
 	// Conversation compression cooldown tracking
 	#[serde(default)]
 	pub next_conversation_compression_at_api_call: usize, // 0 = can compress immediately
+	// Self-tuning estimation tracking (for accuracy measurement)
+	#[serde(default)]
+	pub predicted_turns_at_last_compression: f64, // What we predicted at last compression
+	#[serde(default)]
+	pub api_calls_at_last_compression: usize, // API call count at last compression
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -390,6 +395,8 @@ impl Session {
 				compression_hint_count: 0,
 				last_compression_hint_shown: 0,
 				next_conversation_compression_at_api_call: 0,
+				predicted_turns_at_last_compression: 0.0,
+				api_calls_at_last_compression: 0,
 			},
 
 			messages: Vec::new(),
@@ -1263,6 +1270,8 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 			compression_hint_count: 0,
 			last_compression_hint_shown: 0,
 			next_conversation_compression_at_api_call: 0,
+			predicted_turns_at_last_compression: 0.0,
+			api_calls_at_last_compression: 0,
 		};
 
 		// Extract runtime state from log file
