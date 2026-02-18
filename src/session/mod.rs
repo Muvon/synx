@@ -254,6 +254,9 @@ pub struct SessionInfo {
 	pub compression_hint_count: usize,
 	#[serde(default)]
 	pub last_compression_hint_shown: u64,
+	// Conversation compression cooldown tracking
+	#[serde(default)]
+	pub next_conversation_compression_at_api_call: usize, // 0 = can compress immediately
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -386,6 +389,7 @@ impl Session {
 				continuation_disabled: false,
 				compression_hint_count: 0,
 				last_compression_hint_shown: 0,
+				next_conversation_compression_at_api_call: 0,
 			},
 
 			messages: Vec::new(),
@@ -1258,6 +1262,7 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 			continuation_disabled: false,
 			compression_hint_count: 0,
 			last_compression_hint_shown: 0,
+			next_conversation_compression_at_api_call: 0,
 		};
 
 		// Extract runtime state from log file

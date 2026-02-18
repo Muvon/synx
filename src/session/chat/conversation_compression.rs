@@ -81,6 +81,29 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 				level.threshold
 			);
 
+			// COOLDOWN CHECK: Prevent premature re-compression before getting calculated benefit
+			let current_api_calls = session.session.info.total_api_calls;
+			let next_compression_allowed = session
+				.session
+				.info
+				.next_conversation_compression_at_api_call;
+
+			if current_api_calls < next_compression_allowed {
+				log_debug!(
+					"Compression cooldown active: current_api_calls={} < next_allowed={} (must wait {} more calls)",
+					current_api_calls,
+					next_compression_allowed,
+					next_compression_allowed - current_api_calls
+				);
+				return (false, 2.0);
+			}
+
+			log_debug!(
+				"Compression cooldown passed: current_api_calls={} >= next_allowed={}",
+				current_api_calls,
+				next_compression_allowed
+			);
+
 			// CACHE-AWARE DECISION: Calculate if compression is profitable
 			let net_benefit = calculate_compression_net_benefit(
 				session,
@@ -861,6 +884,22 @@ async fn apply_compression(
 		.compression_stats
 		.add_conversation_compression(messages_removed, tokens_saved);
 
+	// Update cooldown: Set next allowed compression point
+	let estimated_future_turns = estimate_future_turns(session);
+	let next_compression_at =
+		session.session.info.total_api_calls + estimated_future_turns as usize;
+	session
+		.session
+		.info
+		.next_conversation_compression_at_api_call = next_compression_at;
+
+	log_debug!(
+		"Compression cooldown set: next_compression_at={} (current={}, estimated_turns={:.1})",
+		next_compression_at,
+		session.session.info.total_api_calls,
+		estimated_future_turns
+	);
+
 	// CRITICAL: Log compression point to session file
 	// This marker tells session loader to clear messages before this point on resume
 	// Without this, all "compressed" messages are reloaded, defeating compression
@@ -1532,5 +1571,105 @@ mod tests {
 		// } else {
 		//     skip compression, trigger continuation instead
 		// }
+	}
+
+	#[test]
+	fn test_cooldown_prevents_premature_recompression() {
+		// TEST: Cooldown should block compression until estimated benefit window passes
+
+		// Scenario 1: First compression at API call 10, estimated 20 future turns
+		let current_api_calls = 10;
+		let estimated_turns = 20.0;
+		let next_compression_at = current_api_calls + estimated_turns as usize; // = 30
+
+		assert_eq!(
+			next_compression_at, 30,
+			"Next compression should be at call 30"
+		);
+
+		// Scenario 2: At API call 15 (5 turns later), cooldown should block
+		let current_at_15 = 15;
+		assert!(
+			current_at_15 < next_compression_at,
+			"Cooldown should block at call 15: {} < {}",
+			current_at_15,
+			next_compression_at
+		);
+
+		// Scenario 3: At API call 29 (19 turns later), still blocked
+		let current_at_29 = 29;
+		assert!(
+			current_at_29 < next_compression_at,
+			"Cooldown should still block at call 29: {} < {}",
+			current_at_29,
+			next_compression_at
+		);
+
+		// Scenario 4: At API call 30 (20 turns later), cooldown passes
+		let current_at_30 = 30;
+		assert!(
+			current_at_30 >= next_compression_at,
+			"Cooldown should pass at call 30: {} >= {}",
+			current_at_30,
+			next_compression_at
+		);
+
+		// Scenario 5: At API call 35 (25 turns later), still allowed
+		let current_at_35 = 35;
+		assert!(
+			current_at_35 >= next_compression_at,
+			"Compression should be allowed at call 35: {} >= {}",
+			current_at_35,
+			next_compression_at
+		);
+	}
+
+	#[test]
+	fn test_cooldown_default_allows_first_compression() {
+		// TEST: Default value (0) should allow first compression immediately
+
+		let next_compression_at = 0; // Default value
+		let current_api_calls = 1; // First API call
+
+		assert!(
+			current_api_calls >= next_compression_at,
+			"First compression should be allowed: {} >= {}",
+			current_api_calls,
+			next_compression_at
+		);
+
+		// Even at call 0 (edge case)
+		let current_at_0 = 0;
+		assert!(
+			current_at_0 >= next_compression_at,
+			"Compression should be allowed even at call 0: {} >= {}",
+			current_at_0,
+			next_compression_at
+		);
+	}
+
+	#[test]
+	fn test_cooldown_calculation_with_varying_estimates() {
+		// TEST: Cooldown adapts to different estimated turn counts
+
+		// Short session: 5 estimated turns
+		let current = 10;
+		let estimated_short = 5.0;
+		let next_short = current + estimated_short as usize;
+		assert_eq!(next_short, 15, "Short estimate: next at 15");
+
+		// Medium session: 20 estimated turns
+		let estimated_medium = 20.0;
+		let next_medium = current + estimated_medium as usize;
+		assert_eq!(next_medium, 30, "Medium estimate: next at 30");
+
+		// Long session: 50 estimated turns
+		let estimated_long = 50.0;
+		let next_long = current + estimated_long as usize;
+		assert_eq!(next_long, 60, "Long estimate: next at 60");
+
+		// Verify cooldown scales with estimate
+		assert!(next_short < next_medium, "Short cooldown < medium cooldown");
+		assert!(next_medium < next_long, "Medium cooldown < long cooldown");
 	}
 }

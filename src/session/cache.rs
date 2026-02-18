@@ -799,6 +799,7 @@ mod tests {
 				continuation_disabled: false,
 				compression_hint_count: 0,
 				last_compression_hint_shown: 0,
+				next_conversation_compression_at_api_call: 0,
 			},
 
 			messages: Vec::new(),
