@@ -241,11 +241,18 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 	// Extract directory parameter
 	let directory = match call.parameters.get("directory") {
 		Some(Value::String(dir)) => dir.clone(),
-		_ => {
+		None => {
 			return Ok(McpToolResult::error(
 				call.tool_name.clone(),
 				call.tool_id.clone(),
-				"Missing or invalid 'directory' parameter".to_string(),
+				"Missing required 'directory' parameter. Use \".\" for the current directory.".to_string(),
+			))
+		}
+		Some(other) => {
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				format!("Invalid 'directory' parameter: expected a string path (e.g. \".\" or \"src/\"), got {other}"),
 			))
 		}
 	};

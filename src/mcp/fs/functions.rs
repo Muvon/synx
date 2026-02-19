@@ -67,7 +67,7 @@ pub fn get_list_files_function() -> McpFunction {
 			"properties": {
 				"directory": {
 					"type": "string",
-					"description": "The directory to list files from"
+					"description": "The directory to list files from. Must be a string path, e.g. \".\" for current directory or \"src/\" for a subdirectory"
 				},
 				"pattern": {
 					"type": "string",
