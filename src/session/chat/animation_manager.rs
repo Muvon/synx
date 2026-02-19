@@ -91,8 +91,9 @@ impl Default for AnimationState {
 pub struct AnimationManager {
 	/// Current animation task (if any)
 	current_task: Arc<std::sync::Mutex<Option<JoinHandle<()>>>>,
-	/// Notify used to wake the animation task instantly when stop_current() is called
-	cancel_notify: Arc<Notify>,
+	/// Notify for the *current* animation task — replaced with a fresh one each start
+	/// so a leftover notification from stop_current() never kills the next animation
+	cancel_notify: Arc<std::sync::Mutex<Arc<Notify>>>,
 	/// Shared animation state for dynamic updates
 	state: AnimationState,
 	/// Optional cancellation receiver from session (for instant Ctrl+C response)
@@ -108,7 +109,7 @@ impl AnimationManager {
 	pub fn new() -> Self {
 		Self {
 			current_task: Arc::new(std::sync::Mutex::new(None)),
-			cancel_notify: Arc::new(Notify::new()),
+			cancel_notify: Arc::new(std::sync::Mutex::new(Arc::new(Notify::new()))),
 			state: AnimationState::new(),
 			cancel_rx: Arc::new(std::sync::Mutex::new(None)),
 			suspended: Arc::new(AtomicBool::new(false)),
@@ -175,7 +176,7 @@ impl AnimationManager {
 	/// Stop current animation (if any)
 	pub async fn stop_current(&self) {
 		// Wake the animation task instantly — zero CPU, no busy-poll
-		self.cancel_notify.notify_one();
+		self.cancel_notify.lock().unwrap().notify_one();
 
 		// Clear the cancellation receiver
 		self.clear_cancel_receiver();
@@ -269,8 +270,13 @@ impl AnimationManager {
 
 	/// Internal animation start logic
 	async fn start_internal(&self) {
+		// Create a FRESH Notify for this animation cycle — prevents a leftover
+		// notify_one() from stop_current() firing immediately on the new task
+		let cancel_notify = Arc::new(Notify::new());
+		*self.cancel_notify.lock().unwrap() = cancel_notify.clone();
+
 		// Clone references for animation task
-		let cancel_notify = self.cancel_notify.clone();
+		let cancel_notify = cancel_notify;
 		let current_task = self.current_task.clone();
 		let state = self.state.clone();
 		let cancel_rx = self.cancel_rx.lock().unwrap().clone();
