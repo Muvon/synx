@@ -235,10 +235,21 @@ pub fn tool_results_to_messages(
 		let content_str = serde_json::to_string(&result.result).unwrap_or_default();
 
 		// Apply global MCP response truncation
-		let final_content = crate::utils::truncation::truncate_mcp_response_global(
+		let (final_content, was_truncated) = crate::utils::truncation::truncate_mcp_response_global(
 			&content_str,
 			config.mcp_response_tokens_threshold,
 		);
+		if was_truncated {
+			use colored::Colorize;
+			eprintln!(
+				"{}",
+				format!(
+					"⚠️  Tool '{}' response truncated to {} tokens (mcp_response_tokens_threshold)",
+					result.tool_name, config.mcp_response_tokens_threshold
+				)
+				.bright_yellow()
+			);
+		}
 
 		messages.push(ToolResponseMessage {
 			role: "tool".to_string(),

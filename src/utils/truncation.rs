@@ -257,24 +257,25 @@ pub fn truncate_tool_output_smart(content: &str, max_lines: usize, max_chars: us
 ///
 /// Applies consistent truncation across ALL MCP tools when responses exceed threshold.
 /// Uses 0 = unlimited, otherwise applies smart truncation with MCP-specific notice.
-pub fn truncate_mcp_response_global(content: &str, max_tokens: usize) -> String {
+/// Truncate MCP tool response content to fit within token limit.
+/// Returns `(content, was_truncated)` — callers should warn the user when `was_truncated` is true.
+pub fn truncate_mcp_response_global(content: &str, max_tokens: usize) -> (String, bool) {
 	if max_tokens == 0 {
-		return content.to_string();
+		return (content.to_string(), false);
 	}
 
 	let token_count = estimate_tokens(content);
 	if token_count <= max_tokens {
-		return content.to_string();
+		return (content.to_string(), false);
 	}
 
-	// Use existing smart truncation
-	let truncated = truncate_content_smart(content, max_tokens);
-
-	// Replace the truncation message with MCP-specific one
-	truncated.replace(
+	// Use existing smart truncation and replace the marker with MCP-specific wording
+	let truncated = truncate_content_smart(content, max_tokens).replace(
 		"[Content truncated -",
 		"⚠️ **MCP RESPONSE TRUNCATED** - Original:",
-	)
+	);
+
+	(truncated, true)
 }
 
 #[cfg(test)]
@@ -284,22 +285,25 @@ mod tests {
 	#[test]
 	fn test_mcp_truncation_unlimited() {
 		let content = "This is a test content";
-		let result = truncate_mcp_response_global(content, 0);
+		let (result, was_truncated) = truncate_mcp_response_global(content, 0);
 		assert_eq!(result, content);
+		assert!(!was_truncated);
 	}
 
 	#[test]
 	fn test_mcp_truncation_under_limit() {
 		let content = "Short content";
-		let result = truncate_mcp_response_global(content, 1000);
+		let (result, was_truncated) = truncate_mcp_response_global(content, 1000);
 		assert_eq!(result, content);
+		assert!(!was_truncated);
 	}
 
 	#[test]
 	fn test_mcp_truncation_over_limit() {
 		let content = "This is a very long content that should be truncated when it exceeds the token limit. ".repeat(100);
-		let result = truncate_mcp_response_global(&content, 50);
+		let (result, was_truncated) = truncate_mcp_response_global(&content, 50);
 		assert!(result.contains("⚠️ **MCP RESPONSE TRUNCATED**"));
 		assert!(result.len() < content.len());
+		assert!(was_truncated);
 	}
 }

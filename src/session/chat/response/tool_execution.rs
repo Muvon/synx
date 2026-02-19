@@ -543,7 +543,25 @@ async fn handle_large_tool_results(
 	use colored::Colorize;
 	use std::io::{stdin, stdout, Write};
 
-	// Find large results
+	// Apply token truncation first so the warning threshold sees the already-truncated size.
+	// This prevents the user prompt from firing when truncation would bring the output under
+	// the warning threshold anyway.
+	let results: Vec<crate::mcp::McpToolResult> = results
+		.into_iter()
+		.map(|mut result| {
+			let content_str = format!("{}", result.result);
+			let (truncated, was_truncated) = crate::utils::truncation::truncate_mcp_response_global(
+				&content_str,
+				config.mcp_response_tokens_threshold,
+			);
+			if was_truncated {
+				result.result = serde_json::Value::String(truncated);
+			}
+			result
+		})
+		.collect();
+
+	// Find large results (checked AFTER truncation)
 	let mut large_indices = Vec::new();
 	let mut total_tokens = 0;
 

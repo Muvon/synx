@@ -87,10 +87,21 @@ pub async fn process_tool_results(
 		let tool_content = extract_tool_content(tool_result);
 
 		// Apply global MCP response token truncation before adding to session
-		let tool_content = crate::utils::truncation::truncate_mcp_response_global(
+		let (tool_content, was_truncated) = crate::utils::truncation::truncate_mcp_response_global(
 			&tool_content,
 			config.mcp_response_tokens_threshold,
 		);
+		if was_truncated {
+			use colored::Colorize;
+			eprintln!(
+				"{}",
+				format!(
+					"⚠️  Tool '{}' response truncated to {} tokens (mcp_response_tokens_threshold)",
+					tool_result.tool_name, config.mcp_response_tokens_threshold
+				)
+				.bright_yellow()
+			);
+		}
 
 		// PERFORMANCE OPTIMIZATION: Check size before moving content
 		let content_size = tool_content.len();
