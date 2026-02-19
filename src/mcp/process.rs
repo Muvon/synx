@@ -926,10 +926,10 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 	// Clone the token to avoid complex reference types in async block
 	let cancellation_token_clone = cancellation_token.clone();
 	let cancellation_future = async move {
-		if let Some(token) = cancellation_token_clone {
-			loop {
-				tokio::time::sleep(Duration::from_millis(10)).await; // Much faster polling
-				if *token.borrow() {
+		if let Some(mut token) = cancellation_token_clone {
+			// Zero-CPU wait: watch::Receiver::changed() sleeps until the value changes
+			while !*token.borrow() {
+				if token.changed().await.is_err() {
 					break;
 				}
 			}
