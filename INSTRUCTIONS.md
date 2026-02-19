@@ -1,172 +1,116 @@
 # Octomind Developer Guide
 
-**Session-based AI development assistant with MCP tools and multi-provider support.**
+Octomind is a session-based AI development assistant written in Rust. Users run interactive chat sessions with MCP tools attached; the AI can call those tools to read/write files, search code, run shell commands, browse the web, and delegate to sub-agents (layers). Multiple AI providers are supported via [octolib](https://github.com/muvon/octolib).
 
-## Quick Start
+## Architecture Overview
 
-```bash
-git clone https://github.com/muvon/octomind.git && cd octomind
-export OPENROUTER_API_KEY="your_key_here"  # or OPENAI_API_KEY, ANTHROPIC_API_KEY
-cargo check --message-format=short         # Fast syntax check (PREFERRED)
-cargo clippy --all-features --all-targets -- -D warnings  # Fix all warnings
-cargo build                                # Build when you need the binary
-./target/debug/octomind session            # Start first session
+```
+CLI / WebSocket
+      │
+      ▼
+ ChatSession          ← src/session/chat/session/  (core.rs, main_loop.rs)
+      │
+      ├── Roles       ← src/config/roles.rs         (model, system prompt, MCP servers per role)
+      ├── Layers      ← src/session/layers/          (chained AI sub-agents, run after each response)
+      ├── Workflows   ← src/session/workflows/       (multi-step orchestrated task runners)
+      ├── Continuation← src/session/chat/continuation/ (auto-reset when token limit hit)
+      │
+      └── MCP servers ← src/mcp/
+            ├── dev/      shell, ast_grep, plan
+            ├── fs/       text_editor, list_files, batch_edit, extract_lines
+            ├── web/      web_search, read_html, image/video/news search
+            └── agent/    agent_* tools → route tasks to configured layers
 ```
 
-**Essential session commands:** `/help`, `/info`, `/mcp info`, `/role`, `/model`
+**Config is the single source of truth.** All defaults live in `config-templates/default.toml`. The resolved config drives everything: which model, which MCP servers, which layers, which role. No hardcoded values anywhere in code.
 
-**Daily dev cycle:**
+## Where to Look
+
+| Area | Entry point |
+|------|-------------|
+| Config defaults | `config-templates/default.toml` |
+| Config loading & types | `src/config/loading.rs`, `src/config/mod.rs` |
+| Roles (model + MCP per role) | `src/config/roles.rs` |
+| MCP server config | `src/config/mcp.rs` |
+| Layers config | `src/config/layers.rs` |
+| Session init & state | `src/session/chat/session/core.rs` |
+| Session main loop | `src/session/chat/session/main_loop.rs` |
+| Session commands (`/role`, `/model` …) | `src/session/chat/session/commands/` |
+| Continuation (token-limit auto-reset) | `src/session/chat/continuation/` |
+| Response processing | `src/session/chat/response/` |
+| Layers runtime | `src/session/layers/layer_trait.rs`, `processor.rs` |
+| Workflows | `src/session/workflows/orchestrator.rs` |
+| MCP tool routing | `src/mcp/mod.rs` → `try_execute_tool_call()` |
+| MCP tool registry | `src/mcp/tool_map.rs` |
+| MCP tool definitions | `src/mcp/*/functions.rs` → `get_all_functions()` |
+| AI provider bridge | `src/providers.rs` (thin wrapper over octolib) |
+| File read/write helpers | `src/utils/file_parser.rs`, `src/utils/file_renderer.rs` |
+
+## Code Quality Rules
+
+**Build & lint — run after every change:**
 ```bash
-cargo check --message-format=short    # Verify syntax
-cargo clippy --all-features --all-targets -- -D warnings  # Fix quality
-cargo build                           # Build when needed
-# NEVER: cargo build --release (too slow)
+cargo check --message-format=short                            # fast syntax check
+cargo clippy --all-features --all-targets -- -D warnings      # must pass clean
+cargo build                                                   # debug only — never --release
 ```
 
-## Core Principles
-
-- **Session-first**: Everything in interactive AI sessions with MCP tools
-- **Template-based config**: All defaults in `config-templates/default.toml`, NO hardcoded values
-- **MCP compliance**: Tools return `Ok(McpToolResult::error())` for failures, never `Err()`
-- **Fail fast**: Use `.expect()` with clear messages, never hide errors with fallbacks
-- **Proper logging**: Use `crate::log_debug!()`, never `println!()`
-
-## Where to Look by Task
-
-| Task | Location |
-|------|----------|
-| Config issues | `config-templates/default.toml`, `src/config/loading.rs`, `src/config/mod.rs` |
-| Roles | `src/config/roles.rs` + template `[[roles]]` |
-| MCP servers | `src/config/mcp.rs` + template `[[mcp.servers]]` |
-| Layers | `src/session/layers/` + template `[[layers]]` |
-| Session behavior | `src/session/chat/session/main_loop.rs`, `src/session/chat/session/core.rs`, `src/session/chat/session/commands/` |
-| Continuation | `src/session/chat/continuation/` (modular: detection, injection, processing, file_context, constants) |
-| MCP tools | `src/mcp/mod.rs` (routing), `src/mcp/*/functions.rs` (definitions), `src/mcp/*/core.rs` (implementations) |
-| Providers | `src/providers.rs` (octolib bridge) |
-| Workflows | `src/session/workflows/`, `doc/10-workflows.md` |
-| File utilities | `src/utils/file_parser.rs`, `src/utils/file_renderer.rs` |
-
-## Critical Patterns
-
-### MCP Tool Error Handling
+**Errors — fail fast, never hide:**
 ```rust
-// ✅ CORRECT - MCP-compliant parameter validation
+// ✅ expose problems immediately
+let config = load_config().expect("failed to load config");
+
+// ❌ hides real problems
+let config = load_config().unwrap_or_else(|_| default_config());
+```
+
+**Logging — never println in library code:**
+```rust
+crate::log_debug!("something happened");   // ✅
+println!("DEBUG: ...");                    // ❌ — breaks spinner, wrong output path
+```
+
+**MCP tools — errors are values, not panics:**
+```rust
+// Parameter validation
 let param = match call.parameters.get("param") {
     Some(Value::String(p)) if !p.trim().is_empty() => p.clone(),
     Some(_) => return Ok(McpToolResult::error(call.tool_name.clone(), call.tool_id.clone(), "must be string".to_string())),
-    None => return Ok(McpToolResult::error(call.tool_name.clone(), call.tool_id.clone(), "missing param".to_string())),
+    None    => return Ok(McpToolResult::error(call.tool_name.clone(), call.tool_id.clone(), "missing param".to_string())),
 };
 
-// ✅ CORRECT - MCP-compliant routing
-match tool::execute_command(call, token).await {
-    Ok(mut result) => { result.tool_id = call.tool_id.clone(); Ok(result) }
-    Err(e) => Ok(McpToolResult::error(call.tool_name.clone(), call.tool_id.clone(), format!("failed: {}", e)))
+// Routing — wrap Err, never propagate
+match tool::execute(call).await {
+    Ok(mut r) => { r.tool_id = call.tool_id.clone(); Ok(r) }
+    Err(e)    => Ok(McpToolResult::error(call.tool_name.clone(), call.tool_id.clone(), format!("failed: {e}")))
 }
 ```
 
-### Fail Fast on Errors
+**MCP misuse hints — guide the model toward better tools:**
+When a tool is used where a dedicated tool would be better, append a hint to the output. Never block execution. Only emit if the recommended tool is actually enabled.
 ```rust
-// ❌ BAD - hides real problems
-let config = load_config().unwrap_or_else(|_| default_config());
-
-// ✅ GOOD - exposes problems immediately
-let config = load_config().expect("CRITICAL: Failed to load config");
+let hint = if crate::mcp::tool_map::get_server_for_tool("better_tool").is_some() {
+    "\n\n⚠️ Prefer `better_tool` here — reason."
+} else { "" };
 ```
+Reference: `src/mcp/dev/shell.rs` (`SHELL_MISUSE_HINTS`), `src/mcp/fs/text_editing.rs` (str_replace → line_replace hint).
 
-### Proper Logging
-```rust
-// ❌ BAD
-println!("DEBUG: something happened");
+## Adding a New MCP Tool
 
-// ✅ GOOD
-crate::log_debug!("Something happened");
-```
-
-## Debugging
-
-**Tool not working:**
-1. Check routing: `src/mcp/mod.rs` → `build_tool_server_map()`
-2. Check execution: `src/mcp/mod.rs` → `try_execute_tool_call()`
-3. Verify `McpToolResult::error()` returns (not `Err()`)
-
-**Configuration not loading:**
-- `octomind config --validate`
-- Check `OCTOMIND_*` env overrides
-- `src/config/loading.rs` → `load()`
-
-**Session commands failing:**
-- `src/session/chat/session/commands/mod.rs`
-
-**Debug commands:**
-```bash
-/loglevel debug                              # Enable debug logging
-/mcp info                                    # Server status
-/mcp list                                    # Available tools
-octomind config --show                       # Current config
-```
-
-## Adding New MCP Tool
-
-1. Define function in `src/mcp/*/functions.rs` → `get_all_functions()`
-2. Implement in `src/mcp/*/core.rs` with MCP-compliant validation
+1. Define in `src/mcp/*/functions.rs` → `get_all_functions()`
+2. Implement in the same module
 3. Route in `src/mcp/mod.rs` → `try_execute_tool_call()`
-4. Map in `src/mcp/tool_map.rs`
-5. **CRITICAL**: Return `Ok(McpToolResult::error())` for all failures
+4. Register in `src/mcp/tool_map.rs`
+5. Return `Ok(McpToolResult::error())` for all failures — never `Err()`
+6. Add misuse hints if a more specific tool should be preferred
 
-## Project Structure (Key Files Only)
+## Debugging Starting Points
 
-```
-src/
-├── config/          # Config loading, validation, types
-├── session/
-│   ├── chat/        # Session logic, commands, response processing
-│   │   ├── continuation/  # Modular continuation system
-│   │   └── session/       # Core session runner
-│   ├── layers/      # Layered AI processing
-│   ├── cache.rs     # 2-marker caching
-│   └── cost_tracker.rs
-├── mcp/
-│   ├── mod.rs       # Tool routing & execution
-│   ├── tool_map.rs  # Static tool→server mapping
-│   ├── dev/         # shell, ast_grep
-│   ├── fs/          # text_editor, list_files
-│   ├── web/         # web_search, read_html
-│   └── agent/       # agent_<name> tools (route to layers)
-├── providers/mod.rs # octolib bridge
-└── utils/           # file_parser, file_renderer
-config-templates/default.toml  # ALL defaults
-```
-
-## Commands Quick Reference
-
-| CLI Command | Description |
-|-------------|-------------|
-| `octomind config` | Generate default config |
-| `octomind session` | Start interactive session |
-| `octomind run <layer> "task"` | Execute layer directly |
-| `octomind server` | Start WebSocket server |
-
-| Session Command | Description |
-|-----------------|-------------|
-| `/help` | Show commands |
-| `/info` | Token usage & costs |
-| `/mcp info` | MCP server status |
-| `/role [name]` | View/change role |
-| `/model [name]` | View/change model |
-| `/truncate` | Reduce context |
-| `/loglevel debug` | Enable debug logging |
-
-## Environment Variables
-
-**AI Keys:** `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `BRAVE_API_KEY`
-
-**Config Overrides:** `OCTOMIND_*` (any config value, nested with `__` for sections)
-```bash
-export OCTOMIND_MODEL="openrouter:anthropic/claude-sonnet-4"
-export OCTOMIND_LOG_LEVEL="debug"
-export OCTOMIND_ROLES__DEVELOPER__MODEL="openai:gpt-4o"
-```
-
-## Model Format
-**Always use:** `provider:model` (e.g., `openrouter:anthropic/claude-sonnet-4`)
-**Never:** just `claude-sonnet-4`
+| Problem | Where to start |
+|---------|----------------|
+| Tool not routing | `src/mcp/mod.rs` → `build_tool_server_map()`, `try_execute_tool_call()` |
+| Tool not found | `src/mcp/tool_map.rs` |
+| Config not loading | `src/config/loading.rs` → `load()` |
+| Session command broken | `src/session/chat/session/commands/mod.rs` |
+| Layer not running | `src/session/layers/processor.rs` |
+| Continuation not triggering | `src/session/chat/continuation/detection.rs` |
