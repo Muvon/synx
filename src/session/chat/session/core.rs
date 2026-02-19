@@ -833,7 +833,7 @@ impl ChatSession {
 	/// # Returns
 	/// Tuple of (messages_removed, had_cached_messages)
 	/// - messages_removed: Number of messages actually removed
-	/// - had_cached_messages: True if any removed message had cached=true (for cache preservation)
+	/// - had_cached_messages: True if any removed message had cached=true (informational only)
 	///
 	/// # Example
 	///
@@ -910,21 +910,19 @@ impl ChatSession {
 		Ok((messages_to_remove, had_cached))
 	}
 
-	/// Insert compressed knowledge entry as system message
+	/// Insert compressed knowledge entry as assistant message
 	///
 	/// This injects a structured summary of completed work into the session history,
 	/// replacing the detailed tool calls and intermediate steps.
 	///
+	/// The compressed block is always marked `cached=true` — it is the new stable
+	/// cache boundary for Anthropic's 2-marker system. Any surviving marker at
+	/// `index` (start_idx kept message) remains untouched, giving us up to 2 markers.
+	///
 	/// # Arguments
-	/// * `index` - Position to insert (after this index)
+	/// * `index` - Position to insert after (the kept start_idx message)
 	/// * `content` - Formatted summary content
-	/// * `preserve_cache` - If true, mark compressed message as cached (preserves 2-marker system)
-	pub fn insert_compressed_knowledge(
-		&mut self,
-		index: usize,
-		content: String,
-		preserve_cache: bool,
-	) -> Result<()> {
+	pub fn insert_compressed_knowledge(&mut self, index: usize, content: String) -> Result<()> {
 		use crate::session::Message;
 
 		if index >= self.session.messages.len() {
@@ -936,13 +934,16 @@ impl ChatSession {
 		}
 
 		let compressed_msg = Message {
-			role: "assistant".to_string(), // AI-generated summary content
+			role: "assistant".to_string(),
 			content,
 			timestamp: std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
 				.as_secs(),
-			cached: preserve_cache, // Preserve cache marker if any removed message was cached (maintains 2-marker system)
+			// Always cache the compressed block — it is the new stable history boundary.
+			// If start_idx (index) also has cached=true, that becomes marker #1 and this
+			// becomes marker #2, which is the ideal 2-marker layout for Anthropic caching.
+			cached: true,
 			tool_call_id: None,
 			name: Some("plan_compression".to_string()),
 			tool_calls: None,
@@ -955,9 +956,8 @@ impl ChatSession {
 		self.session.messages.insert(index + 1, compressed_msg);
 
 		crate::log_debug!(
-			"Inserted compressed knowledge at index {} (cached={})",
-			index + 1,
-			preserve_cache
+			"Inserted compressed knowledge at index {} (cached=true)",
+			index + 1
 		);
 
 		Ok(())
@@ -1124,5 +1124,290 @@ impl ChatSession {
 	/// Invalidate tool cache (call when MCP configuration changes)
 	pub fn invalidate_tool_cache(&mut self) {
 		self.cached_tools = None;
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::session::{Message, Session, SessionInfo};
+
+	/// Build a minimal ChatSession with the given messages for testing compression primitives.
+	/// No config, no async, no providers needed.
+	fn make_session(messages: Vec<Message>) -> ChatSession {
+		let info = SessionInfo {
+			name: "test".to_string(),
+			model: "claude-3-5-sonnet".to_string(),
+			..Default::default()
+		};
+		ChatSession {
+			session: Session {
+				info,
+				messages,
+				session_file: None,
+			},
+			last_response: String::new(),
+			model: "claude-3-5-sonnet".to_string(),
+			role: "developer".to_string(),
+			temperature: 0.7,
+			top_p: 1.0,
+			top_k: 0,
+			max_tokens: 4096,
+			estimated_cost: 0.0,
+			cache_next_user_message: false,
+			spending_threshold_checkpoint: 0.0,
+			request_spending_checkpoint: 0.0,
+			pending_image: None,
+			pending_video: None,
+			max_retries: 0,
+			continuation_pending: false,
+			continuation_disabled: false,
+			was_resumed: false,
+			pending_prompt: None,
+			initial_status_shown: false,
+			compression_hint_count: 0,
+			last_compression_hint_shown: 0,
+			cached_tools: None,
+			first_prompt_idx: None,
+		}
+	}
+
+	fn msg(role: &str, cached: bool) -> Message {
+		Message {
+			role: role.to_string(),
+			cached,
+			..Default::default()
+		}
+	}
+
+	/// Collect indices of all content-cached messages (user/assistant/tool with cached=true).
+	/// System markers are excluded — they are managed separately and never touched by compression.
+	fn content_cache_indices(session: &ChatSession) -> Vec<usize> {
+		session
+			.session
+			.messages
+			.iter()
+			.enumerate()
+			.filter(|(_, m)| m.cached && m.role != "system")
+			.map(|(i, _)| i)
+			.collect()
+	}
+
+	// ── Case 1: no cache markers anywhere ────────────────────────────────────────
+	// Compressed block must always get cached=true (new stable boundary).
+	#[test]
+	fn case1_no_markers_compressed_block_gets_cached() {
+		// idx: 0=system, 1=user(start), 2=assistant, 3=user, 4=assistant(end), 5..8=preserved
+		let messages = vec![
+			msg("system", false),
+			msg("user", false), // start_idx=1 (kept)
+			msg("assistant", false),
+			msg("user", false),
+			msg("assistant", false), // end_idx=4
+			msg("user", false),
+			msg("assistant", false),
+			msg("user", false),
+			msg("assistant", false),
+		];
+		let mut cs = make_session(messages);
+
+		let (_, had_cached) = cs.remove_messages_in_range(1, 4).unwrap();
+		assert!(!had_cached);
+		cs.insert_compressed_knowledge(1, "summary".to_string())
+			.unwrap();
+
+		let markers = content_cache_indices(&cs);
+		// Compressed block is at idx 2 (inserted after start_idx=1)
+		assert_eq!(
+			markers,
+			vec![2],
+			"compressed block must always be cached=true"
+		);
+	}
+
+	// ── Case 2: one marker inside the range ──────────────────────────────────────
+	// Marker is removed with the range. Compressed block should get cached=true.
+	// No second marker needed — preserved zone will get one via normal auto-cache.
+	#[test]
+	fn case2_one_marker_inside_range_compressed_block_gets_cached() {
+		// idx: 0=system, 1=user(start), 2=assistant, 3=user(cached!), 4=assistant(end), 5..8=preserved
+		let messages = vec![
+			msg("system", false),
+			msg("user", false), // start_idx=1 (kept)
+			msg("assistant", false),
+			msg("user", true),       // marker #1 — inside range, will be removed
+			msg("assistant", false), // end_idx=4
+			msg("user", false),
+			msg("assistant", false),
+			msg("user", false),
+			msg("assistant", false),
+		];
+		let mut cs = make_session(messages);
+
+		let (_, had_cached) = cs.remove_messages_in_range(1, 4).unwrap();
+		assert!(had_cached, "should detect the removed marker");
+		cs.insert_compressed_knowledge(1, "summary".to_string())
+			.unwrap();
+
+		let markers = content_cache_indices(&cs);
+		assert_eq!(markers, vec![2], "compressed block must be cached=true");
+	}
+
+	// ── Case 3: two markers both inside the range ─────────────────────────────────
+	// Both removed. Compressed block gets cached=true — only 1 marker needed here;
+	// the second slot will be filled by normal auto-cache as the session progresses.
+	#[test]
+	fn case3_two_markers_inside_range_compressed_block_gets_cached() {
+		// idx: 0=system, 1=user(start), 2=user(cached!), 3=assistant, 4=user(cached!), 5=assistant(end), 6..9=preserved
+		let messages = vec![
+			msg("system", false),
+			msg("user", false), // start_idx=1 (kept)
+			msg("user", true),  // marker #1 — inside range
+			msg("assistant", false),
+			msg("user", true),       // marker #2 — inside range
+			msg("assistant", false), // end_idx=5
+			msg("user", false),
+			msg("assistant", false),
+			msg("user", false),
+			msg("assistant", false),
+		];
+		let mut cs = make_session(messages);
+
+		let (_, had_cached) = cs.remove_messages_in_range(1, 5).unwrap();
+		assert!(had_cached);
+		cs.insert_compressed_knowledge(1, "summary".to_string())
+			.unwrap();
+
+		let markers = content_cache_indices(&cs);
+		// Compressed block at idx 2. Only 1 marker — that's correct.
+		// (The second slot will be filled by normal auto-cache as session progresses.)
+		assert_eq!(markers, vec![2], "compressed block must be cached=true");
+	}
+
+	// ── Case 4: marker at start_idx (kept), one inside range ─────────────────────
+	// start_idx marker survives the drain (it is the kept message, not in drain range).
+	// Compressed block inserted after it gets cached=true → ideal 2-marker layout.
+	#[test]
+	fn case4_marker_at_start_idx_and_one_inside_both_survive_correctly() {
+		// idx: 0=system, 1=user(start,cached!), 2=assistant, 3=user(cached!), 4=assistant(end), 5..8=preserved
+		let messages = vec![
+			msg("system", false),
+			msg("user", true), // start_idx=1, marker #1 (KEPT — not in drain range)
+			msg("assistant", false),
+			msg("user", true),       // marker #2 — inside range, removed
+			msg("assistant", false), // end_idx=4
+			msg("user", false),
+			msg("assistant", false),
+			msg("user", false),
+			msg("assistant", false),
+		];
+		let mut cs = make_session(messages);
+
+		let (_, had_cached) = cs.remove_messages_in_range(1, 4).unwrap();
+		assert!(had_cached);
+		cs.insert_compressed_knowledge(1, "summary".to_string())
+			.unwrap();
+
+		let markers = content_cache_indices(&cs);
+		// start_idx=1 (user, cached=true) + compressed block at idx=2 (cached=true)
+		assert_eq!(
+			markers,
+			vec![1, 2],
+			"start_idx marker survives + compressed block gets cached"
+		);
+	}
+	// ── Case 5: marker at start_idx only, nothing inside range ───────────────────
+	// had_cached=false from remove, but compressed block must still get cached=true.
+	// Result: start_idx keeps marker (#1), compressed block gets marker (#2).
+	fn case5_marker_at_start_idx_only_compressed_block_must_get_cached() {
+		// idx: 0=system, 1=user(start,cached!), 2=assistant, 3=user, 4=assistant(end), 5..8=preserved
+		let messages = vec![
+			msg("system", false),
+			msg("user", true), // start_idx=1, marker #1 (KEPT)
+			msg("assistant", false),
+			msg("user", false),
+			msg("assistant", false), // end_idx=4
+			msg("user", false),
+			msg("assistant", false),
+			msg("user", false),
+			msg("assistant", false),
+		];
+		let mut cs = make_session(messages);
+
+		let (_, had_cached) = cs.remove_messages_in_range(1, 4).unwrap();
+		assert!(!had_cached, "nothing inside range was cached");
+		// BUG (current): insert with had_cached=false → compressed block cached=false
+		// CORRECT: always cached=true
+		cs.insert_compressed_knowledge(1, "summary".to_string())
+			.unwrap();
+
+		let markers = content_cache_indices(&cs);
+		assert_eq!(
+			markers,
+			vec![1, 2],
+			"start_idx marker + compressed block both cached"
+		);
+	}
+
+	// ── Case 6: marker in preserved zone (after end_idx) — untouched ─────────────
+	// Compression should not disturb markers that are beyond the compressed range.
+	#[test]
+	fn case6_marker_in_preserved_zone_stays_untouched() {
+		// idx: 0=system, 1=user(start), 2=assistant, 3=user(end), 4=user, 5=assistant, 6=user(cached!), 7=assistant
+		let messages = vec![
+			msg("system", false),
+			msg("user", false), // start_idx=1 (kept)
+			msg("assistant", false),
+			msg("user", false), // end_idx=3
+			msg("user", false), // preserved zone starts
+			msg("assistant", false),
+			msg("user", true), // marker in preserved zone
+			msg("assistant", false),
+		];
+		let mut cs = make_session(messages);
+
+		let (_, had_cached) = cs.remove_messages_in_range(1, 3).unwrap();
+		assert!(!had_cached);
+		cs.insert_compressed_knowledge(1, "summary".to_string())
+			.unwrap();
+
+		let markers = content_cache_indices(&cs);
+		// Compressed block at idx 2 (cached=true) + preserved zone marker shifted to idx 5
+		assert!(markers.contains(&2), "compressed block must be cached");
+		// The preserved zone marker should still exist somewhere after the compressed block
+		let preserved_marker_exists = cs.session.messages[3..]
+			.iter()
+			.any(|m| m.cached && m.role != "system");
+		assert!(
+			preserved_marker_exists,
+			"preserved zone marker must survive untouched"
+		);
+	}
+
+	// ── Case 7: system marker never touched ──────────────────────────────────────
+	// System message cached=true must never be affected by compression.
+	#[test]
+	fn case7_system_marker_never_touched_by_compression() {
+		let messages = vec![
+			msg("system", true), // system marker — must never change
+			msg("user", false),  // start_idx=1 (kept)
+			msg("assistant", false),
+			msg("user", true),       // content marker inside range
+			msg("assistant", false), // end_idx=4
+			msg("user", false),
+			msg("assistant", false),
+			msg("user", false),
+			msg("assistant", false),
+		];
+		let mut cs = make_session(messages);
+
+		let (_, _) = cs.remove_messages_in_range(1, 4).unwrap();
+		cs.insert_compressed_knowledge(1, "summary".to_string())
+			.unwrap();
+
+		assert!(
+			cs.session.messages[0].cached,
+			"system marker must remain cached=true"
+		);
 	}
 }

@@ -1008,10 +1008,10 @@ async fn apply_compression(
 	let tokens_after = estimate_tokens(&compressed_entry) as u64;
 
 	// Remove messages in range
-	let (messages_removed, had_cached) = session.remove_messages_in_range(start_idx, end_idx)?;
+	let (messages_removed, _) = session.remove_messages_in_range(start_idx, end_idx)?;
 
-	// Insert compressed summary (preserve cache if any removed message was cached)
-	session.insert_compressed_knowledge(start_idx, compressed_entry, had_cached)?;
+	// Insert compressed summary (compressed block is always cached=true — new stable boundary)
+	session.insert_compressed_knowledge(start_idx, compressed_entry)?;
 
 	// Calculate metrics
 	let tokens_saved = tokens_before.saturating_sub(tokens_after);
