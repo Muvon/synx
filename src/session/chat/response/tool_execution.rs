@@ -312,9 +312,11 @@ async fn execute_tools_with_context(
 								&tool_name,
 								&error,
 								tool_index,
-								is_single_tool,
+								config,
 								mode,
-							);
+								context.execution_context(),
+							)
+							.await;
 
 						// Still push the result for conversation continuity (AI needs to see the error)
 						tool_results.push(res.clone());
@@ -379,9 +381,11 @@ async fn execute_tools_with_context(
 							&tool_name,
 							&e,
 							tool_index,
-							is_single_tool,
+							config,
 							mode,
-						);
+							context.execution_context(),
+						)
+						.await;
 
 					// Track errors for this tool (if error tracking is available)
 					let loop_detected = if let Some(error_tracker) = context.error_tracker() {
@@ -464,9 +468,11 @@ async fn execute_tools_with_context(
 						&tool_name,
 						&anyhow::anyhow!("{}", e),
 						tool_index,
-						is_single_tool,
+						config,
 						mode,
-					);
+						context.execution_context(),
+					)
+					.await;
 
 					// Show task error status
 					if !mode.should_suppress_cli_output() {
@@ -819,35 +825,29 @@ async fn display_tool_success(
 }
 
 // Display tool error in consolidated format
-fn display_tool_error(
+async fn display_tool_error(
 	stored_tool_call: &Option<crate::mcp::McpToolCall>,
 	tool_name: &str,
 	error: &anyhow::Error,
 	tool_index: usize,
-	is_single_tool: bool,
+	config: &Config,
 	mode: OutputMode,
+	execution_context: Option<String>,
 ) {
 	if mode.should_suppress_cli_output() {
 		return;
 	}
 
-	// For multiple tools: show header again with index
-	// For single tool: skip header (already shown upfront)
-	if !is_single_tool {
-		if let Some(tool_call) = stored_tool_call {
-			let category = crate::mcp::guess_tool_category(&tool_call.tool_name);
-			let title = format!(
-				" [{}] {} | {} ",
-				tool_index,
-				tool_call.tool_name.bright_cyan(),
-				category.bright_blue()
-			);
-			let separator_length = 70.max(title.len() + 4);
-			let dashes = "─".repeat(separator_length - title.len());
-			let separator = format!("──{}{}──", title, dashes.dimmed());
-			println!("{}", separator);
-		}
-	}
+	// Always show header with parameters — same as success path.
+	// On error the upfront header was shown without parameters, so we must re-show it here.
+	crate::session::chat::tool_display::display_individual_tool_header_with_context(
+		tool_name,
+		stored_tool_call,
+		config,
+		tool_index,
+		execution_context.as_deref(),
+	)
+	.await;
 
 	// Show error status
 	println!("✗ Tool '{}' failed: {}", tool_name, error);
