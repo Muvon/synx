@@ -1319,6 +1319,7 @@ mod tests {
 	// ── Case 5: marker at start_idx only, nothing inside range ───────────────────
 	// had_cached=false from remove, but compressed block must still get cached=true.
 	// Result: start_idx keeps marker (#1), compressed block gets marker (#2).
+	#[test]
 	fn case5_marker_at_start_idx_only_compressed_block_must_get_cached() {
 		// idx: 0=system, 1=user(start,cached!), 2=assistant, 3=user, 4=assistant(end), 5..8=preserved
 		let messages = vec![
