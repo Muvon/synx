@@ -24,6 +24,7 @@ use std::sync::{Arc, RwLock};
 use uuid;
 
 // Modules
+pub mod hint_accumulator;
 pub mod tool_map;
 
 // Cache for internal server function definitions (static during session)

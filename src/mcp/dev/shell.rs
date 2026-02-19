@@ -249,11 +249,10 @@ pub async fn execute_shell_command(call: &McpToolCall) -> Result<McpToolResult> 
 			let status_code = output.status.code().unwrap_or(-1);
 			let success = output.status.success();
 
-			// Append tool-hint warning if the command could have used a dedicated MCP tool
-			let final_output = match detect_shell_misuse(&command) {
-				Some(hint) => format!("{final_output}\n\n{hint}"),
-				None => final_output,
-			};
+			// Push misuse hint into accumulator — injected as a user message after all tools finish
+			if let Some(hint) = detect_shell_misuse(&command) {
+				crate::mcp::hint_accumulator::push_hint(hint);
+			}
 
 			// MCP Protocol Compliance: Use error() for failed commands, success() for successful ones
 			if success {

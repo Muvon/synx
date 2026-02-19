@@ -473,6 +473,26 @@ pub async fn process_tool_results(
 		return Ok(None);
 	}
 
+	// Inject accumulated tool-misuse hints as a user message so the AI sees guidance
+	// without polluting individual tool result strings. Hints are deduplicated across
+	// all parallel tool calls in this round and cleared after injection.
+	let hints = crate::mcp::hint_accumulator::drain_hints();
+	if !hints.is_empty() {
+		let bullet_list = hints
+			.iter()
+			.map(|h| format!("• {h}"))
+			.collect::<Vec<_>>()
+			.join("\n");
+		let hint_message = format!(
+			"⚠️ Tool usage notice:\n{bullet_list}\n\nPlease prefer the recommended tools going forward."
+		);
+		chat_session.session.messages.push(crate::session::Message {
+			role: "user".to_string(),
+			content: hint_message,
+			..Default::default()
+		});
+	}
+
 	// Make follow-up API call
 	let follow_up_result =
 		make_follow_up_api_call(chat_session, config, operation_cancelled.clone()).await;

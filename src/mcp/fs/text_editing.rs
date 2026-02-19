@@ -313,24 +313,20 @@ pub async fn str_replace_spec(
 		crate::log_debug!("Failed to check line count change: {}", e);
 	}
 
-	// Hint: if old_text spans multiple lines, line_replace is the better tool
+	// Push hint into accumulator if str_replace matched multiple lines — line_replace is better
 	let line_count = old_text.lines().count();
-	let hint = if line_count > 1
-		&& crate::mcp::tool_map::get_server_for_tool("text_editor").is_some()
-	{
-		format!(
-			"\n\n⚠️ `str_replace` matched {} lines. Prefer `line_replace` when you know the line range — it's faster and avoids content-search ambiguity.",
+	if line_count > 1 && crate::mcp::tool_map::get_server_for_tool("text_editor").is_some() {
+		crate::mcp::hint_accumulator::push_hint(&format!(
+			"`str_replace` matched {} lines. Prefer `line_replace` when you know the line range — it's faster and avoids content-search ambiguity.",
 			line_count
-		)
-	} else {
-		String::new()
-	};
+		));
+	}
 
 	Ok(McpToolResult {
 		tool_name: "text_editor".to_string(),
 		tool_id: call.tool_id.clone(),
 		result: json!({
-			"content": format!("Successfully replaced text at exactly one location.{hint}"),
+			"content": "Successfully replaced text at exactly one location.",
 			"path": path.to_string_lossy()
 		}),
 	})
