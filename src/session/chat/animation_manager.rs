@@ -26,7 +26,7 @@ use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 use tokio::task::JoinHandle;
 
 /// Shared animation state for dynamic updates
@@ -91,8 +91,8 @@ impl Default for AnimationState {
 pub struct AnimationManager {
 	/// Current animation task (if any)
 	current_task: Arc<std::sync::Mutex<Option<JoinHandle<()>>>>,
-	/// Cancellation flag for current animation
-	cancel_flag: Arc<AtomicBool>,
+	/// Notify used to wake the animation task instantly when stop_current() is called
+	cancel_notify: Arc<Notify>,
 	/// Shared animation state for dynamic updates
 	state: AnimationState,
 	/// Optional cancellation receiver from session (for instant Ctrl+C response)
@@ -108,7 +108,7 @@ impl AnimationManager {
 	pub fn new() -> Self {
 		Self {
 			current_task: Arc::new(std::sync::Mutex::new(None)),
-			cancel_flag: Arc::new(AtomicBool::new(false)),
+			cancel_notify: Arc::new(Notify::new()),
 			state: AnimationState::new(),
 			cancel_rx: Arc::new(std::sync::Mutex::new(None)),
 			suspended: Arc::new(AtomicBool::new(false)),
@@ -174,8 +174,8 @@ impl AnimationManager {
 
 	/// Stop current animation (if any)
 	pub async fn stop_current(&self) {
-		// Set cancellation flag - the tokio::select! will detect this instantly
-		self.cancel_flag.store(true, Ordering::SeqCst);
+		// Wake the animation task instantly — zero CPU, no busy-poll
+		self.cancel_notify.notify_one();
 
 		// Clear the cancellation receiver
 		self.clear_cancel_receiver();
@@ -190,9 +190,6 @@ impl AnimationManager {
 			// Wait for graceful shutdown - cleanup code will run
 			let _ = task.await;
 		}
-
-		// Reset cancellation flag for next animation
-		self.cancel_flag.store(false, Ordering::SeqCst);
 	}
 	/// Start new animation (stops any existing animation first)
 	///
@@ -273,7 +270,7 @@ impl AnimationManager {
 	/// Internal animation start logic
 	async fn start_internal(&self) {
 		// Clone references for animation task
-		let cancel_flag = self.cancel_flag.clone();
+		let cancel_notify = self.cancel_notify.clone();
 		let current_task = self.current_task.clone();
 		let state = self.state.clone();
 		let cancel_rx = self.cancel_rx.lock().unwrap().clone();
@@ -285,11 +282,6 @@ impl AnimationManager {
 			let start_time = std::time::Instant::now();
 
 			'animation: loop {
-				// Check cancellation flags FIRST for instant response
-				if cancel_flag.load(Ordering::SeqCst) {
-					break 'animation;
-				}
-
 				// Check session cancellation receiver if available (INSTANT Ctrl+C response)
 				if let Some(ref rx) = cancel_rx {
 					if *rx.borrow() {
@@ -356,18 +348,15 @@ impl AnimationManager {
 					s.set_message(message);
 				}
 
-				// CRITICAL FIX: Use tokio::select! for INSTANT cancellation response
-				// This allows the animation to break immediately on Ctrl+C instead of waiting up to 100ms
 				tokio::select! {
 					// Sleep for animation update interval
 					_ = tokio::time::sleep(Duration::from_millis(100)) => {
 						// Normal sleep completed, continue loop
 					}
-					// INSTANT cancellation from session's watch channel
+					// INSTANT cancellation from session's watch channel (Ctrl+C)
 					_ = async {
 						if let Some(ref rx) = cancel_rx {
 							let mut rx_clone = rx.clone();
-							// Wait for cancellation signal
 							while !*rx_clone.borrow() {
 								if rx_clone.changed().await.is_err() {
 									break;
@@ -378,18 +367,11 @@ impl AnimationManager {
 							std::future::pending::<()>().await;
 						}
 					} => {
-						// Cancellation received - break immediately
 						log_debug!("Animation cancelled via session cancellation channel");
 						break 'animation;
 					}
-					// INSTANT cancellation from stop_current() call
-					_ = async {
-						while !cancel_flag.load(Ordering::SeqCst) {
-							tokio::task::yield_now().await;
-
-						}
-					} => {
-						// stop_current() was called - break immediately
+					// INSTANT cancellation from stop_current() — zero CPU, event-driven
+					_ = cancel_notify.notified() => {
 						log_debug!("Animation cancelled via stop_current()");
 						break 'animation;
 					}
