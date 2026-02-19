@@ -227,7 +227,7 @@ pub fn get_text_editor_function() -> McpFunction {
 				},
 				"path": {
 					"type": "string",
-					"description": "Absolute path to the file or directory (not used for view_many command)"
+					"description": "REQUIRED. Path to the file or directory to operate on. Must be provided for every command except view_many."
 				},
 				"paths": {
 					"type": "array",
