@@ -933,6 +933,30 @@ impl ChatSession {
 			));
 		}
 
+		// Enforce the 2-marker limit BEFORE inserting the compressed block.
+		// Count existing non-system content markers; if already at 2, evict the
+		// oldest one so the new compressed block can take its slot.  This prevents
+		// exceeding Anthropic's hard limit of 4 cache_control blocks per request
+		// (system + tools + 2 content markers).
+		const MAX_CONTENT_MARKERS: usize = 2;
+		let existing: Vec<usize> = self
+			.session
+			.messages
+			.iter()
+			.enumerate()
+			.filter(|(_, m)| m.cached && m.role != "system")
+			.map(|(i, _)| i)
+			.collect();
+
+		if existing.len() >= MAX_CONTENT_MARKERS {
+			// Evict the oldest marker to make room for the compressed block.
+			if let Some(oldest) = existing.first() {
+				if let Some(m) = self.session.messages.get_mut(*oldest) {
+					m.cached = false;
+				}
+			}
+		}
+
 		let compressed_msg = Message {
 			role: "assistant".to_string(),
 			content,
@@ -940,9 +964,8 @@ impl ChatSession {
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
 				.as_secs(),
-			// Always cache the compressed block — it is the new stable history boundary.
-			// If start_idx (index) also has cached=true, that becomes marker #1 and this
-			// becomes marker #2, which is the ideal 2-marker layout for Anthropic caching.
+			// The compressed block is the new stable history boundary — always cached.
+			// After the eviction above, total content markers stays at ≤ 2.
 			cached: true,
 			tool_call_id: None,
 			name: Some("plan_compression".to_string()),
@@ -1409,6 +1432,49 @@ mod tests {
 		assert!(
 			cs.session.messages[0].cached,
 			"system marker must remain cached=true"
+		);
+	}
+
+	// ── Case 8: two markers already in preserved zone ────────────────────────────
+	// This is the bug introduced in commit 659992f: insert_compressed_knowledge
+	// unconditionally sets cached=true on the compressed block even when 2 content
+	// markers already exist in the preserved zone.  That produces 3 content markers
+	// (system + tools + 3 content = 5 cache_control blocks) which Anthropic rejects
+	// with "A maximum of 4 blocks with cache_control may be provided. Found 5."
+	//
+	// Correct behaviour: when 2 content markers already exist outside the compressed
+	// range, the compressed block must NOT add a third one.  Instead it should evict
+	// the oldest surviving content marker so the total stays at ≤ 2.
+	#[test]
+	fn case8_two_markers_in_preserved_zone_compressed_block_must_not_exceed_two_content_markers() {
+		// idx: 0=system, 1=user(start), 2=assistant, 3=user(end),
+		//      4=user(cached!), 5=assistant, 6=user(cached!), 7=assistant  ← preserved zone
+		let messages = vec![
+			msg("system", false),
+			msg("user", false), // start_idx=1 (kept)
+			msg("assistant", false),
+			msg("user", false), // end_idx=3
+			msg("user", true),  // marker #1 in preserved zone
+			msg("assistant", false),
+			msg("user", true), // marker #2 in preserved zone
+			msg("assistant", false),
+		];
+		let mut cs = make_session(messages);
+
+		let (_, had_cached) = cs.remove_messages_in_range(1, 3).unwrap();
+		assert!(!had_cached, "nothing inside range was cached");
+		cs.insert_compressed_knowledge(1, "summary".to_string())
+			.unwrap();
+
+		// After compression the total number of non-system cached messages must be ≤ 2.
+		// Before the fix this was 3 (compressed block + 2 preserved markers), which
+		// causes Anthropic to reject the request.
+		let markers = content_cache_indices(&cs);
+		assert!(
+			markers.len() <= 2,
+			"must have at most 2 content cache markers after compression, got {}: {:?}",
+			markers.len(),
+			markers
 		);
 	}
 }
