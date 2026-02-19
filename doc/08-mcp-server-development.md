@@ -88,6 +88,30 @@ OAuth support is implemented in `src/config/oauth_config.rs` with:
 - **Automatic**: Tokens are managed automatically
 - **Standard**: Uses OAuth 2.1 standard with PKCE
 
+## Tool Misuse Hints
+
+When a tool can be misused in place of a better dedicated tool, append a hint to the output. This guides the model toward the right tool without blocking execution.
+
+**Rules:**
+- Gate on `crate::mcp::tool_map::get_server_for_tool("tool_name").is_some()` — never hint for disabled tools
+- Hint text starts with `⚠️`, names the preferred tool in backticks, explains why
+- Append to output, never block — the command still runs and returns its result
+- Keep hints to one line
+
+**Pattern:**
+```rust
+let hint = if crate::mcp::tool_map::get_server_for_tool("better_tool").is_some() {
+    "\n\n⚠️ Prefer `better_tool` for this use case — reason why it's better."
+} else {
+    ""
+};
+// Append hint to result content string
+```
+
+**Existing hints (reference implementations):**
+- `src/mcp/dev/shell.rs` — `SHELL_MISUSE_HINTS` table: warns on `cat/grep/find/sed` when dedicated tools are enabled
+- `src/mcp/fs/text_editing.rs` — `str_replace` hints `line_replace` when match spans multiple lines
+
 ## Step-by-Step Implementation
 
 1. Create server module structure (`src/mcp/<server_name>/`)
@@ -97,7 +121,8 @@ OAuth support is implemented in `src/config/oauth_config.rs` with:
 5. Add config-driven registration and allowed_tools patterns
 6. Validate parameters using MCP-compliant patterns
 7. Never add fallback or default tool logic for missing config
-8. See [src/mcp/*/functions.rs] for examples
+8. Add misuse hints if a more specific tool should be preferred (see above)
+9. See [src/mcp/*/functions.rs] for examples
 
 ### 2. Update Server Config Helper Methods
 

@@ -80,6 +80,53 @@ Examples:
 	}
 }
 
+// Each entry: (triggering programs, required tool name, hint message).
+// The hint is only shown when the recommended tool is actually enabled.
+static SHELL_MISUSE_HINTS: &[(&[&str], &str, &str)] = &[
+	(
+		&["cat", "head", "tail", "less", "more"],
+		"text_editor",
+		"⚠️ Prefer `text_editor` view for reading files (line-numbered, supports ranges). Use shell only when piping output.",
+	),
+	(
+		&["grep", "egrep", "fgrep", "rg"],
+		"ast_grep",
+		"⚠️ Prefer `ast_grep` for code search or `list_files` with content= for text search (.gitignore-aware). Use shell grep only for unsupported raw flags.",
+	),
+	(
+		&["find", "ls"],
+		"list_files",
+		"⚠️ Prefer `list_files` for directory listing (.gitignore-aware, pattern/content filtering). Use shell only for system paths outside the project.",
+	),
+	(
+		&["sed", "awk"],
+		"text_editor",
+		"⚠️ Prefer `text_editor` str_replace/line_replace for file edits (atomic, tracked). Use sed/awk only for stream transforms in pipelines.",
+	),
+];
+
+// Detect shell commands that should use a dedicated MCP tool instead.
+// Returns a hint only when the recommended tool is actually enabled in the current session.
+fn detect_shell_misuse(command: &str) -> Option<&'static str> {
+	let cmd = command.trim();
+
+	// Check if cmd is exactly `prog` or starts with `prog ` / `prog\t`
+	let is_prog = |prog: &str| -> bool {
+		cmd == prog || cmd.starts_with(&format!("{prog} ")) || cmd.starts_with(&format!("{prog}\t"))
+	};
+
+	for (progs, tool, hint) in SHELL_MISUSE_HINTS {
+		if progs.iter().any(|p| is_prog(p)) {
+			// Only warn if the recommended tool is actually available
+			if crate::mcp::tool_map::get_server_for_tool(tool).is_some() {
+				return Some(hint);
+			}
+		}
+	}
+
+	None
+}
+
 // Execute a shell command
 pub async fn execute_shell_command(call: &McpToolCall) -> Result<McpToolResult> {
 	use tokio::process::Command as TokioCommand;
@@ -201,6 +248,12 @@ pub async fn execute_shell_command(call: &McpToolCall) -> Result<McpToolResult> 
 			// Add detailed execution results including status code
 			let status_code = output.status.code().unwrap_or(-1);
 			let success = output.status.success();
+
+			// Append tool-hint warning if the command could have used a dedicated MCP tool
+			let final_output = match detect_shell_misuse(&command) {
+				Some(hint) => format!("{final_output}\n\n{hint}"),
+				None => final_output,
+			};
 
 			// MCP Protocol Compliance: Use error() for failed commands, success() for successful ones
 			if success {
