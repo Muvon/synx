@@ -79,6 +79,7 @@ pub async fn setup_and_initialize_session<T: std::fmt::Debug>(
 	};
 
 	// Extract session parameters
+	// Extract session parameters
 	let (
 		name,
 		resume,
@@ -89,6 +90,8 @@ pub async fn setup_and_initialize_session<T: std::fmt::Debug>(
 		role,
 		max_retries,
 		output_mode,
+		system_file,
+		instructions_file,
 	) = extract_session_params(args, config);
 
 	// Get role config for defaults
@@ -99,6 +102,24 @@ pub async fn setup_and_initialize_session<T: std::fmt::Debug>(
 
 	// Get the merged configuration for the specified role
 	let mut config_for_role = config.get_merged_config_for_role(&role);
+
+	// Apply CLI overrides directly into config_for_role — single injection point, no downstream changes
+	if let Some(ref path) = system_file {
+		match std::fs::read_to_string(path) {
+			Ok(content) => {
+				log_info!("Overriding system prompt from file: {}", path);
+				// Mutate the role entry so create_system_prompt picks it up via get_role_config()
+				if let Some(role_entry) = config_for_role.role_map.get_mut(&role) {
+					role_entry.config.system = content;
+				}
+			}
+			Err(e) => log_info!("Failed to read --system file {}: {}", path, e),
+		}
+	}
+	if let Some(ref path) = instructions_file {
+		// Use absolute path — Path::join with absolute path ignores the base, so existing logic works
+		config_for_role.custom_instructions_file_name = path.clone();
+	}
 
 	// Store output_mode in config for later use in main loop
 	config_for_role.runtime_output_mode = Some(output_mode.clone());

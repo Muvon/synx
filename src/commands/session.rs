@@ -51,6 +51,14 @@ pub struct SessionArgs {
 	/// Output mode: plain (default) or jsonl (JSON Lines format like WebSocket)
 	#[arg(long, default_value = "plain")]
 	pub mode: String,
+
+	/// Override system prompt with content from this file (runtime only, not saved)
+	#[arg(long)]
+	pub system: Option<String>,
+
+	/// Override instructions with content from this file (runtime only, not saved)
+	#[arg(long)]
+	pub instructions: Option<String>,
 }
 
 // No execute function here since it's handled directly by the session::chat module

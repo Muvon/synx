@@ -56,6 +56,14 @@ pub struct RunArgs {
 	/// Output format: plain (default) or jsonl (JSON Lines format like WebSocket)
 	#[arg(long = "format", default_value = "plain")]
 	pub mode: String,
+
+	/// Override system prompt with content from this file (runtime only, not saved)
+	#[arg(long)]
+	pub system: Option<String>,
+
+	/// Override instructions with content from this file (runtime only, not saved)
+	#[arg(long)]
+	pub instructions: Option<String>,
 }
 
 impl RunArgs {
@@ -71,6 +79,8 @@ impl RunArgs {
 			role: self.role.clone(),
 			max_retries: self.max_retries,
 			mode: self.mode.clone(),
+			system: self.system.clone(),
+			instructions: self.instructions.clone(),
 		}
 	}
 

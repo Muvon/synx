@@ -27,6 +27,8 @@ pub type SessionParams = (
 	String,         // role
 	Option<u32>,    // max_retries (None = use role config)
 	String,         // output_mode (plain or jsonl)
+	Option<String>, // system file path override
+	Option<String>, // instructions file path override
 );
 
 /// Generic session arguments that can be used by any caller (CLI, WebSocket, etc.)
@@ -158,6 +160,23 @@ pub fn extract_session_params<T: std::fmt::Debug>(args: &T, _config: &Config) ->
 	} else {
 		"plain".to_string()
 	};
+	// Get system file path override
+	let system_file = if args_str.contains("system: Some(\"") {
+		let start = args_str.find("system: Some(\"").unwrap() + 14;
+		let end = args_str[start..].find('"').unwrap() + start;
+		Some(args_str[start..end].to_string())
+	} else {
+		None
+	};
+
+	// Get instructions file path override
+	let instructions_file = if args_str.contains("instructions: Some(\"") {
+		let start = args_str.find("instructions: Some(\"").unwrap() + 20;
+		let end = args_str[start..].find('"').unwrap() + start;
+		Some(args_str[start..end].to_string())
+	} else {
+		None
+	};
 
 	(
 		name,
@@ -169,5 +188,7 @@ pub fn extract_session_params<T: std::fmt::Debug>(args: &T, _config: &Config) ->
 		role,
 		max_retries,
 		output_mode,
+		system_file,
+		instructions_file,
 	)
 }
