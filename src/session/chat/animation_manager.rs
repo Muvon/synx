@@ -276,7 +276,7 @@ impl AnimationManager {
 		*self.cancel_notify.lock().unwrap() = cancel_notify.clone();
 
 		// Clone references for animation task
-		let cancel_notify = cancel_notify;
+
 		let current_task = self.current_task.clone();
 		let state = self.state.clone();
 		let cancel_rx = self.cancel_rx.lock().unwrap().clone();
