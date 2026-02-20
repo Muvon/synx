@@ -349,6 +349,8 @@ pub async fn execute(args: &AskArgs, config: &Config) -> Result<()> {
 	// This ensures no tools are sent to the API
 	let mut clean_config = config.clone();
 	clean_config.mcp.servers.clear();
+	// ask is stateless — instructions file is a session-only concept, must not bleed in
+	clean_config.custom_instructions_file_name = String::new();
 
 	// Read file context once (validation already done)
 	let file_context = read_files_as_context(&args.files)?;
