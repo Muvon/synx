@@ -874,14 +874,21 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 							));
 						}
 
-						// Parse the line as JSON
-						let msg: Value = serde_json::from_str(&response_str).map_err(|e| {
-							anyhow::anyhow!(
-								"Failed to parse JSON response: {} (raw: {})",
-								e,
-								response_str
-							)
-						})?;
+						// Parse the line as JSON — non-JSON lines are spec violations (stdout noise).
+						// Warn and skip rather than hard-fail so badly-behaved servers still work.
+						let msg: Value = match serde_json::from_str(&response_str) {
+							Ok(v) => v,
+							Err(_) => {
+								let trimmed = response_str.trim();
+								if !trimmed.is_empty() {
+									eprintln!(
+										"⚠️  MCP '{}' prints: {}",
+										server_name_for_closure, trimmed
+									);
+								}
+								continue;
+							}
+						};
 
 						// JSON-RPC notifications have a "method" field but no "id".
 						// Forward them and keep reading for the real response.
