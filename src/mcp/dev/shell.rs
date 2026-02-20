@@ -32,10 +32,14 @@ Parameters:
 - `command`: The shell command to execute (required)
 - `background`: Run command in background and return PID instead of waiting for completion (default: false)
 
-**Working Directory:**
-All commands execute from the current working directory.
-NO `cd` command is required when you working with current project files.
-REMEMBER that each command you run has NO knowledge of previous runs, other context, or variables that were set BEFORE in another command.
+**Important**: Each shell command runs in its own process in current working directory. Things like directory changes or
+sourcing files do not persist between tool calls. So you may need to repeat them each time by
+stringing together commands, e.g. `cd example && ls` or `source env/bin/activate && pip install numpy`
+
+**Important**: Use ripgrep - `rg` - when you need to locate a file or a code reference, other solutions
+may show ignored or hidden files. For example *do not* use `find` or `ls -r`
+- List files by name: `rg --files | rg <filename>`
+- List files that contain a regex: `rg '<regex>' -l`
 
 **Output Truncation:**
 Output size is controlled by global mcp_response_tokens_threshold setting.
@@ -47,15 +51,6 @@ When `background` is true, the command runs in the background and returns immedi
 Background processes continue running until explicitly killed or the main application exits.
 Use the returned PID with `kill <pid>` command to terminate background processes.
 NO need to append `&` to your command when using `background: true` - this is handled automatically.
-
-**Important**: Each shell command runs in its own process. Things like directory changes or
-sourcing files do not persist between tool calls. So you may need to repeat them each time by
-stringing together commands, e.g. `cd example && ls` or `source env/bin/activate && pip install numpy`
-
-**Important**: Use ripgrep - `rg` - when you need to locate a file or a code reference, other solutions
-may show ignored or hidden files. For example *do not* use `find` or `ls -r`
-- List files by name: `rg --files | rg <filename>`
-- List files that contain a regex: `rg '<regex>' -l`
 
 Examples:
 - Foreground: `{\"command\": \"ls -la\"}`
