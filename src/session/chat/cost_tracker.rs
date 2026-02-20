@@ -39,6 +39,12 @@ impl CostTracker {
 				chat_session.session.info.total_api_time_ms += api_time_ms;
 			}
 
+			// Every exchange with usage data = one completed API call.
+			// This is the single authoritative increment point for the initial call path
+			// (api_executor → CostTracker). Follow-up calls go through messages.rs which
+			// also increments here via add_assistant_message, so both paths are covered.
+			chat_session.session.info.total_api_calls += 1;
+
 			// Update session token counts using cache manager
 			let cache_manager = crate::session::cache::CacheManager::new();
 			cache_manager.update_token_tracking(
