@@ -80,7 +80,7 @@ octomind session
 |------|---------|---------|
 | Interactive | `octomind session` | Daily development |
 | WebSocket | `octomind server --port 8080` | Automation, IDE plugins |
-| JSONL | `octomind run developer "task" --jsonl` | CI/CD pipelines |
+| JSONL | `octomind run developer "task" --format=jsonl` | CI/CD pipelines |
 
 ---
 
