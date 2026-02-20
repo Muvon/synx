@@ -1,5 +1,142 @@
 # Changelog
 
+## [0.18.0] - 2026-02-20
+
+### 📋 Release Summary
+
+This release introduces video attachment support and enhanced CLI flexibility with runtime prompt overrides, plus new WebSocket session handling for real-time collaboration. Compression and animation systems are now smoother and more reliable, with instant cancellation and smarter context management. Numerous bug fixes improve stability across MCP tools, token tracking, and terminal interactions.
+
+
+### ✨ New Features & Enhancements
+
+- **cli**: add --system and --instructions flags for runtime prompt overrides `89019428`
+- **mcp**: add hint accumulator for tool misuse guidance `161946f3`
+- **shell**: add hints to guide users toward dedicated MCP tools `6b51a620`
+- **websocket**: forward MCP notifications to WebSocket `90c71e1e`
+- **websocket**: add client message types and session handling `38d07409`
+- **compression**: add adaptive ratio estimation `d38764b0`
+- **compression**: add cooldown to prevent premature recompression `6b26a9e5`
+- **animation**: add instant Ctrl+C cancellation support `3ada5fc1`
+- **chat**: add video attachment support `f64add22`
+- **chat**: emit thinking events for non-interactive modes `d23b9798`
+- **cache**: separate cache read and write token tracking `efab790c`
+- **cli**: add jsonl output to run command `bcdcb4c4`
+- **text_editing**: warn on duplicate line_replace calls `452284e1`
+- **session**: add reasoning tokens tracking for AI models `459cd2c4`
+
+### 🔧 Improvements & Optimizations
+
+- **compression**: replace heuristic model with physical ceiling math `37936973`
+- **animation**: remove redundant cancel_notify assignment `6fd9ae8e`
+- **mcp**: replace busy-wait loop with efficient watch channel `c6b35b72`
+- **websocket**: replace enum with typed message variants `d970a2d0`
+- **websocket**: replace ClientMessage struct with enum variants `3b3b8e21`
+- **websocket**: add structured message types `c2cc25ce`
+- **plan**: simplify start command to use content parameter `7017b183`
+- **commands**: replace console output with structured data `f4f2fbaa`
+- **mcp**: remove debug logging from command handlers `98158f5a`
+- **context**: remove manual file tree fallbacks to use git only `a8b2d7a2`
+- **token_counter**: remove role parameter from token estimation `ac66b9e9`
+- **compression**: enhance AI summary prompt structure `14ec2541`
+- **animation**: unify animation management and fix zero cost `8c34f9ba`
+- **mcp**: clarify method names for readability `f19e528e`
+- **animation**: centralize animation control `3101df64`
+- **websocket**: replace hack structs with GenericSessionArgs `bfebfca5`
+- **chat**: remove unused code and dead fields `65783f69`
+- **providers**: remove verbose debug logging for successful thinking conversion `e5c267d9`
+- **html_converter**: switch to html2text library `92ceede7`
+- **websocket**: replace callback with OutputSink abstraction `4ac59f4f`
+- **providers**: remove deepseek provider `34039f62`
+
+### 🐛 Bug Fixes & Stability
+
+- **ask**: prevent custom instructions from affecting ask command `8b653070`
+- **cost_tracker**: increment total_api_calls counter `2b84b6fc`
+- **mcp**: handle malformed JSON responses gracefully `ffc4a3a0`
+- **animation**: update cost before stopping animation `af654d24`
+- **chat**: enforce 2-marker limit before inserting compressed block `44e440f1`
+- **animation**: prevent leftover stop notification from killing new animation `35d17981`
+- **animation**: eliminate busy-polling for instant cancellation `1698d6f9`
+- **compression**: prevent marker cache loss during compression `659992f5`
+- **fs**: clarify path parameter description for text editor `3eb3377d`
+- **tool**: show tool header on error with parameters `3109ecd9`
+- **mcp**: improve error messages for list_files directory parameter `c7aad1ff`
+- **mcp**: add truncation warnings and apply before size checks `e02dabd8`
+- **mcp**: respect zero threshold to disable response warnings `7ec568b0`
+- **cli**: handle MCP notifications in both modes `30303e22`
+- **providers**: ensure last message is user after compression `0d0fa14a`
+- **chat**: prevent clamp panic when api calls is zero `0b646a58`
+- **display**: print command results in webserver mode `30e481c4`
+- **compression**: verify compression brings context below threshold `95e66058`
+- **output**: reexport println macros to prevent spinner ghosting `ff9c0336`
+- **animation**: prevent ghost spinner during cost line output `e31fdb3d`
+- **session**: preserve multi-turn conversations on Ctrl+C `8e898d33`
+- **compression**: respect first user message boundary `e50e2992`
+- **animation**: suspend animation during user prompts to prevent interference `8c964aa9`
+- **session**: clear stale tool calls when processing restoration markers `31bbe82b`
+- **mcp**: stop animation before user prompts `2ba78205`
+- **shell**: remove shell history tracking from mcp tool `ab3df70f`
+- **chat**: preserve processing state during ctrl+c cleanup `1f01b73a`
+- **animation**: prevent premature animation stop in tool loops `89606a39`
+- **chat**: prevent ghosted animation by stopping spinner before output `0a30a402`
+- **animation**: resolve timing issues with cancellation and spending prompts `0e941538`
+- **animation**: prevent duplicate animation start/stop during tool execution `ec4d6020`
+- **animation**: remove redundant animation updates `2aad078f`
+- **compression**: handle zero-cost models in compression decision `ccfd83f4`
+- **animation**: prevent tick condition when spinner finishes `5ccdd5b8`
+- **ask**: enable bracketed paste for multiline input `3df7a8fb`
+- **tests**: resolve temp dir path on macOS `ee4cd9c6`
+- **animation**: update cost and token state after API responses `75f207f5`
+- **animation**: eliminate flickering by removing duplicate state updates `47039737`
+- **plan**: preserve start index for plan compression `0ed041bc`
+- **ast_grep**: handle plain directory paths without glob patterns `26311b21`
+- **glob**: handle directory paths in pattern matching `2115e41b`
+- **compression**: correct cache cost calculation logic `27dd15b3`
+- escape brackets in doc comments `e47badc4`
+- **cost**: remove error messages when providers lack cost data `837c7ee6`
+- **mcp**: suppress large response warnings in non-terminal modes `124130d2`
+- **cli**: rename --mode to --format for clarity `770246f4`
+- **output**: suppress plain text logs in jsonl mode `5f631289`
+- **token**: correct token counting and jsonl output `d1df2f2a`
+- **jsonl**: improve continuation handling and streaming output `399403b0`
+- **animation**: resolve terminal race conditions `c1237180`
+- **session**: prevent cached stats from overwriting accumulated token counts `cf0f148d`
+- **plan**: correct start_index calculation to use valid message index `3420a08a`
+- **session**: add truncation point marker for ctrl-c cleanup `acc735da`
+- **plan**: resolve index tracking and context loss in compression `adbf75bf`
+- **tests**: isolate config loading to prevent race conditions `40ed2998`
+
+### 📚 Documentation & Examples
+
+- **readme**: fix JSONL command flag syntax `ed0e812c`
+- rewrite instructions for clarity and brevity `603d7171`
+- remove deprecated memory and semantic search features `44b64f56`
+- **readme**: rewrite with 3-pillar architecture `e539aa98`
+- bump version references to v0.17.0 and update claude model to sonnet-4 `9f9eacc4`
+- remove compression improvements documentation `dd1e7dcc`
+
+### 🔄 Other Changes
+
+- **chat**: add missing test attribute to case5 test function `d9eeb7d2`
+- **deps**: bump octolib to 0.9.3 and update lockfile `fcd9ce82`
+- **plan**: replace title parameter with content field `5d4ddd85`
+- **deps**: bump octolib to 0.9.2 `4e50034a`
+- **deps**: bump octolib to 0.9.1 `cef9e705`
+- **deps**: bump octolib to 0.9.0 and refresh lock file `a5186c0d`
+- **deps**: bump octolib to 0.9.0 `aeedc66b`
+- **deps**: upgrade octolib to 0.8.3 `f73eb8a4`
+- **session**: add session restoration tests `fc3f795f`
+
+### 📊 Release Summary
+
+**Total commits**: 105 across 5 categories
+
+✨ **14** new features - *Enhanced functionality*
+🔧 **21** improvements - *Better performance & code quality*
+🐛 **55** bug fixes - *Improved stability*
+📚 **6** documentation updates - *Better developer experience*
+🔄 **9** other changes - *Maintenance & tooling*
+
 ## [0.17.0] - 2026-02-12
 
 ### 📋 Release Summary
