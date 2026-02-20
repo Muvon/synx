@@ -802,6 +802,7 @@ mod tests {
 				next_conversation_compression_at_api_call: 0,
 				predicted_turns_at_last_compression: 0.0,
 				api_calls_at_last_compression: 0,
+				output_tokens_at_last_compression: 0,
 			},
 
 			messages: Vec::new(),

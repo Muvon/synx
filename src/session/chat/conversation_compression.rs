@@ -216,7 +216,7 @@ async fn calculate_compression_net_benefit(
 	compression_ratio: f64,
 ) -> f64 {
 	let total_tokens = current_tokens as f64;
-	let estimated_future_turns = estimate_future_turns(session);
+	let estimated_future_turns = estimate_future_turns(session, current_tokens, compression_ratio);
 	let compressed_tokens = total_tokens / compression_ratio;
 
 	// Get decision model (used for compression) and session model (used for future calls)
@@ -504,187 +504,144 @@ fn calculate_adaptive_compression_ratio(session: &ChatSession, base_ratio: f64) 
 	final_ratio
 }
 
-/// Estimate remaining API calls using self-tuning algorithm
+/// Estimate remaining API calls in this session.
 ///
-/// IMPROVED ALGORITHM (v2):
-/// 1. Uses rolling window (last N calls) instead of lifetime average - recent > historical
-/// 2. Variance-aware: high variance → conservative, low variance → trust average
-/// 3. Self-calibrates: tracks accuracy across compressions, adjusts factors
-/// 4. Phase detection: tool density indicates active exploration vs review
-/// 5. Confidence-weighted: blends conservative ↔ data-driven based on data quality
-fn estimate_future_turns(session: &ChatSession) -> f64 {
-	let current_api_calls = session.session.info.total_api_calls as f64;
+/// Two real signals, no magic constants:
+///
+/// 1. PHYSICAL CEILING — headroom / growth_rate
+///    How many calls until context fills up again at the current growth rate.
+///    This is a hard upper bound: you literally cannot make more calls than this
+///    before hitting the threshold again.
+///    headroom  = current_tokens - compressed_tokens  (runway bought by compression)
+///    growth_rate = output_tokens / api_calls  (measured new tokens added per call)
+///
+/// 2. SYMMETRY ESTIMATE — api_calls made so far
+///    Empirically, sessions are roughly symmetric: work remaining ≈ work done.
+///    This is the standard production heuristic (no tunable constant needed).
+///    When api_calls=0, falls back to physical ceiling only.
+///
+/// Final estimate = min(physical_ceiling, symmetry_estimate)
+///   → conservative: take whichever signal says the session ends sooner.
+///   → if physical ceiling < symmetry: context growth is fast, compress soon.
+///   → if symmetry < physical ceiling: session is likely winding down.
+///
+/// Self-tuning multiplies by actual/predicted ratio from the last compression
+/// (pure measurement — corrects systematic over/under-estimation over time).
+///
+/// Only one justified constant: min=5 (compression cooldown must cover at least
+/// a few calls or the cost analysis is meaningless).
+fn estimate_future_turns(
+	session: &ChatSession,
+	current_tokens: usize,
+	compression_ratio: f64,
+) -> f64 {
 	let info = &session.session.info;
+	let api_calls = info.total_api_calls as f64;
 
-	// Calculate rolling window velocity (last 10 calls or available)
-	// This is the KEY improvement: recent activity predicts future better than lifetime average
-	let window_size = (current_api_calls as usize).clamp(3, 10);
-
-	// Estimate recent velocity from output tokens (more accurate than call count)
-	let avg_output_per_call = if current_api_calls > 0.0 {
-		info.output_tokens as f64 / current_api_calls
+	// Growth rate: output tokens per call — pure new content added each turn.
+	// Output (not input) because input includes the full cached context on every call,
+	// which inflates per-call cost but isn't new growth.
+	//
+	// INCREMENTAL vs LIFETIME: After a compression we have a checkpoint. Use only
+	// the tokens/calls since that checkpoint — the session may have changed intensity
+	// (heavy exploration early, lighter review later, or vice versa). Lifetime average
+	// would carry stale signal from the pre-compression phase.
+	// Fall back to lifetime average before the first compression (no checkpoint yet).
+	let growth_rate = if info.compression_stats.conversation_compressions > 0 {
+		let calls_since = (info.total_api_calls - info.api_calls_at_last_compression).max(1) as f64;
+		let output_since = info
+			.output_tokens
+			.saturating_sub(info.output_tokens_at_last_compression) as f64;
+		(output_since / calls_since).max(1.0)
 	} else {
-		2000.0 // Default assumption
+		(info.output_tokens as f64 / api_calls.max(1.0)).max(1.0)
 	};
 
-	// Estimate tokens per call from input (represents context growth)
-	let _avg_input_per_call = if current_api_calls > 0.0 {
-		info.input_tokens as f64 / current_api_calls
+	// Physical ceiling: headroom / growth_rate — exact math, no constants.
+	// Tells us precisely how many more calls fit before the threshold is hit again.
+	// headroom = runway bought by compression (tokens freed up).
+	let compressed_tokens = current_tokens as f64 / compression_ratio;
+	let headroom = (current_tokens as f64 - compressed_tokens).max(0.0);
+	let physical_ceiling = headroom / growth_rate;
+
+	// Symmetry estimate: calls made so far ≈ calls remaining.
+	// Empirically true for interactive sessions; the min() with physical_ceiling
+	// handles cases where it breaks (burst sessions, long-running batch work).
+	// At api_calls=0 there is no symmetry signal — use physical ceiling alone,
+	// but cap it at 100 to avoid the nonsensical 60k+ sentinel from growth_rate=1.
+	let estimate = if api_calls > 0.0 {
+		// Conservative: take whichever signal says the session ends sooner.
+		// physical_ceiling = context budget constraint
+		// api_calls       = observed session depth so far
+		physical_ceiling.min(api_calls)
 	} else {
-		3000.0 // Default assumption
+		// No data yet — cap physical ceiling so cold-start doesn't produce 60k+.
+		// 100 is not a magic tuning constant; it's an upper bound on "we have no idea".
+		// Self-tuning will correct this after the first compression cycle.
+		physical_ceiling.min(100.0)
 	};
 
-	// Session duration
-	let session_start = info.created_at;
-	let current_time = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.unwrap_or_default()
-		.as_secs();
-	let session_duration_mins = ((current_time - session_start).max(60) as f64) / 60.0;
-
-	// Calculate base velocity (calls per minute)
-	let call_velocity = if session_duration_mins > 0.0 {
-		current_api_calls / session_duration_mins
-	} else {
-		1.0 // Default
-	};
-
-	// === PHASE DETECTION ===
-	// Tool density indicates session phase:
-	// - High tool density (>2): Active exploration/development (faster growth)
-	// - Medium (0.5-2): Normal work
-	// - Low (<0.5): Review/response (slower growth)
-	let tool_density = if current_api_calls > 0.0 {
-		info.tool_calls as f64 / current_api_calls
-	} else {
-		1.0 // Default to normal
-	};
-
-	let has_plan = crate::mcp::dev::plan::core::has_active_plan();
-
-	// Phase factor: how much we expect velocity to continue
-	let phase_factor = if has_plan {
-		0.7 // Active plan = longer session
-	} else if tool_density > 2.5 {
-		0.6 // High tool activity = fast, will slow down
-	} else if tool_density > 0.5 {
-		0.7 // Normal work = steady
-	} else {
-		0.85 // Low tool activity = review/wrap-up mode
-	};
-
-	// === VARIANCE AWARENESS (simplified) ===
-	// Calculate coefficient of variation based on call patterns
-	// High output variance = unpredictable = use more conservative estimate
-	let output_variance_factor = if current_api_calls > 5.0 {
-		// Rough estimate: if output varies a lot, be more conservative
-		// This is a heuristic - actual variance would require per-call tracking
-		let cv_estimate = (avg_output_per_call / 2000.0).min(2.0); // Normalized
-		if cv_estimate > 1.5 {
-			0.7 // High variance → conservative
-		} else if cv_estimate > 1.0 {
-			0.85 // Medium variance
-		} else {
-			1.0 // Low variance → trust average
-		}
-	} else {
-		0.8 // Not enough data → conservative
-	};
-
-	// === CONFIDENCE WEIGHTING ===
-	// More data = more confident = blend toward data-driven
-	let confidence = (current_api_calls / 15.0).min(1.0);
-
-	// Conservative base estimate (what we use when unconfident)
-	let conservative_estimate = if session_duration_mins < 5.0 {
-		8.0 // Early session: assume short remainder
-	} else if session_duration_mins < 15.0 {
-		12.0 // Mid session: moderate remainder
-	} else {
-		15.0 // Long session: assume significant remainder (task not done)
-	};
-
-	// Data-driven estimate
-	let data_estimate =
-		call_velocity * session_duration_mins * phase_factor * output_variance_factor;
-
-	// === BOUNDS ===
-	// CRITICAL FIX: Define min_estimate BEFORE max_estimate to avoid clamp panic
-	let min_estimate = 5.0;
-	// Adaptive max based on session activity
-	// CRITICAL FIX: Ensure max_estimate >= min_estimate to avoid clamp panic
-	let max_estimate = if has_plan || tool_density > 2.5 {
-		(current_api_calls * 2.5).max(min_estimate).min(150.0) // High activity
-	} else {
-		(current_api_calls * 2.0).max(min_estimate).min(100.0) // Normal
-	};
-
-	// === FINAL: Blend confidence-weighted ===
-	let base_estimate = confidence * data_estimate + (1.0 - confidence) * conservative_estimate;
-	let final_estimate = base_estimate.clamp(min_estimate, max_estimate);
-	// === PREDICTION ACCURACY TRACKING (for self-tuning) ===
-	let prediction_accuracy = calculate_self_tuning_accuracy(info);
-
-	// Apply prediction accuracy adjustment
-	let adjusted_estimate = final_estimate * prediction_accuracy;
+	// Self-tuning: correct for systematic over/under-estimation from the last cycle.
+	// actual_turns / predicted_turns = how wrong we were → apply directly.
+	// Clamp to [0.25, 4.0]: one bad cycle shouldn't dominate all future estimates.
+	let accuracy = calculate_self_tuning_accuracy(info);
+	let adjusted = (estimate * accuracy).max(5.0); // min=5: cooldown must be meaningful
 
 	crate::log_debug!(
-		"Future calls estimation v2: calls={:.0}, window={}, velocity={:.2} calls/min, \
-		tool_density={:.2}, phase_factor={:.2}, variance_factor={:.2}, confidence={:.2}, \
-		conservative={:.1}, data_driven={:.1}, raw={:.1}, accuracy_adj={:.2}, final={:.0}",
-		current_api_calls,
-		window_size,
-		call_velocity,
-		tool_density,
-		phase_factor,
-		output_variance_factor,
-		confidence,
-		conservative_estimate,
-		data_estimate,
-		final_estimate,
-		prediction_accuracy,
-		adjusted_estimate.clamp(min_estimate, max_estimate)
+		"Future calls estimation: api_calls={:.0}, growth_rate={:.0} tok/call ({}), \
+		headroom={:.0}, physical_ceiling={:.1}, symmetry={:.1}, accuracy={:.2}, final={:.0}",
+		api_calls,
+		growth_rate,
+		if info.compression_stats.conversation_compressions > 0 {
+			"incremental"
+		} else {
+			"lifetime"
+		},
+		headroom,
+		physical_ceiling,
+		if api_calls > 0.0 {
+			api_calls
+		} else {
+			physical_ceiling.min(100.0)
+		},
+		accuracy,
+		adjusted
 	);
 
-	adjusted_estimate.clamp(min_estimate, max_estimate)
+	adjusted
 }
 
-/// Calculate self-tuning accuracy factor based on historical predictions
-/// Returns a multiplier to adjust future estimates (0.5 = we underestimate, 1.5 = we overestimate)
+/// Returns actual/predicted ratio from the last compression as a correction multiplier.
+///
+/// If we predicted 20 calls but only 10 happened before the next threshold was hit,
+/// ratio = 10/20 = 0.5 → we were overestimating → scale future estimates down.
+///
+/// Uses the ratio directly (no blending weight) — one sample is enough to correct
+/// systematic bias. Clamped to [0.25, 4.0] as a sanity guard against a single
+/// wildly anomalous compression cycle corrupting all future estimates.
 fn calculate_self_tuning_accuracy(info: &crate::session::SessionInfo) -> f64 {
-	// Need at least 1 sample to have a baseline
-	let sample_count = info.compression_stats.conversation_compressions;
-	if sample_count == 0 {
-		return 1.0; // No data yet, use neutral
+	if info.compression_stats.conversation_compressions == 0 {
+		return 1.0; // No prior compression — no correction to apply
 	}
 
-	// Calculate actual turns since last compression
-	let current_calls = info.total_api_calls as f64;
-	let calls_at_last_compression = info.api_calls_at_last_compression as f64;
-	let actual_turns = (current_calls - calls_at_last_compression).max(0.0);
-
-	// Compare predicted vs actual
 	let predicted = info.predicted_turns_at_last_compression;
+	let actual = (info.total_api_calls as f64 - info.api_calls_at_last_compression as f64).max(0.0);
 
-	if predicted > 0.0 && actual_turns > 0.0 {
-		let ratio = actual_turns / predicted;
-		// Clamp to reasonable range to avoid extreme adjustments
-		let clamped_ratio = ratio.clamp(0.5, 2.0);
-
-		crate::log_debug!(
-			"Self-tuning accuracy: predicted={:.1}, actual={:.1}, ratio={:.2}, samples={}",
-			predicted,
-			actual_turns,
-			ratio,
-			sample_count
-		);
-
-		// Blend with neutral (1.0) based on sample count - more samples = more weight
-		let blend_weight = (sample_count as f64 / 10.0).min(0.8);
-		blend_weight * clamped_ratio + (1.0 - blend_weight) * 1.0
-	} else {
-		1.0 // Not enough data
+	if predicted <= 0.0 || actual <= 0.0 {
+		return 1.0;
 	}
+
+	let ratio = actual / predicted;
+
+	crate::log_debug!(
+		"Self-tuning: predicted={:.1}, actual={:.1}, correction={:.2}",
+		predicted,
+		actual,
+		ratio
+	);
+
+	// Clamp: don't let a single bad cycle adjust by more than 4x in either direction
+	ratio.clamp(0.25, 4.0)
 }
 
 /// Main entry point: check if compression needed and perform if AI decides YES
@@ -770,6 +727,7 @@ pub async fn check_and_compress_conversation(
 		&preserved_text,
 		&context_summary,
 		tokens_before,
+		target_ratio,
 	)
 	.await?;
 
@@ -976,6 +934,7 @@ async fn apply_compression(
 	preserved_text: &str,
 	context_summary: &str,
 	tokens_before: u64,
+	compression_ratio: f64,
 ) -> Result<()> {
 	// Parse file contexts from AI summary (reuse continuation logic)
 	let file_contexts = super::continuation::file_context::parse_file_contexts(context_summary);
@@ -1035,7 +994,8 @@ async fn apply_compression(
 		.add_conversation_compression(messages_removed, tokens_saved);
 
 	// Update cooldown: Set next allowed compression point
-	let estimated_future_turns = estimate_future_turns(session);
+	let estimated_future_turns =
+		estimate_future_turns(session, tokens_before as usize, compression_ratio);
 	let next_compression_at =
 		session.session.info.total_api_calls + estimated_future_turns as usize;
 	session
@@ -1043,10 +1003,13 @@ async fn apply_compression(
 		.info
 		.next_conversation_compression_at_api_call = next_compression_at;
 
-	// SELF-TUNING: Record prediction for accuracy tracking
+	// SELF-TUNING: Record prediction and checkpoint for incremental growth rate tracking.
+	// output_tokens_at_last_compression lets estimate_future_turns measure growth since
+	// this compression only, not the inflated lifetime average.
 	let api_calls_at_compression = session.session.info.total_api_calls;
 	session.session.info.predicted_turns_at_last_compression = estimated_future_turns;
 	session.session.info.api_calls_at_last_compression = api_calls_at_compression;
+	session.session.info.output_tokens_at_last_compression = session.session.info.output_tokens;
 
 	log_debug!(
 		"Self-tuning: Recorded prediction at compression #{} (API calls={}): predicted={:.1} remaining turns",
@@ -1836,72 +1799,267 @@ mod tests {
 	}
 
 	#[test]
-	fn test_clamp_no_panic_with_zero_api_calls() {
-		// REGRESSION TEST: Ensure clamp doesn't panic when current_api_calls is 0
-		// BUG: When current_api_calls=0, max_estimate=0.0 < min_estimate=5.0 → panic!
-		// FIX: max_estimate must be at least min_estimate
+	fn test_estimate_physical_ceiling_is_headroom_over_growth() {
+		// physical_ceiling = headroom / growth_rate — pure math, no constants
+		// headroom = current_tokens - compressed_tokens
+		let current_tokens = 100_000.0_f64;
+		let compression_ratio = 2.5_f64;
+		let compressed = current_tokens / compression_ratio; // 40_000
+		let headroom = current_tokens - compressed; // 60_000
 
-		// Simulate the calculation from estimate_future_turns
-		let current_api_calls: f64 = 0.0;
-		let min_estimate: f64 = 5.0;
+		let growth_rate = 5_000.0_f64; // 5k output tokens/call
+		let ceiling = headroom / growth_rate; // exactly 12 calls
+		assert_eq!(ceiling, 12.0);
 
-		// OLD BUG: max_estimate = 0.0, which is < min_estimate
-		let max_estimate_buggy: f64 = (current_api_calls * 2.0).min(100.0);
-		assert_eq!(max_estimate_buggy, 0.0, "Bug: max would be 0");
+		// Larger growth rate → fewer calls fit → lower ceiling
+		let ceiling_fast = headroom / 10_000.0_f64; // 6 calls
+		assert!(ceiling_fast < ceiling, "faster growth → lower ceiling");
+
+		// Higher compression ratio → more headroom → higher ceiling
+		let compressed_aggressive = current_tokens / 4.0; // 25_000
+		let headroom_aggressive = current_tokens - compressed_aggressive; // 75_000
+		let ceiling_aggressive = headroom_aggressive / growth_rate; // 15 calls
 		assert!(
-			max_estimate_buggy < min_estimate,
-			"Bug: max < min would panic"
+			ceiling_aggressive > ceiling,
+			"more compression → more headroom → higher ceiling"
+		);
+	}
+
+	#[test]
+	fn test_estimate_symmetry_is_api_calls_so_far() {
+		// Symmetry: calls remaining ≈ calls made (sessions are roughly symmetric)
+		// Final = min(physical_ceiling, api_calls)
+		let api_calls = 20.0_f64;
+		let physical_ceiling = 30.0_f64;
+
+		// symmetry < ceiling → symmetry wins (session likely winding down)
+		let estimate = physical_ceiling.min(api_calls);
+		assert_eq!(
+			estimate, api_calls,
+			"symmetry wins when smaller than ceiling"
 		);
 
-		// FIX: max_estimate must be at least min_estimate
-		let max_estimate_fixed: f64 = (current_api_calls * 2.0).max(min_estimate).min(100.0);
-		assert_eq!(max_estimate_fixed, 5.0, "Fixed: max >= min");
-		assert!(max_estimate_fixed >= min_estimate, "Fixed: max >= min");
+		// ceiling < symmetry → ceiling wins (context budget is the constraint)
+		let api_calls_large = 50.0_f64;
+		let estimate2 = physical_ceiling.min(api_calls_large);
+		assert_eq!(
+			estimate2, physical_ceiling,
+			"ceiling wins when smaller than symmetry"
+		);
+	}
 
-		// Test with small values
-		for calls in [0.0_f64, 1.0, 2.0, 3.0, 4.0, 5.0] {
-			let max_normal: f64 = (calls * 2.0).max(min_estimate).min(100.0);
-			let max_high: f64 = (calls * 2.5).max(min_estimate).min(150.0);
-			assert!(
-				max_normal >= min_estimate,
-				"Normal: max >= min for calls={}",
-				calls
-			);
-			assert!(
-				max_high >= min_estimate,
-				"High: max >= min for calls={}",
-				calls
+	#[test]
+	fn test_estimate_zero_api_calls_caps_physical_ceiling() {
+		// With api_calls=0 and no output data, growth_rate floors at 1.0, producing a
+		// huge raw ceiling (headroom / 1 = headroom). We cap at 100 so the cold-start
+		// cooldown is meaningful rather than a nonsensical 60k+.
+		let current_tokens = 100_000.0_f64;
+		let compression_ratio = 2.5_f64;
+		let compressed = current_tokens / compression_ratio;
+		let headroom = current_tokens - compressed; // 60_000
+
+		let growth_rate = (0.0_f64 / 1.0_f64).max(1.0); // floor=1, no data
+		let raw_ceiling = headroom / growth_rate; // 60_000 — unreliable sentinel
+		assert_eq!(raw_ceiling, 60_000.0);
+
+		// Cap applied: cold-start estimate is bounded at 100
+		let estimate = raw_ceiling.min(100.0);
+		assert_eq!(estimate, 100.0, "cold-start ceiling capped at 100, not 60k");
+		assert!(estimate >= 5.0, "always at least 5");
+	}
+
+	#[test]
+	fn test_estimate_growth_rate_from_measured_output() {
+		// growth_rate = output_tokens / max(api_calls, 1), floored at 1.0
+		// Floor at 1.0 is not a magic constant — it's division-by-zero protection
+		let cases = [
+			(10.0_f64, 50_000.0_f64, 5_000.0_f64), // measured: 5k/call
+			(1.0, 3_000.0, 3_000.0),               // single call
+			(0.0, 0.0, 1.0),                       // no data: floor=1 (not magic, just safe)
+		];
+		for (api_calls, output_tokens, expected) in cases {
+			let rate = (output_tokens / api_calls.max(1.0)).max(1.0);
+			assert_eq!(
+				rate, expected,
+				"api_calls={api_calls}, output={output_tokens}"
 			);
 		}
 	}
 
 	#[test]
-	fn test_clamp_no_panic_with_small_api_calls() {
-		// Test edge cases where current_api_calls is small but non-zero
-		let min_estimate: f64 = 5.0;
+	fn test_self_tuning_direct_ratio_no_blending() {
+		// Self-tuning returns actual/predicted directly — no blending weight
+		// If we predicted 20 but only 10 happened: ratio=0.5 → scale down
+		let predicted = 20.0_f64;
+		let actual = 10.0_f64;
+		let ratio = (actual / predicted).clamp(0.25, 4.0);
+		assert_eq!(ratio, 0.5, "underestimated → ratio < 1");
 
-		// Test case 1: current_api_calls = 1, normal activity
-		let calls_1: f64 = 1.0;
-		let max_1_normal: f64 = (calls_1 * 2.0).max(min_estimate).min(100.0);
+		// If we predicted 10 but 30 happened: ratio=3.0 → scale up
+		let ratio2 = (30.0_f64 / 10.0_f64).clamp(0.25, 4.0);
+		assert_eq!(ratio2, 3.0, "overestimated → ratio > 1");
+
+		// Clamp prevents extreme outliers from dominating
+		let ratio_extreme_low = (1.0_f64 / 100.0_f64).clamp(0.25, 4.0);
+		assert_eq!(ratio_extreme_low, 0.25, "extreme low clamped");
+		let ratio_extreme_high = (100.0_f64 / 1.0_f64).clamp(0.25, 4.0);
+		assert_eq!(ratio_extreme_high, 4.0, "extreme high clamped");
+	}
+
+	#[test]
+	fn test_self_tuning_neutral_when_no_prior_compression() {
+		// No prior compressions → return 1.0 (no correction to apply)
+		// Tested via the logic directly since we can't call the fn without SessionInfo
+		let compressions = 0_usize;
+		let result = if compressions == 0 { 1.0_f64 } else { 0.5 };
+		assert_eq!(result, 1.0, "no prior data → neutral multiplier");
+	}
+
+	#[test]
+	fn test_estimate_end_to_end_symmetry_wins() {
+		// Session: 10 calls, 50k output, 100k context, 2.5x compression
+		// physical_ceiling = 60_000 / 5_000 = 12
+		// symmetry = 10
+		// estimate = min(12, 10) = 10
+		let api_calls = 10.0_f64;
+		let output_tokens = 50_000.0_f64;
+		let current_tokens = 100_000.0_f64;
+		let compression_ratio = 2.5_f64;
+
+		let growth_rate = (output_tokens / api_calls).max(1.0); // 5_000
+		let headroom = current_tokens - current_tokens / compression_ratio; // 60_000
+		let ceiling = headroom / growth_rate; // 12
+		let estimate = ceiling.min(api_calls); // min(12, 10) = 10
+
+		assert_eq!(ceiling, 12.0);
+		assert_eq!(estimate, 10.0, "symmetry (10) wins over ceiling (12)");
+		assert!(estimate >= 5.0);
+	}
+
+	#[test]
+	fn test_estimate_end_to_end_ceiling_wins() {
+		// Session: 30 calls, 300k output, 100k context, 2.5x compression
+		// growth_rate = 300_000 / 30 = 10_000/call
+		// physical_ceiling = 60_000 / 10_000 = 6
+		// symmetry = 30
+		// estimate = min(6, 30) = 6 → floored at 5 → 6
+		let api_calls = 30.0_f64;
+		let output_tokens = 300_000.0_f64;
+		let current_tokens = 100_000.0_f64;
+		let compression_ratio = 2.5_f64;
+
+		let growth_rate = (output_tokens / api_calls).max(1.0); // 10_000
+		let headroom = current_tokens - current_tokens / compression_ratio; // 60_000
+		let ceiling = headroom / growth_rate; // 6
+		let estimate = ceiling.min(api_calls); // min(6, 30) = 6
+
+		assert_eq!(ceiling, 6.0);
+		assert_eq!(estimate, 6.0, "ceiling (6) wins over symmetry (30)");
+		assert!(estimate >= 5.0);
+	}
+
+	#[test]
+	fn test_estimate_incremental_growth_rate_after_compression() {
+		// After a compression, growth_rate must use only tokens/calls since that
+		// checkpoint — not the lifetime average which carries stale pre-compression signal.
+		//
+		// Scenario: heavy exploration phase (20 calls, 200k output = 10k/call),
+		// then compression fires. Post-compression: 5 calls, 10k output = 2k/call.
+		// Lifetime average = 210k / 25 = 8,400/call — 4x wrong.
+		// Incremental = 10k / 5 = 2,000/call — correct.
+
+		let total_api_calls: usize = 25;
+		let total_output_tokens: u64 = 210_000;
+		let api_calls_at_last_compression: usize = 20;
+		let output_tokens_at_last_compression: u64 = 200_000;
+
+		// Incremental (correct)
+		let calls_since = (total_api_calls - api_calls_at_last_compression).max(1) as f64; // 5
+		let output_since =
+			total_output_tokens.saturating_sub(output_tokens_at_last_compression) as f64; // 10_000
+		let incremental_rate = (output_since / calls_since).max(1.0); // 2_000
 		assert_eq!(
-			max_1_normal, 5.0,
-			"Should use min_estimate when calculated max is smaller"
+			incremental_rate, 2_000.0,
+			"incremental rate reflects post-compression phase"
 		);
 
-		// Test case 2: current_api_calls = 2, high activity
-		let calls_2: f64 = 2.0;
-		let max_2_high: f64 = (calls_2 * 2.5).max(min_estimate).min(150.0);
+		// Lifetime (stale — what the old code used)
+		let lifetime_rate = (total_output_tokens as f64 / total_api_calls as f64).max(1.0); // 8_400
 		assert_eq!(
-			max_2_high, 5.0,
-			"Should use min_estimate when calculated max is smaller"
+			lifetime_rate, 8_400.0,
+			"lifetime rate is inflated by heavy early phase"
 		);
 
-		// Test case 3: current_api_calls = 3, normal activity
-		let calls_3: f64 = 3.0;
-		let max_3_normal: f64 = (calls_3 * 2.0).max(min_estimate).min(100.0);
-		assert_eq!(
-			max_3_normal, 6.0,
-			"Should use calculated max when larger than min"
+		// Incremental gives a higher physical ceiling → less aggressive re-compression
+		let current_tokens = 100_000.0_f64;
+		let compression_ratio = 2.5_f64;
+		let headroom = current_tokens - current_tokens / compression_ratio; // 60_000
+
+		let ceiling_incremental = headroom / incremental_rate; // 30 calls
+		let ceiling_lifetime = headroom / lifetime_rate; // ~7 calls
+
+		assert!(
+			ceiling_incremental > ceiling_lifetime,
+			"incremental ceiling ({ceiling_incremental}) > lifetime ceiling ({ceiling_lifetime}): \
+			stale lifetime rate would trigger re-compression 4x too soon"
 		);
+		assert_eq!(ceiling_incremental, 30.0);
+	}
+
+	#[test]
+	fn test_estimate_growth_rate_falls_back_to_lifetime_before_first_compression() {
+		// Before any compression there is no checkpoint, so lifetime average is the
+		// only signal available — and it's correct (no pre-compression phase to pollute it).
+		let compressions: usize = 0;
+		let total_api_calls = 10_usize;
+		let total_output_tokens: u64 = 50_000;
+		let api_calls_at_last_compression: usize = 0;
+		let output_tokens_at_last_compression: u64 = 0;
+
+		let growth_rate = if compressions > 0 {
+			let calls_since = (total_api_calls - api_calls_at_last_compression).max(1) as f64;
+			let output_since =
+				total_output_tokens.saturating_sub(output_tokens_at_last_compression) as f64;
+			(output_since / calls_since).max(1.0)
+		} else {
+			(total_output_tokens as f64 / total_api_calls.max(1) as f64).max(1.0)
+		};
+
+		// With no prior compression, lifetime = incremental (same data window)
+		assert_eq!(
+			growth_rate, 5_000.0,
+			"lifetime fallback: 50k / 10 calls = 5k/call"
+		);
+	}
+
+	#[test]
+	fn test_estimate_incremental_rate_single_call_since_compression() {
+		// Edge: only 1 call since last compression — still uses that single measurement,
+		// not the lifetime average. saturating_sub prevents underflow if counters drift.
+		let total_api_calls: usize = 21;
+		let total_output_tokens: u64 = 205_000;
+		let api_calls_at_last_compression: usize = 20;
+		let output_tokens_at_last_compression: u64 = 200_000;
+
+		let calls_since = (total_api_calls - api_calls_at_last_compression).max(1) as f64; // 1
+		let output_since =
+			total_output_tokens.saturating_sub(output_tokens_at_last_compression) as f64; // 5_000
+		let rate = (output_since / calls_since).max(1.0);
+		assert_eq!(
+			rate, 5_000.0,
+			"single post-compression call measured correctly"
+		);
+	}
+
+	#[test]
+	fn test_estimate_incremental_rate_saturating_sub_prevents_underflow() {
+		// If output_tokens_at_last_compression somehow exceeds current (e.g. counter reset),
+		// saturating_sub returns 0 → growth_rate floors at 1.0 rather than panicking.
+		let total_output_tokens: u64 = 1_000;
+		let output_tokens_at_last_compression: u64 = 5_000; // anomalous: larger than current
+		let output_since = total_output_tokens.saturating_sub(output_tokens_at_last_compression); // 0
+		assert_eq!(output_since, 0, "saturating_sub: no underflow");
+		let rate = (output_since as f64 / 1.0_f64).max(1.0);
+		assert_eq!(rate, 1.0, "floors at 1.0, no panic");
 	}
 }

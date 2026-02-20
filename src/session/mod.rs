@@ -262,6 +262,8 @@ pub struct SessionInfo {
 	pub predicted_turns_at_last_compression: f64, // What we predicted at last compression
 	#[serde(default)]
 	pub api_calls_at_last_compression: usize, // API call count at last compression
+	#[serde(default)]
+	pub output_tokens_at_last_compression: u64, // Cumulative output tokens at last compression (for incremental growth rate)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -397,6 +399,7 @@ impl Session {
 				next_conversation_compression_at_api_call: 0,
 				predicted_turns_at_last_compression: 0.0,
 				api_calls_at_last_compression: 0,
+				output_tokens_at_last_compression: 0,
 			},
 
 			messages: Vec::new(),
@@ -1272,6 +1275,7 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 			next_conversation_compression_at_api_call: 0,
 			predicted_turns_at_last_compression: 0.0,
 			api_calls_at_last_compression: 0,
+			output_tokens_at_last_compression: 0,
 		};
 
 		// Extract runtime state from log file
