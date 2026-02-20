@@ -142,8 +142,10 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 				}
 			}
 
-			// NOTE: Animation was already stopped above. No need to update animation state
-			// after stopping - it only causes confusion and potential race conditions.
+			// Update animation cost BEFORE process_response stops it.
+			// track_exchange_cost() just updated total_cost; push it now so the
+			// animation (and next turn's start) shows the correct post-call value.
+			anim_state.update_cost(chat_session.session.info.total_cost);
 
 			// Display rate limit information if available
 			display_rate_limit_info(&response.exchange);
