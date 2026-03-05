@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.19.0] - 2026-03-05
+
+### 📋 Release Summary
+
+This release introduces structured output validation for more reliable AI responses and improves API usage tracking for better session management. Various enhancements include updated dependencies, clearer documentation, and refined shell help organization.
+
+
+### ✨ New Features & Enhancements
+
+- **session**: add JSON schema validation for output `57e533f8`
+
+### 🔧 Improvements & Optimizations
+
+- **shell**: reorder shell help blocks for clarity `42f15597`
+
+### 🐛 Bug Fixes & Stability
+
+- **tool**: add missing API call increment for follow-up exchanges `395dc98c`
+
+### 📚 Documentation & Examples
+
+- document structured output schema flag `1a0a1300`
+
+### 🔄 Other Changes
+
+- replace manual protoc install with setup-protoc action `885794f7`
+- **deps**: bump octolib to 0.10.0 `cfb5c0f8`
+
+### 📊 Release Summary
+
+**Total commits**: 6 across 5 categories
+
+✨ **1** new feature - *Enhanced functionality*
+🔧 **1** improvement - *Better performance & code quality*
+🐛 **1** bug fix - *Improved stability*
+📚 **1** documentation update - *Better developer experience*
+🔄 **2** other changes - *Maintenance & tooling*
+
 ## [0.18.0] - 2026-02-20
 
 ### 📋 Release Summary
