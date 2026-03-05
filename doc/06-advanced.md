@@ -1412,3 +1412,108 @@ model = "openrouter:anthropic/claude-sonnet-4"
 ```
 
 Octomind automatically migrates legacy configurations, but manual updates provide better control and understanding of the new simplified structure.
+
+## Structured Output (JSON Schema)
+
+Octomind supports enforcing structured JSON output from the AI by passing a JSON Schema file via the `--schema` flag. This is useful for automation, pipelines, and any scenario where you need machine-readable, validated output.
+
+### How It Works
+
+When `--schema` is provided, Octomind passes the schema to the provider using the native structured output API (e.g., OpenAI's `response_format`, Anthropic's tool-based JSON mode). The AI is constrained to respond with JSON that matches the schema. The response is returned as raw JSON — markdown rendering is automatically disabled.
+
+Strict mode is always enabled: the provider will reject responses that don't conform to the schema.
+
+### Supported Commands
+
+| Command | Flag | Notes |
+|---------|------|-------|
+| `octomind ask` | `--schema <path>` | Stateless single query |
+| `octomind run` | `--schema <path>` | Non-interactive session run |
+| `octomind session` | `--schema <path>` | Interactive session (all responses structured) |
+
+### Provider Compatibility
+
+Not all providers support structured output. Octomind fails fast with a clear error if the selected provider/model does not support it:
+
+```
+Provider 'cloudflare' does not support structured output for model 'llama-3.1-8b-instruct'.
+Remove --schema or use a compatible provider.
+```
+
+Providers with known structured output support:
+- **OpenAI** — `openai:gpt-4o`, `openai:gpt-4o-mini`, and other recent models
+- **Anthropic** — `anthropic:claude-*` models (tool-based JSON mode)
+- **OpenRouter** — depends on the underlying model; check provider docs
+
+### Usage Examples
+
+**Define a schema** (`schema.json`):
+```json
+{
+  "type": "object",
+  "properties": {
+    "summary": { "type": "string" },
+    "issues": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "severity": { "type": "string", "enum": ["low", "medium", "high"] }
+  },
+  "required": ["summary", "issues", "severity"],
+  "additionalProperties": false
+}
+```
+
+**Single query with structured output:**
+```bash
+octomind ask "Review this code for security issues" \
+  --files src/auth.rs \
+  --schema schema.json \
+  --model openai:gpt-4o
+```
+
+**Output** (raw JSON, no markdown):
+```json
+{
+  "summary": "The auth module has two potential vulnerabilities.",
+  "issues": ["SQL injection in login query", "Missing rate limiting"],
+  "severity": "high"
+}
+```
+
+**Non-interactive run with structured output:**
+```bash
+octomind run developer "Analyze the codebase and list all TODO items" \
+  --schema todos_schema.json \
+  --format jsonl
+```
+
+**Interactive session with structured output:**
+```bash
+octomind session --schema schema.json --role assistant
+```
+
+### Pipeline Integration
+
+Structured output is ideal for CI/CD pipelines:
+
+```bash
+# Extract structured analysis and pipe to jq
+result=$(octomind ask "Summarize recent changes" \
+  --schema analysis_schema.json \
+  --model openai:gpt-4o)
+
+severity=$(echo "$result" | jq -r '.severity')
+if [ "$severity" = "high" ]; then
+  echo "High severity issues found — blocking merge"
+  exit 1
+fi
+```
+
+### Implementation Notes
+
+- Schema is loaded once at startup and validated as JSON before use
+- `structured_output` field in `ProviderResponse` carries the parsed JSON value
+- When structured output is present, it takes precedence over `content` for display
+- Layers and context reduction calls always use `schema: None` — only the top-level session/ask uses the schema
+- Continuation calls propagate the schema so multi-turn structured sessions work correctly

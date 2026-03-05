@@ -18,7 +18,7 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 
 ## Current Architecture Overview
 
-**Octomind v0.17.0** implements a session-first architecture with the following core components:
+**Octomind v0.18.0** implements a session-first architecture with the following core components:
 
 ### Session-First Design
 - **Interactive AI Conversations**: All functionality accessed through natural language sessions
@@ -42,6 +42,7 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 - **Cost Tracking**: Real-time usage monitoring with detailed reporting
 - **Layered Processing**: AI pipeline system for complex task decomposition
 - **Template-Based Configuration**: All defaults in `config-templates/default.toml`
+- **Structured Output**: `--schema` flag enforces JSON Schema-validated responses for pipelines and automation
 ## Core Features
 
 ### Smart Adaptive Compression System
@@ -233,6 +234,6 @@ Default values
 
 ---
 
-**Octomind v0.17.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.
+**Octomind v0.18.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.
 
-**© 2025 Muvon Un Limited** | Apache License 2.0
+**© 2026 Muvon Un Limited** | Apache License 2.0

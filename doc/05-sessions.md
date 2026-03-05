@@ -1188,3 +1188,29 @@ octomind session -n security_audit --role=security-analyst
 2. **Clean up**: Remove old sessions periodically
 3. **Use descriptive names**: Make sessions easy to identify
 4. **Resume efficiently**: Use `-r` to continue work
+
+## Structured Output (--schema)
+
+The `--schema` flag enforces structured JSON output from the AI by passing a JSON Schema file. All three run modes support it:
+
+```bash
+# Single stateless query → structured JSON
+octomind ask "Review src/auth.rs for security issues" \
+  --files src/auth.rs \
+  --schema review_schema.json \
+  --model openai:gpt-4o
+
+# Non-interactive session run → structured JSON
+octomind run developer "List all TODO items in the codebase" \
+  --schema todos_schema.json
+
+# Interactive session → every response is structured JSON
+octomind session --schema schema.json --role assistant
+```
+
+When `--schema` is active:
+- The AI response is constrained to valid JSON matching the schema (strict mode)
+- Markdown rendering is automatically disabled — raw JSON is printed
+- The provider must support structured output; Octomind fails fast with a clear error otherwise
+
+See [Advanced Features — Structured Output](./06-advanced.md#structured-output-json-schema) for full details, provider compatibility, and pipeline integration examples.

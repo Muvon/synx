@@ -44,6 +44,8 @@ CLI / WebSocket
 | MCP tool registry | `src/mcp/tool_map.rs` |
 | MCP tool definitions | `src/mcp/*/functions.rs` → `get_all_functions()` |
 | AI provider bridge | `src/providers.rs` (thin wrapper over octolib) |
+| Structured output (schema) | `src/providers.rs` → `ChatCompletionParams::with_schema()`, `src/session/mod.rs` → `chat_completion_with_provider()` |
+| CLI schema flag parsing | `src/session/chat/session/params.rs`, `src/session/chat/session/setup.rs` |
 | File read/write helpers | `src/utils/file_parser.rs`, `src/utils/file_renderer.rs` |
 
 ## Code Quality Rules
@@ -114,3 +116,4 @@ Reference: `src/mcp/dev/shell.rs` (`SHELL_MISUSE_HINTS`), `src/mcp/fs/text_editi
 | Session command broken | `src/session/chat/session/commands/mod.rs` |
 | Layer not running | `src/session/layers/processor.rs` |
 | Continuation not triggering | `src/session/chat/continuation/detection.rs` |
+| Structured output not working | `src/session/mod.rs` → `chat_completion_with_provider()` (provider capability check), `src/providers.rs` → `to_octolib_params()` (schema application) |
