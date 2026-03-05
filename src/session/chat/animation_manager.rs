@@ -239,7 +239,7 @@ impl AnimationManager {
 			// Show static line for non-interactive mode
 			use crate::config::with_thread_config;
 			let should_print =
-				with_thread_config(|config| config.runtime_output_mode.as_deref() != Some("jsonl"))
+				with_thread_config(|config| !config.output_mode().should_suppress_cli_output())
 					.unwrap_or(true);
 
 			if should_print {

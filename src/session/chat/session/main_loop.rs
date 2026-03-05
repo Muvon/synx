@@ -145,7 +145,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				// Display cost information before cleanup
 				// This ensures users see the cost spent before cancellation
 				// Skip in JSONL mode
-				if current_config.runtime_output_mode.as_deref() != Some("jsonl") {
+				if !current_config.output_mode().should_suppress_cli_output() {
 					CostTracker::display_cost_line(&chat_session);
 				}
 			});

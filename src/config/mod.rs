@@ -389,6 +389,13 @@ impl Config {
 		self.log_level.clone()
 	}
 
+	/// Get the current output mode as a typed enum
+	pub fn output_mode(&self) -> crate::session::output::OutputMode {
+		crate::session::output::OutputMode::from_runtime_mode(
+			self.runtime_output_mode.as_deref().unwrap_or("plain"),
+		)
+	}
+
 	/// Get the model for the specified role
 	pub fn get_model(&self, _role: &str) -> String {
 		// All roles now use the system-wide model
@@ -503,7 +510,7 @@ where
 macro_rules! log_info {
 	($fmt:expr) => {
 		if let Some(should_log) = $crate::config::with_thread_config(|config| {
-			config.get_log_level().is_info_enabled() && config.runtime_output_mode.as_deref() != Some("jsonl")
+			config.get_log_level().is_info_enabled() && !config.output_mode().should_suppress_cli_output()
 		}) {
 			if should_log {
 				use colored::Colorize;
@@ -513,7 +520,7 @@ macro_rules! log_info {
 	};
 	($fmt:expr, $($arg:expr),*) => {
 		if let Some(should_log) = $crate::config::with_thread_config(|config| {
-			config.get_log_level().is_info_enabled() && config.runtime_output_mode.as_deref() != Some("jsonl")
+			config.get_log_level().is_info_enabled() && !config.output_mode().should_suppress_cli_output()
 		}) {
 			if should_log {
 				use colored::Colorize;

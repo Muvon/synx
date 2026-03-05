@@ -179,8 +179,10 @@ pub async fn setup_and_initialize_session<T: std::fmt::Debug>(
 
 	let mut chat_session = ChatSession::initialize(session_params).await?;
 
-	// Display initial status line for new sessions (not resumed) - skip in JSONL mode
-	if !chat_session.was_resumed && output_mode_for_check != "jsonl" {
+	// Display initial status line for new sessions (not resumed) - skip in structured output modes
+	let suppress = crate::session::output::OutputMode::from_runtime_mode(&output_mode_for_check)
+		.should_suppress_cli_output();
+	if !chat_session.was_resumed && !suppress {
 		// Show tip first, then shortcut help
 		println!("{}", display_random_tip().bright_yellow());
 		println!("{}", "? for shortcuts • /help for commands".bright_black());

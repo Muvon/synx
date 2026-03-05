@@ -153,8 +153,8 @@ pub fn extract_session_params<T: std::fmt::Debug>(args: &T, _config: &Config) ->
 		let start = args_str.find("mode: \"").unwrap() + 7;
 		let end = args_str[start..].find('"').unwrap() + start;
 		let mode = args_str[start..end].to_string();
-		if mode == "jsonl" {
-			"jsonl".to_string()
+		if mode == "jsonl" || mode == "websocket" {
+			mode
 		} else {
 			"plain".to_string()
 		}

@@ -403,49 +403,58 @@ impl ChatSession {
 					let runtime_state =
 						crate::session::extract_runtime_state_from_log(&session_file)
 							.unwrap_or_default();
-					// When session is loaded successfully, show its info
-					println!(
-						"{}",
-						format!("✓ Resuming session: {}", session_name).bright_green()
-					);
 
-					// Show a brief summary of the session
-					let created_time =
-						DateTime::<Utc>::from_timestamp(session.info.created_at as i64, 0)
-							.map(|dt| dt.naive_local().format("%Y-%m-%d %H:%M:%S").to_string())
-							.unwrap_or_else(|| "Unknown".to_string());
+					// Skip CLI output in structured output modes (websocket, jsonl)
+					let suppress = crate::session::output::OutputMode::from_runtime_mode(
+						params.output_mode.as_deref().unwrap_or("plain"),
+					)
+					.should_suppress_cli_output();
 
-					// Simplify model name
-					let model_parts: Vec<&str> = session.info.model.split('/').collect();
-					let model_name = if model_parts.len() > 1 {
-						model_parts[1]
-					} else {
-						&session.info.model
-					};
+					if !suppress {
+						// When session is loaded successfully, show its info
+						println!(
+							"{}",
+							format!("✓ Resuming session: {}", session_name).bright_green()
+						);
 
-					// Calculate total tokens
-					let total_tokens = session.info.input_tokens
-						+ session.info.output_tokens
-						+ session.info.cache_read_tokens
-						+ session.info.cache_write_tokens;
+						// Show a brief summary of the session
+						let created_time =
+							DateTime::<Utc>::from_timestamp(session.info.created_at as i64, 0)
+								.map(|dt| dt.naive_local().format("%Y-%m-%d %H:%M:%S").to_string())
+								.unwrap_or_else(|| "Unknown".to_string());
 
-					println!("{} {}", "Created:".blue(), created_time.white());
-					println!("{} {}", "Model:".blue(), model_name.yellow());
-					println!(
-						"{} {}",
-						"Messages:".blue(),
-						session.messages.len().to_string().white()
-					);
-					println!(
-						"{} {}",
-						"Tokens:".blue(),
-						format_number(total_tokens).bright_blue()
-					);
-					println!(
-						"{} ${:.5}",
-						"Cost:".blue(),
-						session.info.total_cost.to_string().bright_magenta()
-					);
+						// Simplify model name
+						let model_parts: Vec<&str> = session.info.model.split('/').collect();
+						let model_name = if model_parts.len() > 1 {
+							model_parts[1]
+						} else {
+							&session.info.model
+						};
+
+						// Calculate total tokens
+						let total_tokens = session.info.input_tokens
+							+ session.info.output_tokens
+							+ session.info.cache_read_tokens
+							+ session.info.cache_write_tokens;
+
+						println!("{} {}", "Created:".blue(), created_time.white());
+						println!("{} {}", "Model:".blue(), model_name.yellow());
+						println!(
+							"{} {}",
+							"Messages:".blue(),
+							session.messages.len().to_string().white()
+						);
+						println!(
+							"{} {}",
+							"Tokens:".blue(),
+							format_number(total_tokens).bright_blue()
+						);
+						println!(
+							"{} ${:.5}",
+							"Cost:".blue(),
+							session.info.total_cost.to_string().bright_magenta()
+						);
+					}
 
 					// Create chat session from loaded session
 					let restored_model = session.info.model.clone(); // Extract model before moving session
@@ -553,8 +562,12 @@ impl ChatSession {
 					let new_session_name = generate_session_name();
 					let new_session_file = sessions_dir.join(format!("{}.jsonl", new_session_name));
 
-					// Skip CLI output in JSONL mode
-					if params.output_mode.as_deref() != Some("jsonl") {
+					// Skip CLI output in structured output modes
+					let suppress = crate::session::output::OutputMode::from_runtime_mode(
+						params.output_mode.as_deref().unwrap_or("plain"),
+					)
+					.should_suppress_cli_output();
+					if !suppress {
 						println!(
 							"{}",
 							format!("Starting new session: {}", new_session_name).bright_green()
@@ -598,8 +611,12 @@ impl ChatSession {
 				}
 			}
 		} else {
-			// Create new session - skip CLI output in JSONL mode
-			if params.output_mode.as_deref() != Some("jsonl") {
+			// Create new session - skip CLI output in structured output modes
+			let suppress = crate::session::output::OutputMode::from_runtime_mode(
+				params.output_mode.as_deref().unwrap_or("plain"),
+			)
+			.should_suppress_cli_output();
+			if !suppress {
 				use colored::*;
 				println!(
 					"{}",

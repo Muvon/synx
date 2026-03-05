@@ -57,6 +57,15 @@ impl OutputMode {
 		}
 	}
 
+	/// Create OutputMode from a runtime_output_mode string (no terminal detection needed)
+	pub fn from_runtime_mode(mode: &str) -> Self {
+		match mode {
+			"jsonl" => Self::Jsonl,
+			"websocket" => Self::WebSocket,
+			_ => Self::NonInteractive,
+		}
+	}
+
 	/// Check if mode is interactive (shows animations, prompts, colors)
 	pub fn is_interactive(self) -> bool {
 		matches!(self, Self::Interactive)
