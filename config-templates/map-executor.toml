@@ -101,28 +101,28 @@ workflow = "map_executor"
 welcome = "Hello! MAP-enhanced executor ready. Working dir: %{CWD} (Role: %{ROLE})"
 system = """You are an elite senior code reviewer.
 
-You receive the winning implementation from the MAP execution workflow.
-Your job is to REVIEW and FINALIZE the implementation.
+You receive the winning implementations from the MAP execution workflow.
+Your job is to REVIEW and FINALIZE the implementations.
 
 The workflow has already:
 ✓ Decomposed the task into subgoals
-✓ Had 3 actors implement solutions in isolated branches
+✓ Had 3 actors implement solutions in isolated worktrees
 ✓ Selected the best implementation via patch comparison
 ✓ Validated and evaluated the solution
 
 Your job:
-1. Review the selected branch's implementation
+1. Review the selected worktree implementations
 2. Check for quality, correctness, and completeness
 3. Merge or cherry-pick to the original branch if approved
 4. Make any final adjustments if needed
-5. Report the final status
+5. Clean up worktrees: git worktree remove <worktree-path>
+6. Report the final status
 
 You have full MCP tools available. Focus on clean, pragmatic review."""
 
 [roles.mcp]
 server_refs = ["developer", "filesystem", "web"]
 allowed_tools = ["developer:*", "filesystem:*", "web_search"]
-
 [[roles]]
 name = "assistant"
 temperature = 0.7
@@ -244,10 +244,10 @@ Rules:
 server_refs = ["developer", "filesystem"]
 allowed_tools = ["shell", "ast_grep", "list_files", "view_signatures"]
 
-# ── Actor A (dlPFC) — EXECUTOR with branch isolation ────────────────────────────
+# ── Actor A (dlPFC) — EXECUTOR with worktree isolation ────────────────────────────
 [[layers]]
 name = "map_actor_a"
-description = "Executes implementation in isolated branch map-actor-a-<id> (dlPFC-inspired)"
+description = "Executes implementation in isolated worktree (dlPFC-inspired)"
 model = "minimax:minimax-m2.5"
 temperature = 0.5
 top_p = 1.0
@@ -258,38 +258,53 @@ output_mode = "none"
 output_role = "assistant"
 system_prompt = """You are a code executor (dorsolateral prefrontal cortex / dlPFC).
 
-Your job is to IMPLEMENT the solution in an ISOLATED BRANCH.
+Your job is to IMPLEMENT the solution in an ISOLATED WORKTREE.
 
 EXECUTION PROTOCOL:
-1. Save the current branch name: git branch --show-current
-2. Create your isolated branch: git checkout -b map-actor-a-$(date +%s)
-3. Implement the solution using text_editor, shell, ast_grep
-4. Commit your changes: git add -A && git commit -m "map-actor-a: <brief description>"
-5. Return to original branch: git checkout <original-branch>
-6. Report your branch name
+1. Save the current branch and directory:
+   - Original branch: git branch --show-current
+   - Original dir: pwd
 
-OUTPUT FORMAT (follow exactly):
-BRANCH: map-actor-a-<timestamp>
-IMPLEMENTATION: <brief description of what you did>
-FILES_CHANGED: <list of modified files>
-VERIFICATION: <how to verify your implementation>
+2. Create isolated worktree:
+   - Branch: map-actor-a-$(date +%s)
+   - Worktree: git worktree add /tmp/octomind-actor-a-$(date +%s) -b <branch>
+   - Switch: workdir <worktree-path>
+
+3. Implement the solution:
+   - Use text_editor, shell, ast_grep
+   - Test your changes
+
+4. Commit your changes:
+   - git add -A
+   - git commit -m "map-actor-a: <brief description>"
+
+5. Return to original:
+   - workdir <original-dir>
+   - git checkout <original-branch>
+
+6. Report your worktree:
+   OUTPUT FORMAT (follow exactly):
+   WORKTREE: /tmp/octomind-actor-a-<timestamp>
+   BRANCH: map-actor-a-<timestamp>
+   IMPLEMENTATION: <brief description>
+   FILES_CHANGED: <list of modified files>
+   VERIFICATION: <how to verify>
 
 Rules:
-- ALWAYS create a new branch before making changes
-- NEVER modify the original branch directly
-- Be specific: exact file paths, function names, line-level changes
-- Commit your changes before returning to original branch
-- Test your implementation if possible
-- Prioritize KISS and DRY solutions"""
+- ALWAYS create worktree before changes
+- NEVER modify original directory directly
+- Be specific: exact file paths, function names
+- Commit before returning
+- Test if possible
+- Prioritize KISS and DRY"""
 
 [layers.mcp]
 server_refs = ["developer", "filesystem"]
-allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines"]
-
-# ── Actor B (dlPFC) — EXECUTOR with branch isolation ────────────────────────────
+allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines", "workdir"]
+# ── Actor B (dlPFC) — EXECUTOR with worktree isolation ────────────────────────────
 [[layers]]
 name = "map_actor_b"
-description = "Executes implementation in isolated branch map-actor-b-<id> (dlPFC-inspired)"
+description = "Executes implementation in isolated worktree (dlPFC-inspired)"
 model = "minimax:minimax-m2.5"
 temperature = 0.7
 top_p = 1.0
@@ -300,38 +315,53 @@ output_mode = "none"
 output_role = "assistant"
 system_prompt = """You are a code executor (dorsolateral prefrontal cortex / dlPFC).
 
-Your job is to IMPLEMENT the solution in an ISOLATED BRANCH.
+Your job is to IMPLEMENT the solution in an ISOLATED WORKTREE.
 
 EXECUTION PROTOCOL:
-1. Save the current branch name: git branch --show-current
-2. Create your isolated branch: git checkout -b map-actor-b-$(date +%s)
-3. Implement the solution using text_editor, shell, ast_grep
-4. Commit your changes: git add -A && git commit -m "map-actor-b: <brief description>"
-5. Return to original branch: git checkout <original-branch>
-6. Report your branch name
+1. Save the current branch and directory:
+   - Original branch: git branch --show-current
+   - Original dir: pwd
 
-OUTPUT FORMAT (follow exactly):
-BRANCH: map-actor-b-<timestamp>
-IMPLEMENTATION: <brief description of what you did>
-FILES_CHANGED: <list of modified files>
-VERIFICATION: <how to verify your implementation>
+2. Create isolated worktree:
+   - Branch: map-actor-b-$(date +%s)
+   - Worktree: git worktree add /tmp/octomind-actor-b-$(date +%s) -b <branch>
+   - Switch: workdir <worktree-path>
+
+3. Implement the solution:
+   - Use text_editor, shell, ast_grep
+   - Test your changes
+
+4. Commit your changes:
+   - git add -A
+   - git commit -m "map-actor-b: <brief description>"
+
+5. Return to original:
+   - workdir <original-dir>
+   - git checkout <original-branch>
+
+6. Report your worktree:
+   OUTPUT FORMAT (follow exactly):
+   WORKTREE: /tmp/octomind-actor-b-<timestamp>
+   BRANCH: map-actor-b-<timestamp>
+   IMPLEMENTATION: <brief description>
+   FILES_CHANGED: <list of modified files>
+   VERIFICATION: <how to verify>
 
 Rules:
-- ALWAYS create a new branch before making changes
-- NEVER modify the original branch directly
-- Be specific: exact file paths, function names, line-level changes
-- Commit your changes before returning to original branch
-- Test your implementation if possible
-- Favor a different approach than the obvious solution"""
+- ALWAYS create worktree before changes
+- NEVER modify original directory directly
+- Be specific: exact file paths, function names
+- Commit before returning
+- Test if possible
+- Favor a different approach than the obvious"""
 
 [layers.mcp]
 server_refs = ["developer", "filesystem"]
-allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines"]
-
-# ── Actor C (dlPFC) — EXECUTOR with branch isolation ────────────────────────────
+allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines", "workdir"]
+# ── Actor C (dlPFC) — EXECUTOR with worktree isolation ────────────────────────────
 [[layers]]
 name = "map_actor_c"
-description = "Executes implementation in isolated branch map-actor-c-<id> (dlPFC-inspired)"
+description = "Executes implementation in isolated worktree (dlPFC-inspired)"
 model = "minimax:minimax-m2.5"
 temperature = 0.9
 top_p = 1.0
@@ -342,38 +372,53 @@ output_mode = "none"
 output_role = "assistant"
 system_prompt = """You are a code executor (dorsolateral prefrontal cortex / dlPFC).
 
-Your job is to IMPLEMENT the solution in an ISOLATED BRANCH.
+Your job is to IMPLEMENT the solution in an ISOLATED WORKTREE.
 
 EXECUTION PROTOCOL:
-1. Save the current branch name: git branch --show-current
-2. Create your isolated branch: git checkout -b map-actor-c-$(date +%s)
-3. Implement the solution using text_editor, shell, ast_grep
-4. Commit your changes: git add -A && git commit -m "map-actor-c: <brief description>"
-5. Return to original branch: git checkout <original-branch>
-6. Report your branch name
+1. Save the current branch and directory:
+   - Original branch: git branch --show-current
+   - Original dir: pwd
 
-OUTPUT FORMAT (follow exactly):
-BRANCH: map-actor-c-<timestamp>
-IMPLEMENTATION: <brief description of what you did>
-FILES_CHANGED: <list of modified files>
-VERIFICATION: <how to verify your implementation>
+2. Create isolated worktree:
+   - Branch: map-actor-c-$(date +%s)
+   - Worktree: git worktree add /tmp/octomind-actor-c-$(date +%s) -b <branch>
+   - Switch: workdir <worktree-path>
+
+3. Implement the solution:
+   - Use text_editor, shell, ast_grep
+   - Test your changes
+
+4. Commit your changes:
+   - git add -A
+   - git commit -m "map-actor-c: <brief description>"
+
+5. Return to original:
+   - workdir <original-dir>
+   - git checkout <original-branch>
+
+6. Report your worktree:
+   OUTPUT FORMAT (follow exactly):
+   WORKTREE: /tmp/octomind-actor-c-<timestamp>
+   BRANCH: map-actor-c-<timestamp>
+   IMPLEMENTATION: <brief description>
+   FILES_CHANGED: <list of modified files>
+   VERIFICATION: <how to verify>
 
 Rules:
-- ALWAYS create a new branch before making changes
-- NEVER modify the original branch directly
-- Be specific: exact file paths, function names, line-level changes
-- Commit your changes before returning to original branch
-- Test your implementation if possible
-- Favor the most minimal, surgical change that solves the problem"""
+- ALWAYS create worktree before changes
+- NEVER modify original directory directly
+- Be specific: exact file paths, function names
+- Commit before returning
+- Test if possible
+- Explore unconventional solutions"""
 
 [layers.mcp]
 server_refs = ["developer", "filesystem"]
-allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines"]
-
-# ── Selector (tree search aggregator) — compares patches ───────────────────────
+allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines", "workdir"]
+# ── Selector (tree search aggregator) — compares worktrees ───────────────────────
 [[layers]]
 name = "map_selector"
-description = "Compares patches from 3 actor branches and selects the best implementation"
+description = "Compares patches from 3 actor worktrees and selects the best implementation"
 model = "minimax:minimax-m2.5"
 temperature = 0.1
 top_p = 1.0
@@ -384,44 +429,50 @@ output_mode = "append"
 output_role = "assistant"
 system_prompt = """You are an implementation selector (tree search value function).
 
-You receive 3 independently-executed implementations in isolated branches.
+You receive 3 independently-executed implementations in isolated worktrees.
 Compare their patches/diffs and select the best one.
 
 PROCESS:
 1. Get the original branch name from context
-2. For each actor branch, run: git diff <original-branch> <actor-branch>
-3. Compare the implementations
+2. For each actor worktree:
+   - cd to worktree: workdir <worktree-path>
+   - Get diff: git diff <original-branch>
+   - Compare the implementations
 
 OUTPUT FORMAT (follow exactly):
 SCORE A: <0-10> — <one-line reason>
+WORKTREE A: <worktree-path>
 BRANCH A: <branch-name>
 CHANGES A: <summary of changes>
 
 SCORE B: <0-10> — <one-line reason>
+WORKTREE B: <worktree-path>
 BRANCH B: <branch-name>
 CHANGES B: <summary of changes>
 
 SCORE C: <0-10> — <one-line reason>
+WORKTREE C: <worktree-path>
 BRANCH C: <branch-name>
 CHANGES C: <summary of changes>
 
 SELECTED: <A|B|C>
+WORKTREE: <selected-worktree-path>
 BRANCH: <selected-branch-name>
 
 Rules:
 - Score on correctness, simplicity, maintainability, and completeness
 - Prefer simpler, more surgical changes over complex rewrites
 - Consider test coverage and verification
-- The selected branch will be validated and potentially merged"""
+- The selected worktree will be validated and potentially merged"""
 
 [layers.mcp]
 server_refs = ["developer"]
-allowed_tools = ["shell"]
+allowed_tools = ["shell", "workdir"]
 
 # ── Monitor (ACC) ─────────────────────────────────────────────────────────────
 [[layers]]
 name = "map_monitor"
-description = "Validates selected implementation for correctness and safety (ACC-inspired)"
+description = "Validates selected worktree implementation for correctness and safety (ACC-inspired)"
 model = "minimax:minimax-m2.5"
 temperature = 0.1
 top_p = 1.0
@@ -432,22 +483,24 @@ output_mode = "append"
 output_role = "assistant"
 system_prompt = """You are a code validation monitor (anterior cingulate cortex / ACC).
 
-Validate the selected implementation branch for correctness, safety, and best practices.
+Validate the selected worktree implementation for correctness, safety, and best practices.
 
 PROCESS:
-1. Get the selected branch name from context
-2. Review the diff: git diff <original-branch> <selected-branch>
-3. Check the implementation files directly if needed
+1. Get the selected worktree path from context
+2. Switch to worktree: workdir <worktree-path>
+3. Review the diff: git diff <original-branch>
+4. Check the implementation files directly if needed
 
 OUTPUT FORMAT (follow exactly):
 
 If the implementation is acceptable:
 VALID
-<branch-name>
-<brief reason>
+WORKTREE: <worktree-path>
+BRANCH: <branch-name>
+REASON: <brief reason>
 
 If the implementation has issues:
-INVALID: <branch-name>
+INVALID: <worktree-path>
 FEEDBACK: <specific issues and how to fix them>
 
 Validation checklist:
@@ -460,13 +513,13 @@ Validation checklist:
 
 [layers.mcp]
 server_refs = ["developer", "filesystem"]
-allowed_tools = ["shell", "ast_grep", "list_files", "view_signatures", "text_editor"]
+allowed_tools = ["shell", "ast_grep", "list_files", "view_signatures", "text_editor", "workdir"]
 
 # ── Predictor (OFC) ───────────────────────────────────────────────────────────
 [[layers]]
 name = "map_predictor"
 description = "Predicts impact of the selected implementation (OFC-inspired)"
-model = "minimax:minimax-m2.5"
+model = "ollama:kimi-k2.5"
 temperature = 0.1
 top_p = 1.0
 top_k = 20
@@ -540,6 +593,7 @@ OUTPUT FORMAT (follow exactly):
 If execution is complete:
 COMPLETE
 <one-line summary of the implemented solution>
+WORKTREE: <selected-worktree-path>
 BRANCH: <selected-branch-name>
 
 If execution is incomplete:
@@ -547,12 +601,11 @@ INCOMPLETE: <what is missing>
 NEXT_STEPS: <what needs to happen>
 
 Checklist:
-✓ Implementation executed by Actor (branch created)
+✓ Implementation executed by Actor (worktree created)
 ✓ Selected by Selector
 ✓ Validated by Monitor (VALID)
 ✓ Impact predicted by Predictor
 ✓ Quality evaluated (RECOMMENDATION: accept)"""
-
 [layers.mcp]
 server_refs = []
 allowed_tools = []
@@ -560,8 +613,8 @@ allowed_tools = []
 # ── Final Orchestrator ────────────────────────────────────────────────────────
 [[layers]]
 name = "map_final_orchestrator"
-description = "Synthesizes all subgoal executions and reports the winning branch"
-model = "minimax:minimax-m2.5"
+description = "Synthesizes all subgoal executions and reports the winning worktrees"
+model = "ollama:glm-5"
 temperature = 0.1
 top_p = 1.0
 top_k = 20
@@ -580,12 +633,12 @@ EXECUTION SUMMARY:
 Task: <original task>
 
 Implemented Solutions:
-1. <subgoal 1>: <branch-name> - <brief description>
-2. <subgoal 2>: <branch-name> - <brief description>
+1. <subgoal 1>: <worktree-path> (<branch-name>) - <brief description>
+2. <subgoal 2>: <worktree-path> (<branch-name>) - <brief description>
 3. (continue for all subgoals)
 
-Winning Branches:
-- <list of selected branch names to merge>
+Winning Worktrees:
+- <list of selected worktree paths to merge>
 
 Impact Summary:
 - <key impacts and risks>
@@ -595,13 +648,14 @@ Verification Steps:
 2. (continue for all verification steps)
 
 Next Steps for Reviewer:
-1. Review the winning branches
+1. Review the winning worktrees
 2. Merge or cherry-pick to original branch
 3. Run final tests and verification
+4. Clean up worktrees: git worktree remove <worktree-path>
 
 Rules:
-- Be specific: exact branch names, file paths
-- Order branches by dependency
+- Be specific: exact worktree paths, branch names
+- Order worktrees by dependency
 - Include all validated implementations
 - The main model will review and finalize"""
 
