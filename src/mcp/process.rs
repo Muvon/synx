@@ -142,6 +142,13 @@ pub enum ServerProcess {
 		writer: BufWriter<std::process::ChildStdin>,
 		next_id: Arc<AtomicU64>,      // Thread-safe ID counter
 		is_shutdown: Arc<AtomicBool>, // Track shutdown state
+		// Tracks the in-flight spawn_blocking JoinHandle from the previous call.
+		// When tokio::select! cancels, the blocking thread keeps running with the
+		// mutex held. We store the handle here so the NEXT call can await it before
+		// trying to lock, preventing a deadlock.
+		in_flight: Arc<
+			std::sync::Mutex<Option<tokio::task::JoinHandle<anyhow::Result<serde_json::Value>>>>,
+		>,
 	},
 }
 
@@ -537,6 +544,7 @@ async fn start_server_process(server: &McpServerConfig) -> Result<String> {
 				writer,
 				next_id: Arc::new(AtomicU64::new(1)),
 				is_shutdown: Arc::new(AtomicBool::new(false)),
+				in_flight: Arc::new(std::sync::Mutex::new(None)),
 			};
 
 			// Add to the registry
@@ -723,6 +731,31 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 			.ok_or_else(|| anyhow::anyhow!("Server not found: {}", server_name))?
 	};
 
+	// Extract the in_flight handle tracker — must happen before we try to lock the process.
+	// If a previous spawn_blocking was abandoned by tokio::select! cancellation, its OS thread
+	// still holds the std::sync::Mutex. We await it here so the mutex is free before we lock.
+	let in_flight_arc = {
+		let guard = server_process
+			.lock()
+			.map_err(|_| anyhow::anyhow!("Failed to acquire lock on server process"))?;
+		match &*guard {
+			ServerProcess::Stdin { in_flight, .. } => in_flight.clone(),
+			_ => {
+				return Err(anyhow::anyhow!(
+					"Server {} is not a stdin-based server",
+					server_name
+				))
+			}
+		}
+	};
+
+	// Await the previous in-flight task if any, so its mutex hold is released before we proceed.
+	let previous_handle = in_flight_arc.lock().unwrap().take();
+	if let Some(handle) = previous_handle {
+		// Ignore the result — we only care that the thread has finished and released the lock.
+		let _ = handle.await;
+	}
+
 	// Get the request ID atomically and prepare the message
 	let (final_message, request_id) = {
 		let mut process_guard = server_process
@@ -774,163 +807,160 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 	let request_id_clone = request_id;
 
 	// Execute with timeout and cancellation
-	let timeout_future = tokio::time::timeout(
-		std::time::Duration::from_secs(timeout_seconds),
-		tokio::task::spawn_blocking(move || {
-			// Get a lock on the process
-			let mut process = server_process
-				.lock()
-				.map_err(|_| anyhow::anyhow!("Failed to acquire lock on server process"))?;
+	// Spawn the blocking I/O task and keep the JoinHandle separate from the timeout wrapper.
+	// This lets us store the handle in in_flight on cancellation so the NEXT call can await it,
+	// ensuring the OS thread releases the mutex before we try to lock again.
+	let blocking_handle = tokio::task::spawn_blocking(move || {
+		// Get a lock on the process
+		let mut process = server_process
+			.lock()
+			.map_err(|_| anyhow::anyhow!("Failed to acquire lock on server process"))?;
 
-			// Ensure this is a stdin-based server and not shutdown
-			match &mut *process {
-				ServerProcess::Stdin {
-					writer,
-					reader,
-					is_shutdown,
-					..
-				} => {
-					// Double-check shutdown state
-					if is_shutdown.load(Ordering::SeqCst) {
-						return Err(anyhow::anyhow!(
-							"Server {} is shut down",
-							server_name_for_closure
-						));
-					}
+		// Ensure this is a stdin-based server and not shutdown
+		match &mut *process {
+			ServerProcess::Stdin {
+				writer,
+				reader,
+				is_shutdown,
+				..
+			} => {
+				// Double-check shutdown state
+				if is_shutdown.load(Ordering::SeqCst) {
+					return Err(anyhow::anyhow!(
+						"Server {} is shut down",
+						server_name_for_closure
+					));
+				}
 
-					// Serialize message to a string and add newline
-					let mut message_str = serde_json::to_string(&final_message_clone)?
-						.trim_end()
-						.to_string();
-					message_str.push('\n');
+				// Serialize message to a string and add newline
+				let mut message_str = serde_json::to_string(&final_message_clone)?
+					.trim_end()
+					.to_string();
+				message_str.push('\n');
 
-					// Write the message to the process's stdin
-					match writer.write_all(message_str.as_bytes()) {
-						Ok(_) => {}
-						Err(e) => {
-							// Check if this is a broken pipe error (server died)
-							if e.kind() == std::io::ErrorKind::BrokenPipe {
-								// Mark server as dead and schedule cleanup
-								{
-									let mut restart_info_guard =
-										SERVER_RESTART_INFO.write().unwrap();
-									let info = restart_info_guard
-										.entry(server_name_for_closure.clone())
-										.or_default();
-									info.health_status = ServerHealth::Dead;
-								}
-
-								// Schedule server cleanup (but don't do it here to avoid deadlocks)
-								crate::log_debug!("Broken pipe detected on write for server '{}', marking for cleanup", server_name_for_closure);
-
-								return Err(anyhow::anyhow!(
-									"Server '{}' appears to have died (broken pipe on write). Will attempt restart on next call.",
-									server_name_for_closure
-								));
+				// Write the message to the process's stdin
+				match writer.write_all(message_str.as_bytes()) {
+					Ok(_) => {}
+					Err(e) => {
+						// Check if this is a broken pipe error (server died)
+						if e.kind() == std::io::ErrorKind::BrokenPipe {
+							// Mark server as dead and schedule cleanup
+							{
+								let mut restart_info_guard = SERVER_RESTART_INFO.write().unwrap();
+								let info = restart_info_guard
+									.entry(server_name_for_closure.clone())
+									.or_default();
+								info.health_status = ServerHealth::Dead;
 							}
-							return Err(anyhow::anyhow!("Failed to write to stdin: {}", e));
-						}
-					}
 
-					match writer.flush() {
-						Ok(_) => {}
-						Err(e) => {
-							// Check if this is a broken pipe error (server died)
-							if e.kind() == std::io::ErrorKind::BrokenPipe {
-								// Mark server as dead and schedule cleanup
-								{
-									let mut restart_info_guard =
-										SERVER_RESTART_INFO.write().unwrap();
-									let info = restart_info_guard
-										.entry(server_name_for_closure.clone())
-										.or_default();
-									info.health_status = ServerHealth::Dead;
-								}
+							// Schedule server cleanup (but don't do it here to avoid deadlocks)
+							crate::log_debug!("Broken pipe detected on write for server '{}', marking for cleanup", server_name_for_closure);
 
-								// Schedule server cleanup (but don't do it here to avoid deadlocks)
-								crate::log_debug!("Broken pipe detected on flush for server '{}', marking for cleanup", server_name_for_closure);
-
-								return Err(anyhow::anyhow!(
-									"Server '{}' appears to have died (broken pipe on flush). Will attempt restart on next call.",
-									server_name_for_closure
-								));
-							}
-							return Err(anyhow::anyhow!("Failed to flush stdin: {}", e));
-						}
-					}
-
-					// Read lines from stdout, skipping any JSON-RPC notifications
-					// (messages with a "method" field but no "id") until we get
-					// the actual response for our request.
-					let response = loop {
-						let mut response_str = String::new();
-						let read_result = reader
-							.read_line(&mut response_str)
-							.map_err(|e| anyhow::anyhow!("Failed to read from stdout: {}", e))?;
-
-						if read_result == 0 {
 							return Err(anyhow::anyhow!(
-								"Server closed connection while reading response"
+								"Server '{}' appears to have died (broken pipe on write). Will attempt restart on next call.",
+								server_name_for_closure
 							));
 						}
+						return Err(anyhow::anyhow!("Failed to write to stdin: {}", e));
+					}
+				}
 
-						// Parse the line as JSON — non-JSON lines are spec violations (stdout noise).
-						// Warn and skip rather than hard-fail so badly-behaved servers still work.
-						let msg: Value = match serde_json::from_str(&response_str) {
-							Ok(v) => v,
-							Err(_) => {
-								let trimmed = response_str.trim();
-								if !trimmed.is_empty() {
-									eprintln!(
-										"⚠️  MCP '{}' prints: {}",
-										server_name_for_closure, trimmed
-									);
-								}
-								continue;
+				match writer.flush() {
+					Ok(_) => {}
+					Err(e) => {
+						// Check if this is a broken pipe error (server died)
+						if e.kind() == std::io::ErrorKind::BrokenPipe {
+							// Mark server as dead and schedule cleanup
+							{
+								let mut restart_info_guard = SERVER_RESTART_INFO.write().unwrap();
+								let info = restart_info_guard
+									.entry(server_name_for_closure.clone())
+									.or_default();
+								info.health_status = ServerHealth::Dead;
 							}
-						};
 
-						// JSON-RPC notifications have a "method" field but no "id".
-						// Forward them and keep reading for the real response.
-						if msg.get("method").is_some() && msg.get("id").is_none() {
-							let method = msg
-								.get("method")
-								.and_then(|m| m.as_str())
-								.unwrap_or("unknown");
-							let params = msg
-								.get("params")
-								.cloned()
-								.unwrap_or(serde_json::Value::Null);
-							emit_notification(&server_name_for_closure, method, &params);
-							continue;
+							// Schedule server cleanup (but don't do it here to avoid deadlocks)
+							crate::log_debug!("Broken pipe detected on flush for server '{}', marking for cleanup", server_name_for_closure);
+
+							return Err(anyhow::anyhow!(
+								"Server '{}' appears to have died (broken pipe on flush). Will attempt restart on next call.",
+								server_name_for_closure
+							));
 						}
+						return Err(anyhow::anyhow!("Failed to flush stdin: {}", e));
+					}
+				}
 
-						break msg;
-					};
+				// Read lines from stdout, skipping any JSON-RPC notifications
+				// (messages with a "method" field but no "id") until we get
+				// the actual response for our request.
+				let response = loop {
+					let mut response_str = String::new();
+					let read_result = reader
+						.read_line(&mut response_str)
+						.map_err(|e| anyhow::anyhow!("Failed to read from stdout: {}", e))?;
 
-					// Verify the response ID matches the request ID
-					let response_id = response.get("id").and_then(|id| id.as_u64()).unwrap_or(0);
-					if response_id != request_id_clone && override_id > 0 {
-						// Only check ID matching if override_id is provided
+					if read_result == 0 {
 						return Err(anyhow::anyhow!(
-							"Response ID {} does not match request ID {}",
-							response_id,
-							request_id_clone
+							"Server closed connection while reading response"
 						));
 					}
 
-					Ok(response)
+					// Parse the line as JSON — non-JSON lines are spec violations (stdout noise).
+					// Warn and skip rather than hard-fail so badly-behaved servers still work.
+					let msg: Value = match serde_json::from_str(&response_str) {
+						Ok(v) => v,
+						Err(_) => {
+							let trimmed = response_str.trim();
+							if !trimmed.is_empty() {
+								eprintln!(
+									"⚠️  MCP '{}' prints: {}",
+									server_name_for_closure, trimmed
+								);
+							}
+							continue;
+						}
+					};
+
+					// JSON-RPC notifications have a "method" field but no "id".
+					// Forward them and keep reading for the real response.
+					if msg.get("method").is_some() && msg.get("id").is_none() {
+						let method = msg
+							.get("method")
+							.and_then(|m| m.as_str())
+							.unwrap_or("unknown");
+						let params = msg
+							.get("params")
+							.cloned()
+							.unwrap_or(serde_json::Value::Null);
+						emit_notification(&server_name_for_closure, method, &params);
+						continue;
+					}
+
+					break msg;
+				};
+
+				// Verify the response ID matches the request ID
+				let response_id = response.get("id").and_then(|id| id.as_u64()).unwrap_or(0);
+				if response_id != request_id_clone && override_id > 0 {
+					// Only check ID matching if override_id is provided
+					return Err(anyhow::anyhow!(
+						"Response ID {} does not match request ID {}",
+						response_id,
+						request_id_clone
+					));
 				}
-				ServerProcess::Http(_) => Err(anyhow::anyhow!(
-					"Server {} is not a stdin-based server",
-					server_name_for_closure
-				)),
+
+				Ok(response)
 			}
-		}),
-	);
+			ServerProcess::Http(_) => Err(anyhow::anyhow!(
+				"Server {} is not a stdin-based server",
+				server_name_for_closure
+			)),
+		}
+	});
 
 	// Check for cancellation during the operation with faster polling
-	// Clone the token to avoid complex reference types in async block
 	let cancellation_token_clone = cancellation_token.clone();
 	let cancellation_future = async move {
 		if let Some(mut token) = cancellation_token_clone {
@@ -945,18 +975,26 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 		}
 	};
 
-	// Race between operation, timeout, and cancellation
-	// CRITICAL: tokio::select! ensures we only cancel the REQUEST, not the server process
-	// The server remains running and available for future tool calls
+	// Race between timeout and cancellation.
+	// On cancellation: store the handle in in_flight so the NEXT call awaits it before locking,
+	// preventing a deadlock from the OS thread still holding the std::sync::Mutex.
+	// Use Option so we can move blocking_handle into whichever branch fires.
+	let mut handle_opt = Some(blocking_handle);
 	tokio::select! {
-		result = timeout_future => {
+		result = tokio::time::timeout(
+			std::time::Duration::from_secs(timeout_seconds),
+			handle_opt.take().unwrap(),
+		) => {
+			// Handle completed (or timed out) — clear in_flight since there's nothing to await.
+			*in_flight_arc.lock().unwrap() = None;
 			match result {
 				Ok(task_result) => task_result?,
-				Err(_) => Err(anyhow::anyhow!("Timeout ({} seconds) communicating with stdin server: {}", timeout_seconds, server_name_for_error))
+			Err(_) => Err(anyhow::anyhow!("Timeout ({} seconds) communicating with stdin server: {}", timeout_seconds, server_name_for_error))
 			}
 		},
 		_ = cancellation_future => {
-			// Server process is preserved - only this communication is cancelled
+			// Store the still-running handle so the next call awaits it before locking.
+			*in_flight_arc.lock().unwrap() = handle_opt.take();
 			Err(anyhow::anyhow!("Operation cancelled while communicating with server: {}", server_name_for_error))
 		}
 	}

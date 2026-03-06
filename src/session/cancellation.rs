@@ -176,13 +176,6 @@ fn handle_interrupt(first_interrupt: &Arc<AtomicBool>, cancel_tx: &watch::Sender
 		crate::log_debug!("Press Ctrl+C again to force exit");
 		std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
 
-		// Reset flag after 2 seconds
-		let first_interrupt_clone = first_interrupt.clone();
-		tokio::spawn(async move {
-			tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-			first_interrupt_clone.store(false, Ordering::SeqCst);
-		});
-
 		true // Continue handling
 	}
 }
