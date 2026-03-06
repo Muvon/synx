@@ -1,0 +1,663 @@
+# MAP-Inspired EXECUTOR Configuration
+# Based on: "A brain-inspired agentic architecture to improve planning with LLMs"
+# Nature Communications (2025) - Webb, Mondal, Momennejad
+#
+# 🧠 Architecture: Planner → Executor (with branch isolation)
+#
+#   User Input → MAP Workflow (Actors execute in isolated branches)
+#              → Main Model (Reviews and merges best implementation)
+#
+# MAP Workflow (Executor):
+#   - Each Actor creates its OWN branch, implements solution
+#   - Original branch stays UNTOUCHED during execution
+#   - Selector compares patches/diffs from all branches
+#   - Monitor validates the selected implementation
+#   - Final orchestrator reports the winning branch
+#
+# Main Model (Reviewer):
+#   - Reviews the selected implementation
+#   - Can merge, cherry-pick, or request changes
+#   - Has full MCP tools for final adjustments
+
+#############################################
+# Global Settings
+#############################################
+
+version = 1
+
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 16384
+log_level = "info"
+custom_instructions_file_name = "INSTRUCTIONS.md"
+custom_constraints_file_name = ""
+enable_markdown_rendering = true
+markdown_theme = "default"
+max_session_tokens_threshold = 150000
+cache_tokens_threshold = 1024
+cache_timeout_seconds = 240
+use_long_system_cache = true
+mcp_response_warning_threshold = 5000
+mcp_response_tokens_threshold = 0
+max_session_spending_threshold = 0.0
+max_request_spending_threshold = 0.0
+max_retries = 1
+retry_timeout = 30
+
+#############################################
+# Ask / Shell command defaults
+#############################################
+
+[ask]
+system = "You are a helpful assistant.\n\n%{SYSTEM}"
+temperature = 0.6
+top_p = 0.8
+top_k = 40
+
+[shell]
+system = """You are a shell command generator. Convert natural language to shell commands.
+Respond with JSON: {"command": "...", "explanation": "...", "safety_notes": null}"""
+temperature = 0.3
+top_p = 0.7
+top_k = 20
+
+#############################################
+# MCP Servers
+#############################################
+
+[mcp]
+allowed_tools = []
+
+[[mcp.servers]]
+name = "developer"
+type = "builtin"
+timeout_seconds = 30
+tools = []
+
+[[mcp.servers]]
+name = "filesystem"
+type = "builtin"
+timeout_seconds = 30
+tools = []
+
+[[mcp.servers]]
+name = "web"
+type = "builtin"
+timeout_seconds = 30
+tools = []
+
+#############################################
+# Roles
+#############################################
+
+[[roles]]
+name = "developer"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+workflow = "map_executor"
+welcome = "Hello! MAP-enhanced executor ready. Working dir: %{CWD} (Role: %{ROLE})"
+system = """You are an elite senior code reviewer.
+
+You receive the winning implementation from the MAP execution workflow.
+Your job is to REVIEW and FINALIZE the implementation.
+
+The workflow has already:
+✓ Decomposed the task into subgoals
+✓ Had 3 actors implement solutions in isolated branches
+✓ Selected the best implementation via patch comparison
+✓ Validated and evaluated the solution
+
+Your job:
+1. Review the selected branch's implementation
+2. Check for quality, correctness, and completeness
+3. Merge or cherry-pick to the original branch if approved
+4. Make any final adjustments if needed
+5. Report the final status
+
+You have full MCP tools available. Focus on clean, pragmatic review."""
+
+[roles.mcp]
+server_refs = ["developer", "filesystem", "web"]
+allowed_tools = ["developer:*", "filesystem:*", "web_search"]
+
+[[roles]]
+name = "assistant"
+temperature = 0.7
+top_p = 1.0
+top_k = 40
+welcome = "Hello! How can I help? Working dir: %{CWD}"
+system = "You are a helpful AI assistant for general conversation."
+
+[roles.mcp]
+server_refs = []
+allowed_tools = []
+
+#############################################
+# MAP Workflow (Executor with branch isolation)
+#
+# Step 1: Decompose task into subgoals (aPFC)
+# Step 2: For each subgoal, loop:
+#           3 Actors execute independently in isolated branches (parallel)
+#           Selector compares patches and picks best
+#           Monitor validates → (if valid) Predictor + Evaluator
+#           Orchestrator checks if execution is complete
+# Step 3: Final orchestrator reports winning branch
+#############################################
+
+[[workflows]]
+name = "map_executor"
+description = "Brain-inspired MAP workflow: actors execute in isolated branches, selector picks best implementation"
+
+# Step 1: Task decomposition (read-only)
+[[workflows.steps]]
+name = "decompose_task"
+type = "once"
+layer = "map_task_decomposer"
+
+# Step 2: For each subgoal, run the Actor-Monitor feedback loop
+[[workflows.steps]]
+name = "execute_subgoals"
+type = "foreach"
+parse_pattern = "SUBGOAL \\d+: (.+)"
+
+  # Loop: Actor → Selector → Monitor → (Predictor + Evaluator) → Orchestrator
+  [[workflows.steps.substeps]]
+  name = "subgoal_loop"
+  type = "loop"
+  max_iterations = 4
+  exit_pattern = "COMPLETE"
+
+    # 3 Actors execute independently in isolated branches (parallel)
+    [[workflows.steps.substeps.substeps]]
+    name = "execute_in_branches"
+    type = "parallel"
+    parallel_layers = ["map_actor_a", "map_actor_b", "map_actor_c"]
+    aggregator = "map_selector"
+
+    # Monitor validates the selected implementation
+    [[workflows.steps.substeps.substeps]]
+    name = "validate_implementation"
+    type = "conditional"
+    layer = "map_monitor"
+    condition_pattern = "VALID"
+    on_match = ["map_predictor", "map_evaluator"]
+    on_no_match = ["map_actor_a"]
+
+    # Orchestrator checks if subgoal execution is complete
+    [[workflows.steps.substeps.substeps]]
+    name = "check_completion"
+    type = "once"
+    layer = "map_orchestrator"
+
+# Step 3: Final synthesis — report winning branch
+[[workflows.steps]]
+name = "final_synthesis"
+type = "once"
+layer = "map_final_orchestrator"
+
+#############################################
+# MAP Layers
+#############################################
+
+# ── TaskDecomposer (aPFC) — READ-ONLY ───────────────────────────────────────────
+[[layers]]
+name = "map_task_decomposer"
+description = "Decomposes complex development tasks into 3-7 sequential subgoals (aPFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.3
+top_p = 1.0
+top_k = 20
+max_tokens = 4096
+input_mode = "all"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are a task decomposition specialist (anterior prefrontal cortex / aPFC).
+
+Your job is to DECOMPOSE tasks into subgoals — NOT to implement them.
+
+1. Use READ-ONLY tools to understand the codebase structure (shell, ast_grep, list_files, view_signatures)
+2. Break down the development task into 3-7 clear, sequential subgoals
+
+You are a PLANNER — do NOT use text_editor or any write tools.
+The actors will execute each subgoal in isolated branches.
+
+OUTPUT FORMAT (follow exactly):
+SUBGOAL 1: <specific description>
+Success Criteria: <how to verify completion>
+
+SUBGOAL 2: <specific description>
+Success Criteria: <how to verify completion>
+
+(continue for each subgoal)
+
+Rules:
+- Order by dependency (prerequisites first)
+- Be specific: name files, functions, and exact changes
+- Each subgoal must be independently verifiable
+- Keep subgoals focused and achievable
+- DO NOT execute changes — only plan them"""
+
+[layers.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["shell", "ast_grep", "list_files", "view_signatures"]
+
+# ── Actor A (dlPFC) — EXECUTOR with branch isolation ────────────────────────────
+[[layers]]
+name = "map_actor_a"
+description = "Executes implementation in isolated branch map-actor-a-<id> (dlPFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.5
+top_p = 1.0
+top_k = 20
+max_tokens = 8192
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a code executor (dorsolateral prefrontal cortex / dlPFC).
+
+Your job is to IMPLEMENT the solution in an ISOLATED BRANCH.
+
+EXECUTION PROTOCOL:
+1. Save the current branch name: git branch --show-current
+2. Create your isolated branch: git checkout -b map-actor-a-$(date +%s)
+3. Implement the solution using text_editor, shell, ast_grep
+4. Commit your changes: git add -A && git commit -m "map-actor-a: <brief description>"
+5. Return to original branch: git checkout <original-branch>
+6. Report your branch name
+
+OUTPUT FORMAT (follow exactly):
+BRANCH: map-actor-a-<timestamp>
+IMPLEMENTATION: <brief description of what you did>
+FILES_CHANGED: <list of modified files>
+VERIFICATION: <how to verify your implementation>
+
+Rules:
+- ALWAYS create a new branch before making changes
+- NEVER modify the original branch directly
+- Be specific: exact file paths, function names, line-level changes
+- Commit your changes before returning to original branch
+- Test your implementation if possible
+- Prioritize KISS and DRY solutions"""
+
+[layers.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines"]
+
+# ── Actor B (dlPFC) — EXECUTOR with branch isolation ────────────────────────────
+[[layers]]
+name = "map_actor_b"
+description = "Executes implementation in isolated branch map-actor-b-<id> (dlPFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.7
+top_p = 1.0
+top_k = 20
+max_tokens = 8192
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a code executor (dorsolateral prefrontal cortex / dlPFC).
+
+Your job is to IMPLEMENT the solution in an ISOLATED BRANCH.
+
+EXECUTION PROTOCOL:
+1. Save the current branch name: git branch --show-current
+2. Create your isolated branch: git checkout -b map-actor-b-$(date +%s)
+3. Implement the solution using text_editor, shell, ast_grep
+4. Commit your changes: git add -A && git commit -m "map-actor-b: <brief description>"
+5. Return to original branch: git checkout <original-branch>
+6. Report your branch name
+
+OUTPUT FORMAT (follow exactly):
+BRANCH: map-actor-b-<timestamp>
+IMPLEMENTATION: <brief description of what you did>
+FILES_CHANGED: <list of modified files>
+VERIFICATION: <how to verify your implementation>
+
+Rules:
+- ALWAYS create a new branch before making changes
+- NEVER modify the original branch directly
+- Be specific: exact file paths, function names, line-level changes
+- Commit your changes before returning to original branch
+- Test your implementation if possible
+- Favor a different approach than the obvious solution"""
+
+[layers.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines"]
+
+# ── Actor C (dlPFC) — EXECUTOR with branch isolation ────────────────────────────
+[[layers]]
+name = "map_actor_c"
+description = "Executes implementation in isolated branch map-actor-c-<id> (dlPFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.9
+top_p = 1.0
+top_k = 20
+max_tokens = 8192
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a code executor (dorsolateral prefrontal cortex / dlPFC).
+
+Your job is to IMPLEMENT the solution in an ISOLATED BRANCH.
+
+EXECUTION PROTOCOL:
+1. Save the current branch name: git branch --show-current
+2. Create your isolated branch: git checkout -b map-actor-c-$(date +%s)
+3. Implement the solution using text_editor, shell, ast_grep
+4. Commit your changes: git add -A && git commit -m "map-actor-c: <brief description>"
+5. Return to original branch: git checkout <original-branch>
+6. Report your branch name
+
+OUTPUT FORMAT (follow exactly):
+BRANCH: map-actor-c-<timestamp>
+IMPLEMENTATION: <brief description of what you did>
+FILES_CHANGED: <list of modified files>
+VERIFICATION: <how to verify your implementation>
+
+Rules:
+- ALWAYS create a new branch before making changes
+- NEVER modify the original branch directly
+- Be specific: exact file paths, function names, line-level changes
+- Commit your changes before returning to original branch
+- Test your implementation if possible
+- Favor the most minimal, surgical change that solves the problem"""
+
+[layers.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines"]
+
+# ── Selector (tree search aggregator) — compares patches ───────────────────────
+[[layers]]
+name = "map_selector"
+description = "Compares patches from 3 actor branches and selects the best implementation"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 4096
+input_mode = "last"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are an implementation selector (tree search value function).
+
+You receive 3 independently-executed implementations in isolated branches.
+Compare their patches/diffs and select the best one.
+
+PROCESS:
+1. Get the original branch name from context
+2. For each actor branch, run: git diff <original-branch> <actor-branch>
+3. Compare the implementations
+
+OUTPUT FORMAT (follow exactly):
+SCORE A: <0-10> — <one-line reason>
+BRANCH A: <branch-name>
+CHANGES A: <summary of changes>
+
+SCORE B: <0-10> — <one-line reason>
+BRANCH B: <branch-name>
+CHANGES B: <summary of changes>
+
+SCORE C: <0-10> — <one-line reason>
+BRANCH C: <branch-name>
+CHANGES C: <summary of changes>
+
+SELECTED: <A|B|C>
+BRANCH: <selected-branch-name>
+
+Rules:
+- Score on correctness, simplicity, maintainability, and completeness
+- Prefer simpler, more surgical changes over complex rewrites
+- Consider test coverage and verification
+- The selected branch will be validated and potentially merged"""
+
+[layers.mcp]
+server_refs = ["developer"]
+allowed_tools = ["shell"]
+
+# ── Monitor (ACC) ─────────────────────────────────────────────────────────────
+[[layers]]
+name = "map_monitor"
+description = "Validates selected implementation for correctness and safety (ACC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 2048
+input_mode = "last"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are a code validation monitor (anterior cingulate cortex / ACC).
+
+Validate the selected implementation branch for correctness, safety, and best practices.
+
+PROCESS:
+1. Get the selected branch name from context
+2. Review the diff: git diff <original-branch> <selected-branch>
+3. Check the implementation files directly if needed
+
+OUTPUT FORMAT (follow exactly):
+
+If the implementation is acceptable:
+VALID
+<branch-name>
+<brief reason>
+
+If the implementation has issues:
+INVALID: <branch-name>
+FEEDBACK: <specific issues and how to fix them>
+
+Validation checklist:
+✓ Syntax and type correctness (run cargo check, tests, etc.)
+✓ Security concerns
+✓ Performance implications
+✓ Compatibility with existing code
+✓ Adherence to project conventions
+✓ No unintended breaking changes"""
+
+[layers.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["shell", "ast_grep", "list_files", "view_signatures", "text_editor"]
+
+# ── Predictor (OFC) ───────────────────────────────────────────────────────────
+[[layers]]
+name = "map_predictor"
+description = "Predicts impact of the selected implementation (OFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 2048
+input_mode = "last"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are a code impact predictor (orbitofrontal cortex / OFC).
+
+Predict the direct and indirect impacts of the selected implementation.
+You are an ANALYZER — do NOT write code or use tools.
+
+OUTPUT FORMAT (follow exactly):
+DIRECT_IMPACT: <immediate changes>
+AFFECTED_COMPONENTS: <what else will be impacted>
+DEPENDENCIES: <what else needs updating>
+RISKS: <potential issues>
+CONFIDENCE: <high|medium|low>"""
+
+[layers.mcp]
+server_refs = []
+allowed_tools = []
+
+# ── Evaluator (OFC) ───────────────────────────────────────────────────────────
+[[layers]]
+name = "map_evaluator"
+description = "Evaluates implementation quality and goal progress (OFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 2048
+input_mode = "last"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are a code quality evaluator (orbitofrontal cortex / OFC).
+
+Evaluate the quality of the selected implementation and progress toward the goal.
+You are an EVALUATOR — do NOT write code or use tools.
+
+OUTPUT FORMAT (follow exactly):
+QUALITY_SCORE: <0-10>
+GOAL_PROGRESS: <0-100>%
+MAINTAINABILITY: <0-10>
+RECOMMENDATION: <accept|revise|reject>
+REASONING: <brief explanation>"""
+
+[layers.mcp]
+server_refs = []
+allowed_tools = []
+
+# ── Orchestrator (aPFC) ───────────────────────────────────────────────────────
+[[layers]]
+name = "map_orchestrator"
+description = "Checks if current subgoal execution is complete (aPFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 1024
+input_mode = "last"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are a subgoal completion checker (anterior prefrontal cortex / aPFC).
+
+Determine if the current subgoal has been fully executed (implementation done, validated, impact predicted, quality evaluated).
+You are a CHECKER — do NOT write code or use tools.
+
+OUTPUT FORMAT (follow exactly):
+
+If execution is complete:
+COMPLETE
+<one-line summary of the implemented solution>
+BRANCH: <selected-branch-name>
+
+If execution is incomplete:
+INCOMPLETE: <what is missing>
+NEXT_STEPS: <what needs to happen>
+
+Checklist:
+✓ Implementation executed by Actor (branch created)
+✓ Selected by Selector
+✓ Validated by Monitor (VALID)
+✓ Impact predicted by Predictor
+✓ Quality evaluated (RECOMMENDATION: accept)"""
+
+[layers.mcp]
+server_refs = []
+allowed_tools = []
+
+# ── Final Orchestrator ────────────────────────────────────────────────────────
+[[layers]]
+name = "map_final_orchestrator"
+description = "Synthesizes all subgoal executions and reports the winning branch"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 4096
+input_mode = "all"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are the final execution synthesizer.
+
+Review all subgoal execution outputs and generate a comprehensive summary for the main model reviewer.
+
+OUTPUT FORMAT (follow exactly):
+
+EXECUTION SUMMARY:
+
+Task: <original task>
+
+Implemented Solutions:
+1. <subgoal 1>: <branch-name> - <brief description>
+2. <subgoal 2>: <branch-name> - <brief description>
+3. (continue for all subgoals)
+
+Winning Branches:
+- <list of selected branch names to merge>
+
+Impact Summary:
+- <key impacts and risks>
+
+Verification Steps:
+1. <how to verify the implementation>
+2. (continue for all verification steps)
+
+Next Steps for Reviewer:
+1. Review the winning branches
+2. Merge or cherry-pick to original branch
+3. Run final tests and verification
+
+Rules:
+- Be specific: exact branch names, file paths
+- Order branches by dependency
+- Include all validated implementations
+- The main model will review and finalize"""
+
+[layers.mcp]
+server_refs = []
+allowed_tools = []
+
+#############################################
+# Prompt Templates
+#############################################
+
+[[prompts]]
+name = "review"
+description = "Request code review with focus on best practices"
+prompt = """Please review the code above focusing on:
+- Code quality and best practices
+- Security considerations
+- Performance implications
+- Maintainability and readability
+- Potential bugs or edge cases
+
+Provide specific suggestions for improvement."""
+
+[[prompts]]
+name = "explain"
+description = "Ask for detailed explanation of code or concept"
+prompt = "Please provide a detailed explanation of the code/concept above, including how it works, why it's designed this way, and any important considerations."
+
+#############################################
+# Compression
+#############################################
+
+[compression]
+hints_enabled = true
+hints_pressure_threshold = 0.7
+hints_min_interval = 5
+adaptive_threshold = true
+
+[[compression.pressure_levels]]
+threshold = 50000
+target_ratio = 2.0
+
+[[compression.pressure_levels]]
+threshold = 100000
+target_ratio = 4.0
+
+[[compression.pressure_levels]]
+threshold = 150000
+target_ratio = 8.0
+
+[compression.decision]
+model = "minimax:minimax-m2.5"
+max_tokens = 16000
+temperature = 0.3
+top_p = 1.0
+top_k = 20
+max_retries = 1
+retry_timeout = 30
+ignore_cost = false
