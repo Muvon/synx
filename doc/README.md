@@ -14,7 +14,7 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 - [07-command-layers.md](./07-command-layers.md) — Layered processing, custom commands, and agents
 - [08-mcp-server-development.md](./08-mcp-server-development.md) — MCP server development and protocol compliance
 - [09-websocket-server.md](./09-websocket-server.md) — WebSocket API for programmatic access
-- [10-workflows.md](./10-workflows.md) — Brain-inspired planning system for complex multi-step tasks
+- [10-workflows.md](./10-workflows.md) — Brain-inspired MAP planning system for complex multi-step tasks
 
 ## Current Architecture Overview
 
@@ -41,7 +41,8 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 - **Smart Session Continuation**: Automatic context preservation when token limits reached
 - **Cost Tracking**: Real-time usage monitoring with detailed reporting
 - **Layered Processing**: AI pipeline system for complex task decomposition
-- **Template-Based Configuration**: All defaults in `config-templates/default.toml`
+- **MAP Planning**: Brain-inspired Modular Agentic Planner architecture for multi-step tasks
+- **Template-Based Configuration**: All defaults in `config-templates/default.toml`, including MAP planning template at `config-templates/map-planner.toml`
 - **Structured Output**: `--schema` flag enforces JSON Schema-validated responses for pipelines and automation
 ## Core Features
 
@@ -217,7 +218,8 @@ Default values
 - **[Advanced Features](./06-advanced.md)** - MCP tools, multimodal vision, and extensibility
 - **[Command Layers](./07-command-layers.md)** - Layered processing and custom commands
 - **[MCP Development](./08-mcp-server-development.md)** - Tool development and protocol compliance
-
+- **[WebSocket API](./09-websocket-server.md)** - Programmatic access and HTTP API
+- **[MAP Workflows](./10-workflows.md)** — Brain-inspired MAP planning system for complex multi-step tasks
 ### Support Resources
 - **GitHub Issues**: [Report bugs and request features](https://github.com/muvon/octomind/issues)
 - **GitHub Discussions**: [Community support and questions](https://github.com/muvon/octomind/discussions)

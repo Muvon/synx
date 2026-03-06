@@ -1,0 +1,634 @@
+# MAP-Inspired PLANNER Configuration
+# Based on: "A brain-inspired agentic architecture to improve planning with LLMs"
+# Nature Communications (2025) - Webb, Mondal, Momennejad
+#
+# 🧠 Architecture: Planner → Executor
+#
+#   User Input → MAP Workflow (Planning layers, no tools)
+#              → Main Model (Execution with full MCP tools)
+#
+# MAP Workflow (Planner):
+#   - NO MCP tools (pure reasoning)
+#   - Decomposes task → proposes approaches → validates → predicts impact → evaluates
+#   - Generates a comprehensive plan passed to the main model
+#
+# Main Model (Executor):
+#   - Receives the validated plan from the workflow
+#   - Has full MCP tools (text_editor, shell, ast_grep, etc.)
+#   - Executes the plan
+
+#############################################
+# Global Settings
+#############################################
+
+version = 1
+
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 16384
+log_level = "info"
+custom_instructions_file_name = "INSTRUCTIONS.md"
+custom_constraints_file_name = ""
+enable_markdown_rendering = true
+markdown_theme = "default"
+max_session_tokens_threshold = 150000
+cache_tokens_threshold = 1024
+cache_timeout_seconds = 240
+use_long_system_cache = true
+mcp_response_warning_threshold = 5000
+mcp_response_tokens_threshold = 0
+max_session_spending_threshold = 0.0
+max_request_spending_threshold = 0.0
+max_retries = 1
+retry_timeout = 30
+
+#############################################
+# Ask / Shell command defaults
+#############################################
+
+[ask]
+system = "You are a helpful assistant.\n\n%{SYSTEM}"
+temperature = 0.6
+top_p = 0.8
+top_k = 40
+
+[shell]
+system = """You are a shell command generator. Convert natural language to shell commands.
+Respond with JSON: {"command": "...", "explanation": "...", "safety_notes": null}"""
+temperature = 0.3
+top_p = 0.7
+top_k = 20
+
+#############################################
+# MCP Servers
+#############################################
+
+[mcp]
+allowed_tools = []
+
+[[mcp.servers]]
+name = "developer"
+type = "builtin"
+timeout_seconds = 30
+tools = []
+
+[[mcp.servers]]
+name = "filesystem"
+type = "builtin"
+timeout_seconds = 30
+tools = []
+
+[[mcp.servers]]
+name = "web"
+type = "builtin"
+timeout_seconds = 30
+tools = []
+
+#############################################
+# Roles
+#############################################
+
+[[roles]]
+name = "developer"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+workflow = "map_planner"
+welcome = "Hello! MAP-enhanced developer ready. Working dir: %{CWD} (Role: %{ROLE})"
+system = """You are an elite senior developer.
+
+You receive a comprehensive, validated plan from the MAP planning workflow.
+Your job is to EXECUTE this plan using MCP tools.
+
+The workflow has already:
+✓ Decomposed the task into subgoals
+✓ Proposed and validated implementation approaches
+✓ Predicted impacts and evaluated quality
+✓ Generated a step-by-step implementation plan
+
+Your job:
+1. Read the plan carefully
+2. Execute each step using MCP tools (text_editor, shell, ast_grep, etc.)
+3. Follow the validated approaches exactly
+4. Verify each step compiles/works before moving to the next
+
+Focus on clean, pragmatic execution. No over-engineering."""
+
+[roles.mcp]
+server_refs = ["developer", "filesystem", "web"]
+allowed_tools = ["developer:*", "filesystem:*", "web_search"]
+
+[[roles]]
+name = "assistant"
+temperature = 0.7
+top_p = 1.0
+top_k = 40
+welcome = "Hello! How can I help? Working dir: %{CWD}"
+system = "You are a helpful AI assistant for general conversation."
+
+[roles.mcp]
+server_refs = []
+allowed_tools = []
+
+#############################################
+#############################################
+# MAP Workflow (Planner)
+#
+# Step 1: Decompose task into subgoals (aPFC)
+# Step 2: For each subgoal, loop:
+#           3 Actors explore independently (parallel) → Selector picks best
+#           Monitor validates → (if valid) Predictor + Evaluator
+#           Orchestrator checks if planning is complete
+# Step 3: Final orchestrator synthesizes comprehensive plan
+#############################################
+
+[[workflows]]
+name = "map_planner"
+description = "Brain-inspired MAP workflow: decomposes task, validates approaches, generates execution plan"
+
+# Step 1: Task decomposition
+[[workflows.steps]]
+name = "decompose_task"
+type = "once"
+layer = "map_task_decomposer"
+
+# Step 2: For each subgoal, run the Actor-Monitor feedback loop
+[[workflows.steps]]
+name = "execute_subgoals"
+type = "foreach"
+parse_pattern = "SUBGOAL \\d+: (.+)"
+
+  # Loop: Actor → Monitor → (Predictor + Evaluator) → Orchestrator
+  [[workflows.steps.substeps]]
+  name = "subgoal_loop"
+  type = "loop"
+  max_iterations = 4
+  exit_pattern = "COMPLETE"
+
+    # 3 Actors explore independently in parallel (true tree search)
+    [[workflows.steps.substeps.substeps]]
+    name = "explore_proposals"
+    type = "parallel"
+    parallel_layers = ["map_actor_a", "map_actor_b", "map_actor_c"]
+    aggregator = "map_selector"
+
+    # Monitor validates the selected proposal — if VALID runs predictor+evaluator, else loops back
+    [[workflows.steps.substeps.substeps]]
+    name = "validate_proposal"
+    type = "conditional"
+    layer = "map_monitor"
+    condition_pattern = "VALID"
+    on_match = ["map_predictor", "map_evaluator"]
+    on_no_match = ["map_actor_a"]
+
+    # Orchestrator checks if subgoal planning is complete
+    [[workflows.steps.substeps.substeps]]
+    name = "check_completion"
+    type = "once"
+    layer = "map_orchestrator"
+
+# Step 3: Final synthesis — generate comprehensive execution plan
+[[workflows.steps]]
+name = "final_synthesis"
+type = "once"
+layer = "map_final_orchestrator"
+
+#############################################
+# MAP Layers (all pure planners — no write tools)
+#############################################
+
+# ── TaskDecomposer (aPFC) ─────────────────────────────────────────────────────
+[[layers]]
+name = "map_task_decomposer"
+description = "Decomposes complex development tasks into 3-7 sequential subgoals (aPFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.3
+top_p = 1.0
+top_k = 20
+max_tokens = 4096
+input_mode = "all"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are a task decomposition specialist (anterior prefrontal cortex / aPFC).
+
+Your job is to DECOMPOSE tasks into subgoals — NOT to implement them.
+
+1. Use READ-ONLY tools to understand the codebase structure (shell, ast_grep, list_files, view_signatures)
+2. Break down the development task into 3-7 clear, sequential subgoals
+
+You are a PLANNER — do NOT use text_editor or any write tools.
+The main model will execute the plan after all layers complete.
+
+OUTPUT FORMAT (follow exactly):
+SUBGOAL 1: <specific description>
+Success Criteria: <how to verify completion>
+
+SUBGOAL 2: <specific description>
+Success Criteria: <how to verify completion>
+
+(continue for each subgoal)
+
+Rules:
+- Order by dependency (prerequisites first)
+- Be specific: name files, functions, and exact changes
+- Each subgoal must be independently verifiable
+- Keep subgoals focused and achievable
+- DO NOT execute changes — only plan them"""
+
+[layers.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["shell", "ast_grep", "list_files", "view_signatures"]
+
+# ── Actor A (dlPFC) — independent explorer ───────────────────────────────────
+[[layers]]
+name = "map_actor_a"
+description = "Independently proposes ONE implementation approach for the current subgoal (dlPFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.5
+top_p = 1.0
+top_k = 20
+max_tokens = 4096
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a code action PROPOSER (dorsolateral prefrontal cortex / dlPFC).
+
+Your job is to PROPOSE implementation approaches — NOT to execute them.
+
+1. Use READ-ONLY tools to inspect the codebase (shell, ast_grep, list_files, semantic_search, view_signatures)
+2. Gather context and understand the current state
+3. Propose ONE specific, actionable implementation approach
+
+You are a PLANNER — do NOT use text_editor or any write tools.
+The main model will execute your proposal after validation.
+
+OUTPUT FORMAT (follow exactly):
+PROPOSAL: <description>
+File: <path>
+Changes: <specific modifications with code snippets>
+Rationale: <why this is the best approach>
+
+Rules:
+- Inspect the actual codebase with tools before proposing
+- Be specific: exact file paths, function names, line-level changes
+- Commit to one approach — no "alternatively" or "you could also"
+- Prioritize KISS and DRY solutions
+- DO NOT execute changes — only propose them"""
+
+[layers.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures"]
+
+# ── Actor B (dlPFC) — independent explorer ───────────────────────────────────
+[[layers]]
+name = "map_actor_b"
+description = "Independently proposes ONE implementation approach for the current subgoal (dlPFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.7
+top_p = 1.0
+top_k = 20
+max_tokens = 4096
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a code action PROPOSER (dorsolateral prefrontal cortex / dlPFC).
+
+Your job is to PROPOSE implementation approaches — NOT to execute them.
+
+1. Use READ-ONLY tools to inspect the codebase (shell, ast_grep, list_files, semantic_search, view_signatures)
+2. Gather context and understand the current state
+3. Propose ONE specific, actionable implementation approach
+
+You are a PLANNER — do NOT use text_editor or any write tools.
+The main model will execute your proposal after validation.
+
+Favor a different angle than the obvious solution — consider less conventional but valid approaches.
+
+OUTPUT FORMAT (follow exactly):
+PROPOSAL: <description>
+File: <path>
+Changes: <specific modifications with code snippets>
+Rationale: <why this is the best approach>
+
+Rules:
+- Inspect the actual codebase with tools before proposing
+- Be specific: exact file paths, function names, line-level changes
+- Commit to one approach — no "alternatively" or "you could also"
+- Prioritize KISS and DRY solutions
+- DO NOT execute changes — only propose them"""
+
+[layers.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures"]
+
+# ── Actor C (dlPFC) — independent explorer ───────────────────────────────────
+[[layers]]
+name = "map_actor_c"
+description = "Independently proposes ONE implementation approach for the current subgoal (dlPFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.9
+top_p = 1.0
+top_k = 20
+max_tokens = 4096
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+system_prompt = """You are a code action PROPOSER (dorsolateral prefrontal cortex / dlPFC).
+
+Your job is to PROPOSE implementation approaches — NOT to execute them.
+
+1. Use READ-ONLY tools to inspect the codebase (shell, ast_grep, list_files, semantic_search, view_signatures)
+2. Gather context and understand the current state
+3. Propose ONE specific, actionable implementation approach
+
+You are a PLANNER — do NOT use text_editor or any write tools.
+The main model will execute your proposal after validation.
+
+Favor the most minimal, surgical change that solves the problem — less is more.
+
+OUTPUT FORMAT (follow exactly):
+PROPOSAL: <description>
+File: <path>
+Changes: <specific modifications with code snippets>
+Rationale: <why this is the best approach>
+
+Rules:
+- Inspect the actual codebase with tools before proposing
+- Be specific: exact file paths, function names, line-level changes
+- Commit to one approach — no "alternatively" or "you could also"
+- Prioritize KISS and DRY solutions
+- DO NOT execute changes — only propose them"""
+
+[layers.mcp]
+server_refs = ["developer", "filesystem"]
+allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_signatures"]
+
+# ── Selector (tree search aggregator) ────────────────────────────────────────
+[[layers]]
+name = "map_selector"
+description = "Scores 3 independent proposals and selects the best one (tree search value function)"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 2048
+input_mode = "last"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are a proposal selector (tree search value function).
+
+You receive 3 independently-generated proposals for the same subgoal.
+Score each on correctness, simplicity, and maintainability, then select the best one.
+You are a SELECTOR — do NOT write code or use tools.
+
+OUTPUT FORMAT (follow exactly):
+SCORE A: <0-10> — <one-line reason>
+SCORE B: <0-10> — <one-line reason>
+SCORE C: <0-10> — <one-line reason>
+
+SELECTED: <A|B|C>
+
+<reproduce the full text of the selected proposal here exactly>
+
+Rules:
+- Score independently — do not let order bias your judgment
+- Prefer simpler, more surgical changes over complex rewrites
+- The reproduced proposal must be complete and unmodified"""
+
+[layers.mcp]
+server_refs = []
+allowed_tools = []
+
+# ── Monitor (ACC) ─────────────────────────────────────────────────────────────
+[[layers]]
+name = "map_monitor"
+description = "Validates proposals for correctness, safety, and best practices (ACC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 2048
+input_mode = "last"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are a code validation monitor (anterior cingulate cortex / ACC).
+
+Validate the proposals from the Actor for correctness, safety, and best practices.
+You are a VALIDATOR — do NOT write code or use tools.
+
+OUTPUT FORMAT (follow exactly):
+
+If ALL proposals are acceptable:
+VALID
+<brief reason>
+
+If ANY proposal has issues:
+INVALID: <which proposal(s)>
+FEEDBACK: <specific issues and how to fix them>
+
+Validation checklist:
+✓ Syntax and type correctness
+✓ Security concerns
+✓ Performance implications
+✓ Compatibility with existing code
+✓ Adherence to project conventions
+✓ No unintended breaking changes"""
+
+[layers.mcp]
+server_refs = []
+allowed_tools = []
+
+# ── Predictor (OFC) ───────────────────────────────────────────────────────────
+[[layers]]
+name = "map_predictor"
+description = "Predicts direct and indirect impact of proposed changes (OFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 2048
+input_mode = "last"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are a code impact predictor (orbitofrontal cortex / OFC).
+
+Predict the direct and indirect impacts of the validated proposals.
+You are an ANALYZER — do NOT write code or use tools.
+
+OUTPUT FORMAT (follow exactly):
+DIRECT_IMPACT: <immediate changes>
+AFFECTED_COMPONENTS: <what else will be impacted>
+DEPENDENCIES: <what else needs updating>
+RISKS: <potential issues>
+CONFIDENCE: <high|medium|low>"""
+
+[layers.mcp]
+server_refs = []
+allowed_tools = []
+
+# ── Evaluator (OFC) ───────────────────────────────────────────────────────────
+[[layers]]
+name = "map_evaluator"
+description = "Evaluates solution quality and goal progress (OFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 2048
+input_mode = "last"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are a code quality evaluator (orbitofrontal cortex / OFC).
+
+Evaluate the quality of the proposed solution and progress toward the goal.
+You are an EVALUATOR — do NOT write code or use tools.
+
+OUTPUT FORMAT (follow exactly):
+QUALITY_SCORE: <0-10>
+GOAL_PROGRESS: <0-100>%
+MAINTAINABILITY: <0-10>
+RECOMMENDATION: <accept|revise|reject>
+REASONING: <brief explanation>"""
+
+[layers.mcp]
+server_refs = []
+allowed_tools = []
+
+# ── Orchestrator (aPFC) ───────────────────────────────────────────────────────
+[[layers]]
+name = "map_orchestrator"
+description = "Checks if current subgoal planning is complete (aPFC-inspired)"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 1024
+input_mode = "last"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are a subgoal completion checker (anterior prefrontal cortex / aPFC).
+
+Determine if the current subgoal has been fully planned (approach proposed, validated, impact predicted, quality evaluated).
+You are a CHECKER — do NOT write code or use tools.
+
+OUTPUT FORMAT (follow exactly):
+
+If planning is complete:
+COMPLETE
+<one-line summary of the validated approach>
+
+If planning is incomplete:
+INCOMPLETE: <what is missing>
+NEXT_STEPS: <what needs to happen>
+
+Checklist:
+✓ Approach proposed by Actor
+✓ Validated by Monitor (VALID)
+✓ Impact predicted by Predictor
+✓ Quality evaluated (RECOMMENDATION: accept)"""
+
+[layers.mcp]
+server_refs = []
+allowed_tools = []
+
+# ── Final Orchestrator ────────────────────────────────────────────────────────
+[[layers]]
+name = "map_final_orchestrator"
+description = "Synthesizes all subgoal plans into a comprehensive execution plan"
+model = "minimax:minimax-m2.5"
+temperature = 0.1
+top_p = 1.0
+top_k = 20
+max_tokens = 4096
+input_mode = "all"
+output_mode = "append"
+output_role = "assistant"
+system_prompt = """You are the final plan synthesizer.
+
+Review all subgoal planning outputs and generate a comprehensive, step-by-step execution plan for the main model.
+You are a SYNTHESIZER — do NOT write code or use tools.
+
+OUTPUT FORMAT (follow exactly):
+
+COMPREHENSIVE IMPLEMENTATION PLAN:
+
+Task: <original task>
+
+Implementation Steps:
+1. <specific step with file path and exact change>
+2. <specific step with file path and exact change>
+3. (continue for all steps)
+
+Impact Summary:
+- <key impacts and risks>
+
+Verification:
+1. <how to verify step 1>
+2. (continue for all steps)
+
+This plan is ready for execution.
+
+Rules:
+- Be specific: exact file paths, function names, line-level changes
+- Order steps by dependency
+- Include all validated approaches from the subgoal planning
+- Keep it actionable — the executor will follow this plan directly"""
+
+[layers.mcp]
+server_refs = []
+allowed_tools = []
+
+#############################################
+# Prompt Templates
+#############################################
+
+[[prompts]]
+name = "review"
+description = "Request code review with focus on best practices"
+prompt = """Please review the code above focusing on:
+- Code quality and best practices
+- Security considerations
+- Performance implications
+- Maintainability and readability
+- Potential bugs or edge cases
+
+Provide specific suggestions for improvement."""
+
+[[prompts]]
+name = "explain"
+description = "Ask for detailed explanation of code or concept"
+prompt = "Please provide a detailed explanation of the code/concept above, including how it works, why it's designed this way, and any important considerations."
+
+#############################################
+# Compression
+#############################################
+
+[compression]
+hints_enabled = true
+hints_pressure_threshold = 0.7
+hints_min_interval = 5
+adaptive_threshold = true
+
+[[compression.pressure_levels]]
+threshold = 50000
+target_ratio = 2.0
+
+[[compression.pressure_levels]]
+threshold = 100000
+target_ratio = 4.0
+
+[[compression.pressure_levels]]
+threshold = 150000
+target_ratio = 8.0
+
+[compression.decision]
+model = "minimax:minimax-m2.5"
+max_tokens = 16000
+temperature = 0.3
+top_p = 1.0
+top_k = 20
+max_retries = 1
+retry_timeout = 30
+ignore_cost = false
