@@ -260,7 +260,7 @@ allowed_tools = ["semantic_search", "ast_grep", "list_files", "view_signatures",
 [[layers]]
 name = "map_actor_a"
 description = "Executes implementation in isolated worktree (dlPFC-inspired)"
-model = "minimax:minimax-m2.5"
+model = "ollama:glm-5"
 temperature = 0.5
 top_p = 1.0
 top_k = 20
@@ -316,8 +316,8 @@ allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_sig
 [[layers]]
 name = "map_actor_b"
 description = "Executes implementation in isolated worktree (dlPFC-inspired)"
-model = "minimax:minimax-m2.5"
-temperature = 0.7
+model = "ollama:minimax-m2.5"
+temperature = 0.5
 top_p = 1.0
 top_k = 20
 max_tokens = 8192
@@ -372,8 +372,8 @@ allowed_tools = ["shell", "ast_grep", "list_files", "semantic_search", "view_sig
 [[layers]]
 name = "map_actor_c"
 description = "Executes implementation in isolated worktree (dlPFC-inspired)"
-model = "minimax:minimax-m2.5"
-temperature = 0.9
+model = "ollama:kimi-k2.5"
+temperature = 0.5
 top_p = 1.0
 top_k = 20
 max_tokens = 8192
