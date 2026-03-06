@@ -20,6 +20,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use uuid;
 
@@ -31,6 +32,29 @@ pub mod tool_map;
 lazy_static::lazy_static! {
 	static ref INTERNAL_FUNCTION_CACHE: Arc<RwLock<std::collections::HashMap<String, Vec<McpFunction>>>> =
 		Arc::new(RwLock::new(std::collections::HashMap::new()));
+}
+
+// Thread-local working directory for parallel execution isolation
+// Each thread can have its own working directory for isolated git worktrees
+thread_local! {
+	static THREAD_WORKING_DIRECTORY: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Set the working directory for the current thread
+pub fn set_thread_working_directory(path: Option<PathBuf>) {
+	THREAD_WORKING_DIRECTORY.with(|wd| {
+		*wd.borrow_mut() = path;
+	});
+}
+
+/// Get the working directory for the current thread
+/// Returns the thread-local directory if set, otherwise falls back to current_dir
+pub fn get_thread_working_directory() -> PathBuf {
+	THREAD_WORKING_DIRECTORY.with(|wd| {
+		wd.borrow()
+			.clone()
+			.unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+	})
 }
 
 // OAuth 2.1 + PKCE authentication
@@ -784,6 +808,25 @@ async fn execute_tool_without_cancellation(
 										call.tool_name.clone(),
 										call.tool_id.clone(),
 										format!("Plan execution failed: {}", e),
+									));
+								}
+							}
+						}
+						"workdir" => {
+							crate::log_debug!(
+								"Executing workdir command via developer server '{}'",
+								target_server.name()
+							);
+							match dev::execute_workdir_command(call).await {
+								Ok(mut result) => {
+									result.tool_id = call.tool_id.clone();
+									return Ok(result);
+								}
+								Err(e) => {
+									return Ok(McpToolResult::error(
+										call.tool_name.clone(),
+										call.tool_id.clone(),
+										format!("Workdir execution failed: {}", e),
 									));
 								}
 							}

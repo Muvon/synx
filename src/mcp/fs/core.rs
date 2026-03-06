@@ -14,7 +14,7 @@
 
 // Core functionality and shared utilities for file system operations
 
-use super::super::{McpToolCall, McpToolResult};
+use super::super::{get_thread_working_directory, McpToolCall, McpToolResult};
 use crate::mcp::fs::{directory, file_ops, text_editing};
 use crate::utils::truncation::format_extracted_content_smart;
 use anyhow::{anyhow, Result};
@@ -24,6 +24,18 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 use tokio::fs as tokio_fs;
+
+/// Resolve a path relative to the thread working directory
+/// If the path is absolute, returns it as-is
+/// If the path is relative, resolves it relative to the thread working directory
+pub fn resolve_path(path_str: &str) -> std::path::PathBuf {
+	let path = Path::new(path_str);
+	if path.is_absolute() {
+		path.to_path_buf()
+	} else {
+		get_thread_working_directory().join(path)
+	}
+}
 
 // Helper function to resolve line indices, supporting negative indexing
 // Negative indices count from the end: -1 = last line, -2 = second-to-last, etc.
@@ -225,9 +237,9 @@ pub async fn execute_text_editor(call: &McpToolCall) -> Result<McpToolResult> {
 					match (arr[0].as_i64(), arr[1].as_i64()) {
 						(Some(start), Some(end)) => {
 							// We need to read the file first to get total lines for negative indexing
-							let file_path = Path::new(&path);
+							let file_path = resolve_path(&path);
 							if file_path.exists() && file_path.is_file() {
-								match tokio_fs::read_to_string(file_path).await {
+								match tokio_fs::read_to_string(&file_path).await {
 									Ok(content) => {
 										let total_lines = content.lines().count();
 										match resolve_line_range(start, end, total_lines) {
@@ -280,11 +292,11 @@ pub async fn execute_text_editor(call: &McpToolCall) -> Result<McpToolResult> {
 			};
 
 
-			let result = file_ops::view_file_spec(call, Path::new(&path), lines).await?;
+			let result = file_ops::view_file_spec(call, &resolve_path(&path), lines).await?;
 
 			// RESET: Clear line modification tracking after successful view
 			if !result.result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false) {
-				if let Err(e) = crate::mcp::fs::text_editing::reset_line_count_tracking(Path::new(&path)).await {
+				if let Err(e) = crate::mcp::fs::text_editing::reset_line_count_tracking(&resolve_path(&path)).await {
 					crate::log_debug!("Failed to reset line tracking for {}: {}", path, e);
 				}
 			}
@@ -340,7 +352,7 @@ pub async fn execute_text_editor(call: &McpToolCall) -> Result<McpToolResult> {
 					"Missing or invalid 'content' parameter for create command".to_string(),
 				)),
 			};
-			file_ops::create_file_spec(call, Path::new(&path), &content).await
+			file_ops::create_file_spec(call, &resolve_path(&path), &content).await
 		},
 		"str_replace" => {
 
@@ -368,7 +380,7 @@ pub async fn execute_text_editor(call: &McpToolCall) -> Result<McpToolResult> {
 					"Missing or invalid 'new_text' parameter".to_string(),
 				)),
 			};
-			text_editing::str_replace_spec(call, Path::new(&path), &old_text, &new_text).await
+			text_editing::str_replace_spec(call, &resolve_path(&path), &old_text, &new_text).await
 		},
 		"insert" => {
 			let path = match call.parameters.get("path") {
@@ -404,7 +416,7 @@ pub async fn execute_text_editor(call: &McpToolCall) -> Result<McpToolResult> {
 					"Missing or invalid 'content' parameter for insert command".to_string(),
 				)),
 			};
-			text_editing::insert_text_spec(call, Path::new(&path), insert_after_line, &content).await
+			text_editing::insert_text_spec(call, &resolve_path(&path), insert_after_line, &content).await
 		},
 		"line_replace" => {
 			let path = match call.parameters.get("path") {
@@ -456,7 +468,7 @@ pub async fn execute_text_editor(call: &McpToolCall) -> Result<McpToolResult> {
 					"Missing or invalid 'content' parameter for line_replace command".to_string(),
 				)),
 			};
-			text_editing::line_replace_spec(call, Path::new(&path), lines, &content).await
+			text_editing::line_replace_spec(call, &resolve_path(&path), lines, &content).await
 		},
 		"undo_edit" => {
 			let path = match call.parameters.get("path") {
@@ -467,7 +479,7 @@ pub async fn execute_text_editor(call: &McpToolCall) -> Result<McpToolResult> {
 					"Missing or invalid 'path' parameter for undo_edit command".to_string(),
 				)),
 			};
-			undo_edit(call, Path::new(&path)).await
+			undo_edit(call, &resolve_path(&path)).await
 		},
 		_ => Ok(McpToolResult::error(
 			call.tool_name.clone(),
@@ -634,7 +646,7 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 	};
 
 	// Read source file
-	let from_path_obj = Path::new(&from_path);
+	let from_path_obj = resolve_path(&from_path);
 	if !from_path_obj.exists() {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
@@ -699,7 +711,7 @@ pub async fn execute_extract_lines(call: &McpToolCall) -> Result<McpToolResult> 
 		};
 
 	// Handle target file - create parent directories if needed
-	let append_path_obj = Path::new(&append_path);
+	let append_path_obj = resolve_path(&append_path);
 	if let Some(parent) = append_path_obj.parent() {
 		if let Err(e) = tokio_fs::create_dir_all(parent).await {
 			return Ok(McpToolResult::error(

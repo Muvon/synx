@@ -19,6 +19,7 @@ pub mod ast_grep;
 pub mod functions;
 pub mod plan;
 pub mod shell;
+pub mod workdir;
 
 #[cfg(test)]
 mod dev_tests;
@@ -31,3 +32,4 @@ pub use ast_grep::execute_ast_grep_command;
 pub use functions::get_all_functions;
 pub use plan::{clear_plan_data, execute_plan};
 pub use shell::execute_shell_command;
+pub use workdir::execute_workdir_command;

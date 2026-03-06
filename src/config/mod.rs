@@ -266,6 +266,11 @@ pub struct Config {
 	#[serde(skip)]
 	pub runtime_output_mode: Option<String>,
 
+	// Runtime working directory for parallel execution (not serialized)
+	// When set, all file/shell operations use this directory instead of current_dir
+	#[serde(skip)]
+	pub working_directory: Option<PathBuf>,
+
 	#[serde(skip)]
 	config_path: Option<PathBuf>,
 }
@@ -464,6 +469,19 @@ impl Config {
 		merged.system = Some(system_prompt.clone());
 
 		merged
+	}
+
+	/// Get the current working directory for file/shell operations
+	/// Returns the runtime working_directory if set, otherwise falls back to current_dir
+	pub fn get_working_directory(&self) -> PathBuf {
+		self.working_directory
+			.clone()
+			.unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+	}
+
+	/// Set the runtime working directory for parallel execution
+	pub fn set_working_directory(&mut self, path: PathBuf) {
+		self.working_directory = Some(path);
 	}
 
 	/// Get the role config struct for a specific role

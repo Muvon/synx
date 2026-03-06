@@ -14,10 +14,9 @@
 
 // Shell execution functionality for the Developer MCP provider
 
-use super::super::{McpFunction, McpToolCall, McpToolResult};
+use super::super::{get_thread_working_directory, McpFunction, McpToolCall, McpToolResult};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-
 // Define the shell function for the MCP protocol with enhanced description
 pub fn get_shell_function() -> McpFunction {
 	McpFunction {
@@ -162,17 +161,23 @@ pub async fn execute_shell_command(call: &McpToolCall) -> Result<McpToolResult> 
 		.unwrap_or(false);
 
 	// NOTE: We do NOT add MCP tool commands to shell history
+	// NOTE: We do NOT add MCP tool commands to shell history
 	// Only direct user commands via `octomind shell` CLI should persist to history
 	// (see src/commands/shell.rs for user-initiated shell history)
+
+	// Get the working directory from thread-local storage
+	let working_dir = get_thread_working_directory();
 
 	// Use tokio::process::Command for better cancellation support
 	let mut cmd = if cfg!(target_os = "windows") {
 		let mut cmd = TokioCommand::new("cmd");
 		cmd.args(["/C", &command]);
+		cmd.current_dir(&working_dir);
 		cmd
 	} else {
 		let mut cmd = TokioCommand::new("sh");
 		cmd.args(["-c", &command]);
+		cmd.current_dir(&working_dir);
 		cmd
 	};
 

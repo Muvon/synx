@@ -1,24 +1,9 @@
-// Copyright 2025 Muvon Un Limited
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 // Directory operations module - handling file listing with ripgrep (FIXED VERSION)
 
-use super::super::{McpToolCall, McpToolResult};
+use super::super::{get_thread_working_directory, McpToolCall, McpToolResult};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::process::Command;
-
 // Parse a ripgrep output line to extract filename and rest, handling Windows paths correctly
 // UTF-8 safe version that uses character boundaries instead of byte indices
 fn parse_ripgrep_line(line: &str) -> Option<(String, String)> {
@@ -338,6 +323,10 @@ pub async fn execute_list_files(call: &McpToolCall) -> Result<McpToolResult> {
 
 		("file listing", false)
 	};
+
+	// Set working directory from thread-local storage
+	let working_dir = get_thread_working_directory();
+	cmd.current_dir(&working_dir);
 
 	// Debug: Log the actual command being executed
 	crate::log_debug!(

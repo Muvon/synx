@@ -875,10 +875,11 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 		}
 	};
 
-	let path = Path::new(path_str);
+	let path = super::core::resolve_path(path_str);
 
 	// PROTECTION: Check if operation is safe (line-dependent)
-	if let Some(error_result) = validate_line_dependent_operation(path, "batch_edit", call).await? {
+	if let Some(error_result) = validate_line_dependent_operation(&path, "batch_edit", call).await?
+	{
 		return Ok(error_result);
 	}
 
@@ -892,11 +893,11 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 	}
 
 	// Acquire file lock to prevent concurrent writes
-	let file_lock = acquire_file_lock(path).await?;
+	let file_lock = acquire_file_lock(&path).await?;
 	let _lock_guard = file_lock.lock().await;
 
 	// Read original file content
-	let original_content = match tokio_fs::read_to_string(path).await {
+	let original_content = match tokio_fs::read_to_string(&path).await {
 		Ok(content) => content,
 		Err(e) => {
 			return Ok(McpToolResult::error(
@@ -1080,10 +1081,10 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 	};
 
 	// Save file history for undo functionality
-	save_file_history(path).await?;
+	save_file_history(&path).await?;
 
 	// Write the final content to file
-	if let Err(e) = tokio_fs::write(path, &final_content).await {
+	if let Err(e) = tokio_fs::write(&path, &final_content).await {
 		return Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
@@ -1093,7 +1094,7 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 
 	// CHECK: Mark only if net line count changed after all operations
 	if let Err(e) =
-		check_and_mark_line_count_change(path, "batch_edit", &original_content, &final_content)
+		check_and_mark_line_count_change(&path, "batch_edit", &original_content, &final_content)
 			.await
 	{
 		crate::log_debug!("Failed to check line count change: {}", e);
