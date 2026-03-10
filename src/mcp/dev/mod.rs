@@ -15,6 +15,7 @@
 // Developer MCP provider - modular structure
 // Handles shell execution and other development tools
 
+pub mod ask;
 pub mod ast_grep;
 pub mod functions;
 pub mod plan;
@@ -28,6 +29,7 @@ mod dev_tests;
 mod plan_tests;
 
 // Re-export main functionality
+pub use ask::execute_ask;
 pub use ast_grep::execute_ast_grep_command;
 pub use functions::get_all_functions;
 pub use plan::{clear_plan_data, execute_plan};

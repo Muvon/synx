@@ -17,6 +17,7 @@
 // Function definitions for the Developer MCP provider
 
 use super::super::McpFunction;
+use super::ask::get_ask_function;
 use super::ast_grep::get_ast_grep_function;
 use super::plan::get_plan_function;
 use super::shell::get_shell_function;
@@ -29,5 +30,6 @@ pub fn get_all_functions() -> Vec<McpFunction> {
 		get_ast_grep_function(),
 		get_plan_function(),
 		get_workdir_function(),
+		get_ask_function(),
 	]
 }

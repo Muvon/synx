@@ -31,5 +31,3 @@ passthrough = [
 
 # Build configuration for static binaries
 # Use cross tool for cross-compilation with Docker
-
-

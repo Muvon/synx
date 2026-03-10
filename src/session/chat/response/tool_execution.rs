@@ -266,27 +266,89 @@ async fn execute_tools_with_context(
 	// - Tool execution should NOT restart animation (output already displaying)
 	// Restarting here causes ghost spinner that continues after output
 
-	// Use tokio::select! for immediate cancellation response
-	tokio::select! {
-		task_results = futures::future::join_all(tasks) => {
-			// Animation already stopped by process_response - no action needed
+	// Take the global ask receiver once for this execution batch.
+	// If another batch already took it, ask_rx will be None and ask calls will
+	// return an error to the AI (handled in ask.rs).
+	let mut ask_rx = crate::mcp::dev::ask::take_ask_receiver();
 
-			// All tasks completed before cancellation
-			for ((tool_name, tool_id, tool_index), task_result) in task_info.into_iter().zip(task_results) {
-				// Store tool call info for consolidated display after execution
-				let tool_call_info = current_tool_calls
+	// Pin join_all so it can be polled across multiple select! iterations
+	// (needed when ask requests arrive mid-execution).
+	let all_tasks = futures::future::join_all(tasks);
+	tokio::pin!(all_tasks);
+
+	// Use tokio::select! for immediate cancellation response.
+	// Wrapped in a loop so ask requests can be serviced without dropping tasks.
+	let task_results = loop {
+		tokio::select! {
+			results = &mut all_tasks => {
+				// All tool tasks completed — proceed to result processing.
+				break results;
+			}
+			ask_req = async {
+				if let Some(rx) = ask_rx.as_mut() { rx.recv().await } else { std::future::pending().await }
+			} => {
+				if let Some(req) = ask_req {
+					service_ask_request(req, config, mode).await;
+				}
+				// Loop back and keep waiting for tasks to finish.
+			}
+			_ = async {
+				if let Some(ref cancel_rx) = operation_cancelled {
+					let mut cancel_rx_clone = cancel_rx.clone();
+					while !*cancel_rx_clone.borrow() {
+						if cancel_rx_clone.changed().await.is_err() {
+							break;
+						}
+					}
+				} else {
+					std::future::pending::<()>().await;
+				}
+			} => {
+				// Animation already stopped by process_response - no action needed
+
+				// Cancellation occurred - provide immediate feedback
+				use colored::*;
+				if !mode.should_suppress_cli_output() {
+					println!(
+						"{}",
+						"🛑 All tool execution cancelled - returning to input".bright_yellow()
+					);
+				}
+
+				// Show cancellation message for each tool
+				if !mode.should_suppress_cli_output() {
+					for (tool_name, _, _) in task_info {
+						println!(
+							"{}",
+							format!("🛑 Tool '{}' cancelled - server preserved", tool_name).bright_yellow()
+						);
+					}
+				}
+
+				// Return empty results for cancelled execution
+				return Ok((Vec::new(), total_tool_time_ms));
+			}
+		}
+	};
+
+	// Animation already stopped by process_response - no action needed
+
+	// All tasks completed before cancellation
+	for ((tool_name, tool_id, tool_index), task_result) in task_info.into_iter().zip(task_results) {
+		// Store tool call info for consolidated display after execution
+		let tool_call_info = current_tool_calls
+			.iter()
+			.find(|tc| tc.tool_id == tool_id)
+			.or_else(|| {
+				current_tool_calls
 					.iter()
-					.find(|tc| tc.tool_id == tool_id)
-					.or_else(|| {
-						current_tool_calls
-							.iter()
-							.find(|tc| tc.tool_name == tool_name)
-					});
+					.find(|tc| tc.tool_name == tool_name)
+			});
 
-				// Store for display after execution
-				let stored_tool_call = tool_call_info.cloned();
+		// Store for display after execution
+		let stored_tool_call = tool_call_info.cloned();
 
-				match task_result {
+		match task_result {
 			Ok(result) => match result {
 				Ok((res, tool_time_ms)) => {
 					// CRITICAL MCP PROTOCOL FIX: Check if result is actually an error
@@ -307,16 +369,16 @@ async fn execute_tools_with_context(
 						let error = anyhow::anyhow!("{}", error_content);
 
 						// Display as error, not success
-							display_tool_error(
-								&stored_tool_call,
-								&tool_name,
-								&error,
-								tool_index,
-								config,
-								mode,
-								context.execution_context(),
-							)
-							.await;
+						display_tool_error(
+							&stored_tool_call,
+							&tool_name,
+							&error,
+							tool_index,
+							config,
+							mode,
+							context.execution_context(),
+						)
+						.await;
 
 						// Still push the result for conversation continuity (AI needs to see the error)
 						tool_results.push(res.clone());
@@ -338,26 +400,34 @@ async fn execute_tools_with_context(
 							tool_index,
 							is_single_tool,
 						};
-							display_tool_success(
-								display_params,
-								&res,
-								tool_time_ms,
-								config,
-								mode,
-								context.session_name(),
-								context.execution_context(), // Pass the execution context
-							)
+						display_tool_success(
+							display_params,
+							&res,
+							tool_time_ms,
+							config,
+							mode,
+							context.session_name(),
+							context.execution_context(),
+						)
 						.await;
 
 						tool_results.push(res.clone());
 
 						// AGENT COST TRACKING: Extract and apply agent costs if present
 						if let Some(metadata) = res.result.get("metadata") {
-							if let Ok(agent_costs) = serde_json::from_value::<crate::session::AgentCostData>(metadata.clone()) {
+							if let Ok(agent_costs) = serde_json::from_value::<
+								crate::session::AgentCostData,
+							>(metadata.clone())
+							{
 								// Apply agent costs to main session (only for MainSession context)
-								if let ToolExecutionContext::MainSession { chat_session, .. } = context {
+								if let ToolExecutionContext::MainSession { chat_session, .. } =
+									context
+								{
 									chat_session.session.add_agent_cost(agent_costs);
-									crate::log_debug!("Applied agent costs to main session from tool '{}'", tool_name);
+									crate::log_debug!(
+										"Applied agent costs to main session from tool '{}'",
+										tool_name
+									);
 								}
 							}
 						}
@@ -376,16 +446,16 @@ async fn execute_tools_with_context(
 					}
 
 					// Display error in consolidated format for other errors
-						display_tool_error(
-							&stored_tool_call,
-							&tool_name,
-							&e,
-							tool_index,
-							config,
-							mode,
-							context.execution_context(),
-						)
-						.await;
+					display_tool_error(
+						&stored_tool_call,
+						&tool_name,
+						&e,
+						tool_index,
+						config,
+						mode,
+						context.execution_context(),
+					)
+					.await;
 
 					// Track errors for this tool (if error tracking is available)
 					let loop_detected = if let Some(error_tracker) = context.error_tracker() {
@@ -397,10 +467,10 @@ async fn execute_tools_with_context(
 					if loop_detected {
 						// Always show loop detection warning since it's critical
 						if let Some(error_tracker) = context.error_tracker() {
-								if !mode.should_suppress_cli_output() {
-									println!("{}", format!("⚠ Warning: {} failed {} times in a row - AI should try a different approach",
-										tool_name, error_tracker.max_consecutive_errors()).bright_yellow());
-								}
+							if !mode.should_suppress_cli_output() {
+								println!("{}", format!("⚠ Warning: {} failed {} times in a row - AI should try a different approach",
+								tool_name, error_tracker.max_consecutive_errors()).bright_yellow());
+							}
 
 							// Add a detailed error result for loop detection
 							let loop_error_result = crate::mcp::McpToolResult {
@@ -463,21 +533,20 @@ async fn execute_tools_with_context(
 				}
 
 				// Display task error in consolidated format for other errors
-					display_tool_error(
-						&stored_tool_call,
-						&tool_name,
-						&anyhow::anyhow!("{}", e),
-						tool_index,
-						config,
-						mode,
-						context.execution_context(),
-					)
-					.await;
+				display_tool_error(
+					&stored_tool_call,
+					&tool_name,
+					&anyhow::anyhow!("{}", e),
+					tool_index,
+					config,
+					mode,
+					context.execution_context(),
+				)
+				.await;
 
-					// Show task error status
-					if !mode.should_suppress_cli_output() {
-						println!("✗ Task error for '{}': {}", tool_name, e);
-					}
+				if !mode.should_suppress_cli_output() {
+					println!("✗ Task error for '{}': {}", tool_name, e);
+				}
 
 				// ALWAYS add error result for task failures too (unless it was a user decline)
 				let error_result = crate::mcp::McpToolResult {
@@ -492,52 +561,56 @@ async fn execute_tools_with_context(
 				tool_results.push(error_result);
 			}
 		}
-			}
-		},
-		_ = async {
-			// Check for cancellation signal
-			if let Some(ref cancel_rx) = operation_cancelled {
-				let mut cancel_rx_clone = cancel_rx.clone();
-				while !*cancel_rx_clone.borrow() {
-					if cancel_rx_clone.changed().await.is_err() {
-						break;
-					}
-				}
-			} else {
-				// No cancellation token provided - wait indefinitely
-				std::future::pending::<()>().await;
-			}
-		} => {
-			// Animation already stopped by process_response - no action needed
-
-			// Cancellation occurred - provide immediate feedback
-			use colored::*;
-			if !mode.should_suppress_cli_output() {
-				println!(
-					"{}",
-					"🛑 All tool execution cancelled - returning to input".bright_yellow()
-				);
-			}
-
-			// Show cancellation message for each tool
-			if !mode.should_suppress_cli_output() {
-				for (tool_name, _, _) in task_info {
-					println!(
-						"{}",
-						format!("🛑 Tool '{}' cancelled - server preserved", tool_name).bright_yellow()
-					);
-				}
-			}
-
-			// Return empty results for cancelled execution
-			return Ok((Vec::new(), total_tool_time_ms));
-		}
 	}
 
 	// Handle large outputs with batched confirmation
 	let processed_results = handle_large_tool_results(tool_results, config, mode).await?;
-
 	Ok((processed_results, total_tool_time_ms))
+}
+
+/// Service a single ask request from the ask tool.
+/// For terminal modes: stops the spinner, prints the question, reads stdin.
+/// For WebSocket mode: sends an InputRequest via the notification channel and awaits the oneshot.
+async fn service_ask_request(
+	req: crate::mcp::dev::ask::AskRequest,
+	config: &Config,
+	mode: OutputMode,
+) {
+	if mode.is_terminal_mode() {
+		// Stop spinner so the prompt is clean
+		crate::session::chat::get_animation_manager()
+			.stop_current()
+			.await;
+
+		// Render the question using the same markdown path as AI responses
+		crate::session::chat::assistant_output::print_assistant_response(
+			&req.question,
+			config,
+			"assistant",
+			&None,
+		);
+
+		eprint!("{}", "> ".bright_cyan());
+		// Flush so the prompt appears before we block
+		use std::io::Write;
+		let _ = std::io::stderr().flush();
+
+		// Read answer in a blocking task so we don't block the async runtime
+		let answer = tokio::task::spawn_blocking(|| {
+			let mut buf = String::new();
+			let _ = std::io::stdin().read_line(&mut buf);
+			buf.trim().to_string()
+		})
+		.await
+		.unwrap_or_default();
+
+		let _ = req.answer_tx.send(answer);
+	} else {
+		// WebSocket / JSONL mode: send InputRequest via the notification sender.
+		// The WS server will forward it to the client and route the InputResponse
+		// back via the global pending-answer slot in ask.rs.
+		crate::mcp::dev::ask::send_ws_input_request(req);
+	}
 }
 
 // Handle large tool results with batched confirmation

@@ -209,7 +209,7 @@ pub fn guess_tool_category(tool_name: &str) -> &'static str {
 		"text_editor" => "developer",
 		"list_files" | "view" => "filesystem",
 		"web_search" | "read_html" => "web",
-		"shell" | "ast_grep" | "plan" => "developer",
+		"shell" | "ast_grep" | "plan" | "ask" => "developer",
 		name if name.contains("file") || name.contains("editor") => "developer",
 		name if name.contains("search") || name.contains("find") => "search",
 		name if name.contains("image") || name.contains("photo") => "media",
@@ -827,6 +827,25 @@ async fn execute_tool_without_cancellation(
 										call.tool_name.clone(),
 										call.tool_id.clone(),
 										format!("Workdir execution failed: {}", e),
+									));
+								}
+							}
+						}
+						"ask" => {
+							crate::log_debug!(
+								"Executing ask via developer server '{}'",
+								target_server.name()
+							);
+							match dev::execute_ask(call).await {
+								Ok(mut result) => {
+									result.tool_id = call.tool_id.clone();
+									return Ok(result);
+								}
+								Err(e) => {
+									return Ok(McpToolResult::error(
+										call.tool_name.clone(),
+										call.tool_id.clone(),
+										format!("Ask execution failed: {}", e),
 									));
 								}
 							}

@@ -28,6 +28,7 @@ Octomind provides four built-in MCP servers with comprehensive development capab
 - `shell(command="...", background=false)` - Execute shell commands with output capture, foreground/background execution
 - `ast_grep(pattern="...", language="...", rewrite="...", ...)` - Search and refactor code using AST patterns
 - `plan(command="start|step|next|list|done|reset", ...)` - Structured task management with progress tracking
+- `ask(question="...")` - Pause execution and ask the user a clarification question; halts until answered. Use ONLY when genuinely blocked — question must be fully self-contained with all context, options, and references
 
 **Filesystem Server** (`src/mcp/fs/`):
 - `view(path=\"...\", lines=[start, end], pattern=\"...\", content=\"...\", ...)` - Read files, view directories, and search file content

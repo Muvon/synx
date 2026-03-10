@@ -27,7 +27,7 @@ graph TB
     C --> H[Assistant Role<br/>Chat Only]
     C --> I[Custom Roles<br/>Configurable]
 
-    D --> J[Developer Server<br/>shell, ast_grep]
+    D --> J[Developer Server<br/>shell, ast_grep, plan, ask]
     D --> K[Filesystem Server<br/>text_editor, batch_edit, extract_lines]
     D --> L[Web Server<br/>web_search, read_html]
     D --> M[Agent Server<br/>Specialized AI routing]
@@ -62,6 +62,7 @@ graph TB
 - `shell(command="...", background=false)` - Execute shell commands with output capture, foreground/background execution
 - `ast_grep(pattern="...", language="...", rewrite="...", ...)` - Search and refactor code using AST patterns
 - `plan(command="start|step|next|list|done|reset", ...)` - Structured task management with progress tracking
+- `ask(question="...")` - Pause execution and ask the user a clarification question; halts until answered. Use ONLY when genuinely blocked — question must be fully self-contained with all context, options, and references
 - `workdir(path="...", reset=false)` - Get or set working directory for parallel execution isolation
 
 **Filesystem Server** (`src/mcp/fs/`):
