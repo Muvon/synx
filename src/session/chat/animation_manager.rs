@@ -384,17 +384,22 @@ impl AnimationManager {
 				}
 			}
 
-			// Clean up spinner when done
-			// Clear shared spinner reference first
+			// Clear shared spinner reference first so no other code can use it during cleanup.
 			*spinner_ref.lock().unwrap() = None;
 
 			if let Some(s) = spinner {
-				// CRITICAL: Disable steady tick first to stop background drawing thread
-				// This prevents race condition where tick thread draws after finish_and_clear
-				s.disable_steady_tick();
-				// Small yield to ensure background thread stops
-				tokio::task::yield_now().await;
-				s.finish_and_clear();
+				// `disable_steady_tick()` joins indicatif's internal tick thread — it is a
+				// blocking call and must NOT run on the async executor.  Running it here
+				// (inside tokio::spawn) would block the runtime thread and cause the
+				// `task.await` in `stop_current()` to hang forever, making Ctrl+C unresponsive.
+				//
+				// Hand the cleanup off to a dedicated blocking thread.  We detach it because
+				// the caller only needs the spinner gone from the screen, not to wait for the
+				// OS thread to finish.  ProgressBar is Send + 'static so this is safe.
+				tokio::task::spawn_blocking(move || {
+					s.disable_steady_tick();
+					s.finish_and_clear();
+				});
 			}
 		});
 
