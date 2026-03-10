@@ -281,7 +281,10 @@ async fn execute_tools_with_context(
 	let task_results = loop {
 		tokio::select! {
 			results = &mut all_tasks => {
-				// All tool tasks completed — proceed to result processing.
+				// All tool tasks completed — return receiver so next batch can use ask.
+				if let Some(rx) = ask_rx.take() {
+					crate::mcp::dev::ask::return_ask_receiver(rx);
+				}
 				break results;
 			}
 			ask_req = async {
@@ -325,7 +328,10 @@ async fn execute_tools_with_context(
 					}
 				}
 
-				// Return empty results for cancelled execution
+				// Return receiver so next batch can use ask, then return empty results.
+				if let Some(rx) = ask_rx.take() {
+					crate::mcp::dev::ask::return_ask_receiver(rx);
+				}
 				return Ok((Vec::new(), total_tool_time_ms));
 			}
 		}

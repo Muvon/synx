@@ -43,12 +43,18 @@ lazy_static::lazy_static! {
 		Mutex::new(None);
 }
 
-/// Take the global ask receiver. Called once per session before tool execution starts.
-/// Returns None if already taken (only one consumer allowed).
+/// Take the global ask receiver. Called once per tool execution batch.
+/// Returns None if already taken (concurrent batch — ask will error gracefully).
 pub fn take_ask_receiver() -> Option<tokio::sync::mpsc::UnboundedReceiver<AskRequest>> {
 	// Touch ASK_TX first so the channel + receiver are created before we take the RX.
 	let _ = &*ASK_TX;
 	ASK_RX.lock().unwrap().take()
+}
+
+/// Return the ask receiver after a tool execution batch completes.
+/// Must be called after every take_ask_receiver() so the next batch can use ask.
+pub fn return_ask_receiver(rx: tokio::sync::mpsc::UnboundedReceiver<AskRequest>) {
+	*ASK_RX.lock().unwrap() = Some(rx);
 }
 
 /// Called by the WS server when it receives a ClientMessage::InputResponse.
