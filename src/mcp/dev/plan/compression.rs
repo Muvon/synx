@@ -295,6 +295,25 @@ pub async fn compress_completed_task(
 		return Ok(None);
 	}
 
+	// Skip compression if the range is too small relative to total context.
+	// Compressing <20% of context produces negligible savings and risks losing
+	// important detail for a trivial gain (e.g. 2% reduction is not worth it).
+	const MIN_CONTEXT_FRACTION: f64 = 0.20;
+	let total_session_tokens =
+		crate::session::estimate_session_tokens(&session.session.messages) as f64;
+	if total_session_tokens > 0.0 {
+		let range_fraction = tokens_before as f64 / total_session_tokens;
+		if range_fraction < MIN_CONTEXT_FRACTION {
+			crate::log_info!(
+				"Task compression skipped: range is {:.1}% of context ({} / {} tokens) — below 20% threshold.",
+				range_fraction * 100.0,
+				tokens_before,
+				total_session_tokens as u64
+			);
+			return Ok(None);
+		}
+	}
+
 	// Remove messages in range
 	let (messages_removed, _) =
 		session.remove_messages_in_range(message_range.start_index, message_range.end_index)?;
