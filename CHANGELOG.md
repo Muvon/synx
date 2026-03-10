@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.20.0] - 2026-03-10
+
+### 📋 Release Summary
+
+This release enhances octomind's interactive capabilities with new user input tools and improved file filtering for more intuitive codebase exploration (fca84305, dbe430b6). The AI assistant now offers better model configuration flexibility with Ollama integration and streamlined MAP executor templates (538b717c, 621274f0). Multiple stability improvements include Windows compatibility fixes, better error messaging, and optimized task cancellation for a smoother development experience (e365f145, 848ad54e, 01b59162).
+
+
+### ✨ New Features & Enhancements
+
+- **mcp**: add interactive ask tool for user input `fca84305`
+- **mcp**: add content-based file filtering to view command `dbe430b6`
+- **config**: switch map actors to ollama models `538b717c`
+- **mcp**: add thread-local working directory support `f8b366da`
+- **config**: add MAP executor configuration template `621274f0`
+
+### 🔧 Improvements & Optimizations
+
+- **map-executor**: replace list_files with view tool `5460729a`
+- **fs**: unify file and directory viewing `e581e445`
+- **map-planner**: switch to XML subgoals and tighten planning rules `aa93d894`
+- **map-executor**: replace branch isolation with worktree isolation `0283858d`
+- **config**: simplify planner config and add MAP template `886e06ab`
+
+### 🐛 Bug Fixes & Stability
+
+- **build**: resolve openssl windows compatibility issue `e365f145`
+- **build**: resolve musl build failures with vendored openssl `476aa6d2`
+- **session**: skip empty instructions files to prevent blank messages `c3796ad6`
+- **fs**: improve error message when file exists on create `848ad54e`
+- **text_editing**: allow insert at index 0 for file beginning `6f9b060a`
+- use config max_retries instead of hardcoded 0 `9cd3f2dd`
+- **config**: correct map executor system prompts and formatting `91b3796b`
+- **cancellation**: prevent blocking on cancelled spawn tasks `01b59162`
+- **websocket**: suppress CLI output in websocket mode `b0e20677`
+
+### 🔄 Other Changes
+
+- **deps**: bump reedline to 0.46.0 `d3eeadd6`
+
+### 📊 Release Summary
+
+**Total commits**: 20 across 4 categories
+
+✨ **5** new features - *Enhanced functionality*
+🔧 **5** improvements - *Better performance & code quality*
+🐛 **9** bug fixes - *Improved stability*
+🔄 **1** other change - *Maintenance & tooling*
+
 ## [0.19.0] - 2026-03-05
 
 ### 📋 Release Summary
