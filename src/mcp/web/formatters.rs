@@ -79,10 +79,9 @@ pub fn format_search_results(search_result: &Value, query: &str) -> Result<Strin
 
 // Format image search results as simple, token-efficient text
 pub fn format_image_results(search_result: &Value, query: &str) -> Result<String> {
-	// Check if we have image results
+	// Images endpoint returns results at top level as "results" array
 	let image_results = search_result
-		.get("images")
-		.and_then(|i| i.get("results"))
+		.get("results")
 		.and_then(|r| r.as_array())
 		.ok_or_else(|| anyhow!("No image results found in search response"))?;
 
@@ -102,17 +101,17 @@ pub fn format_image_results(search_result: &Value, query: &str) -> Result<String
 			.and_then(|t| t.as_str())
 			.unwrap_or("No title");
 		let source_url = result
-			.get("source")
-			.and_then(|s| s.get("url"))
+			.get("url")
 			.and_then(|u| u.as_str())
 			.unwrap_or("No source URL");
 		let image_url = result
-			.get("url")
+			.get("properties")
+			.and_then(|p| p.get("url"))
 			.and_then(|u| u.as_str())
 			.unwrap_or("No image URL");
 		let thumbnail_url = result
 			.get("thumbnail")
-			.and_then(|t| t.get("url"))
+			.and_then(|t| t.get("src"))
 			.and_then(|u| u.as_str())
 			.unwrap_or("No thumbnail");
 
@@ -128,9 +127,9 @@ pub fn format_image_results(search_result: &Value, query: &str) -> Result<String
 // Format video search results as simple, token-efficient text
 pub fn format_video_results(search_result: &Value, query: &str) -> Result<String> {
 	// Check if we have video results
+	// Videos endpoint returns results at top level as "results" array
 	let video_results = search_result
-		.get("videos")
-		.and_then(|v| v.get("results"))
+		.get("results")
 		.and_then(|r| r.as_array())
 		.ok_or_else(|| anyhow!("No video results found in search response"))?;
 
@@ -158,17 +157,18 @@ pub fn format_video_results(search_result: &Value, query: &str) -> Result<String
 			.and_then(|d| d.as_str())
 			.unwrap_or("No description");
 		let duration = result
-			.get("duration")
+			.get("video")
+			.and_then(|v| v.get("duration"))
 			.and_then(|d| d.as_str())
 			.unwrap_or("Unknown duration");
-		let views = result
-			.get("views")
-			.and_then(|v| v.as_str())
-			.unwrap_or("Unknown views");
-
+		let publisher = result
+			.get("video")
+			.and_then(|v| v.get("publisher"))
+			.and_then(|p| p.as_str())
+			.unwrap_or("Unknown publisher");
 		result_text.push_str(&format!(
-			"[{}] {} | {} | {} | Duration: {} | Views: {}\n",
-			rank, title, url, description, duration, views
+			"[{}] {} | {} | {} | Duration: {} | Publisher: {}\n",
+			rank, title, url, description, duration, publisher
 		));
 	}
 
@@ -177,10 +177,10 @@ pub fn format_video_results(search_result: &Value, query: &str) -> Result<String
 
 // Format news search results as simple, token-efficient text
 pub fn format_news_results(search_result: &Value, query: &str) -> Result<String> {
-	// Check if we have news results
+	// The news search endpoint returns results at the top level as "results" array
+	// (unlike web search which wraps them under "web.results")
 	let news_results = search_result
-		.get("news")
-		.and_then(|n| n.get("results"))
+		.get("results")
 		.and_then(|r| r.as_array())
 		.ok_or_else(|| anyhow!("No news results found in search response"))?;
 
