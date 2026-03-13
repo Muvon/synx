@@ -106,7 +106,9 @@ pub async fn execute_agent_command(
 async fn run_acp_command(command: &str, task: &str, workdir: &std::path::Path) -> Result<String> {
 	// Split command into program + args
 	let mut parts = command.split_whitespace();
-	let program = parts.next().ok_or_else(|| anyhow::anyhow!("Empty command"))?;
+	let program = parts
+		.next()
+		.ok_or_else(|| anyhow::anyhow!("Empty command"))?;
 	let args: Vec<&str> = parts.collect();
 
 	let mut child = Command::new(program)
@@ -117,8 +119,14 @@ async fn run_acp_command(command: &str, task: &str, workdir: &std::path::Path) -
 		.stderr(std::process::Stdio::null())
 		.spawn()?;
 
-	let mut stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("No stdin"))?;
-	let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("No stdout"))?;
+	let mut stdin = child
+		.stdin
+		.take()
+		.ok_or_else(|| anyhow::anyhow!("No stdin"))?;
+	let stdout = child
+		.stdout
+		.take()
+		.ok_or_else(|| anyhow::anyhow!("No stdout"))?;
 	let mut lines = BufReader::new(stdout).lines();
 
 	// Helper: serialize a JSON-RPC message to a newline-terminated string.

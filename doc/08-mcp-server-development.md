@@ -22,8 +22,7 @@ Octomind provides **four** built-in MCP servers with comprehensive development c
 
 
 **Agent Server** (`src/mcp/agent/`):
-- `agent_*()` tools - Route tasks to configured AI layers for specialized processing
-- `call_llm(prompt="...", model="...", system="...", temperature=0.7)` - Direct LLM call with runtime parameters
+- `agent_*()` tools - Delegate tasks to configured ACP sub-agents (each spawns an ACP subprocess via the configured `command`)
 
 Each server provides a specific category of tools and can be enabled/disabled independently in role configurations.
 

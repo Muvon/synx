@@ -330,7 +330,6 @@ pub struct LayerStats {
 	pub total_time_ms: u64, // Total time for this layer processing
 }
 
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Session {
 	pub info: SessionInfo,
@@ -496,7 +495,6 @@ impl Session {
 		self.info.total_tool_time_ms += tool_time_ms;
 		self.info.total_layer_time_ms += total_time_ms;
 	}
-
 
 	// Save the session to a file - append-only approach
 	pub fn save(&self) -> Result<(), anyhow::Error> {

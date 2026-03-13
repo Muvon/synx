@@ -73,7 +73,10 @@ mod tests {
 			workdir: ".".to_string(),
 		};
 		let session_dir = PathBuf::from("/home/user/project");
-		assert_eq!(agent.get_resolved_workdir(&session_dir), PathBuf::from("/home/user/project"));
+		assert_eq!(
+			agent.get_resolved_workdir(&session_dir),
+			PathBuf::from("/home/user/project")
+		);
 	}
 
 	#[test]
@@ -85,6 +88,9 @@ mod tests {
 			workdir: "/absolute/path".to_string(),
 		};
 		let session_dir = PathBuf::from("/home/user/project");
-		assert_eq!(agent.get_resolved_workdir(&session_dir), PathBuf::from("/absolute/path"));
+		assert_eq!(
+			agent.get_resolved_workdir(&session_dir),
+			PathBuf::from("/absolute/path")
+		);
 	}
 }

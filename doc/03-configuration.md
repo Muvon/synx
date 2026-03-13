@@ -559,43 +559,35 @@ allowed_tools = ["text_editor", "shell"]
 
 ### Agent Configuration
 
-Agents use the same `LayerConfig` structure as commands and layers. Each agent becomes a separate MCP tool (e.g., `agent_context_gatherer`):
+Agents are defined with a minimal structure — just a `name`, `description`, and `command` pointing at any ACP-compatible server. Each agent becomes a separate MCP tool (e.g., `agent_context_gatherer`):
 
 ```toml
+# Built-in context gatherer — uses the context_gatherer role
 [[agents]]
 name = "context_gatherer"
 description = "Gather detailed context from files and codebase. Reads files, searches code patterns, and provides comprehensive information about specific areas of the codebase for development tasks."
-model = "openrouter:google/gemini-2.5-flash-preview"
-max_tokens = 16384
-system_prompt = """You are a comprehensive context gatherer and code analyst..."""
-temperature = 0.2
-input_mode = "last"
-output_mode = "none"  # Return only the gathered context (cleanest for tool use)
+command = "octomind acp --role context_gatherer"
+workdir = "."  # Working directory for agent execution (default: current directory)
 
-[agents.mcp]
-server_refs = ["filesystem", "octocode"]
-allowed_tools = ["text_editor", "list_files"]
-
-[[agents]]
-name = "code_reviewer"
-description = "Review code for performance, security, and best practices issues. Analyzes code quality and suggests improvements."
-model = "openrouter:anthropic/claude-sonnet-4"
-max_tokens = 8192
-system_prompt = "You are a senior code reviewer..."
-temperature = 0.1
-input_mode = "last"
-output_mode = "none"  # Return only the review results
-
-[agents.mcp]
-server_refs = ["developer", "filesystem"]
-allowed_tools = ["text_editor", "list_files"]
+# Example: Code Reviewer Agent
+# [[agents]]
+# name = "code_reviewer"
+# description = "Review code for quality, best practices, security issues, and performance problems."
+# command = "octomind acp --role code_reviewer"
+# workdir = "."
 ```
 
+**Fields:**
+- `name` (string, required): Unique identifier — exposed as MCP tool `agent_<name>`
+- `description` (string, required): Shown as the MCP tool description to the AI
+- `command` (string, required): Shell command that starts an ACP server over stdio
+- `workdir` (string, optional, default `"."` ): Working directory for the subprocess
+
 **Key Features:**
-- **Unified Configuration**: Same structure as layers and commands
-- **Required Description**: Used as MCP function description
-- **Output Control**: `output_mode` controls what the agent tool returns
-- **MCP Integration**: Full access to development tools via MCP configuration
+- **ACP Protocol**: Each agent call spawns a real subprocess and drives the full ACP handshake
+- **Any ACP Server**: `command` can point to any ACP-compatible binary, not just Octomind
+- **Required Description**: Used as MCP function description shown to the AI
+- **Isolated Execution**: Each call runs in its own subprocess with its own session
 
 ### Command Configuration
 

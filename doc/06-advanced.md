@@ -37,8 +37,7 @@ Octomind provides three built-in MCP servers with comprehensive development capa
 - `extract_lines(from_path="...", from_range=[start, end], append_path="...", append_line=N)` - Extract and move code blocks
 
 **Agent Server** (`src/mcp/agent/`):
-- `agent_*()` tools - Route tasks to configured AI layers for specialized processing
-- `call_llm(prompt="...", model="...", system="...", temperature=0.7)` - Direct LLM call with runtime parameters
+- `agent_*()` tools - Delegate tasks to configured ACP sub-agents (each spawns an ACP subprocess via the configured `command`)
 **Tool Invocation:**
 
 ---
@@ -199,123 +198,71 @@ Get or set the working directory for file and shell operations:
 
 ### Agent Tools Reference
 
-The agent system enables task delegation to specialized AI agents configured in your system. Each configured agent becomes a separate MCP tool that uses the same layer configuration system as commands and regular layers.
+The agent system enables task delegation to specialized AI agents configured in your system. Each configured agent becomes a separate MCP tool that spawns an ACP subprocess and drives the full `initialize → session/new → session/prompt` protocol.
 
 #### How It Works
 
-1. **Configure Agents**: Define agents using the same `LayerConfig` structure as commands and layers
+1. **Configure Agents**: Define agents in `[[agents]]` with a `name`, `description`, and `command`
 2. **Use Agent Tools**: Each agent becomes a tool like `agent_context_gatherer`, `agent_code_reviewer`, etc.
-3. **Output Control**: The `output_mode` setting controls what the agent tool returns
+3. **ACP Subprocess**: When called, Octomind spawns the `command` as a child process and talks JSON-RPC over stdio
+4. **Result**: The agent's final response (all `agent_message_chunk` text) is returned as the tool output
 
 #### Agent Configuration
 
-Agents now use the **same configuration structure** as commands and layers. Define them in the `[[agents]]` section:
+Agents are defined in the `[[agents]]` section with a minimal structure — just point `command` at any ACP-compatible server:
 
 ```toml
-# Agent definitions - each becomes a separate MCP tool
+# Built-in context gatherer — uses the context_gatherer role
 [[agents]]
 name = "context_gatherer"
 description = "Gather detailed context from files and codebase. Reads files, searches code patterns, and provides comprehensive information about specific areas of the codebase for development tasks."
-model = "openrouter:google/gemini-2.5-flash-preview"
-max_tokens = 16384
-system_prompt = """You are a comprehensive context gatherer and code analyst for development tasks. Your role is to thoroughly examine codebases, understand patterns, and provide detailed information about specific areas.
+command = "octomind acp --role context_gatherer"
+workdir = "."  # Working directory for agent execution (default: current directory)
 
-Your capabilities:
-- Read and analyze multiple files simultaneously
-- Search for code patterns semantically across the codebase
-- Understand file structures and relationships
-- Extract function signatures and code structure
-- Provide comprehensive context for development decisions
+# Example: Architect Agent
+# [[agents]]
+# name = "architect"
+# description = "Design system architecture and evaluate technical decisions."
+# command = "octomind acp --role architect"
+# workdir = "."
 
-Always provide comprehensive, detailed analysis that helps developers understand the codebase and make informed decisions."""
-temperature = 0.2
-input_mode = "last"
-output_mode = "none"  # Return only the gathered context (cleanest for tool use)
-
-[agents.mcp]
-server_refs = ["filesystem", "octocode"]
-allowed_tools = ["text_editor", "list_files"]
-
-[[agents]]
-name = "code_reviewer"
-description = "Review code for performance, security, and best practices issues. Analyzes code quality and suggests improvements."
-model = "openrouter:anthropic/claude-sonnet-4"
-max_tokens = 8192
-system_prompt = "You are a senior code reviewer. Analyze code for quality, performance, security, and best practices. Provide detailed feedback with specific suggestions for improvement."
-temperature = 0.1
-input_mode = "last"
-output_mode = "none"  # Return only the review results (cleanest for tool use)
-
-[agents.mcp]
-server_refs = ["developer", "filesystem"]
-allowed_tools = ["text_editor", "list_files"]
+# Example: Code Reviewer Agent
+# [[agents]]
+# name = "code_reviewer"
+# description = "Review code for quality, best practices, security issues, and performance problems."
+# command = "octomind acp --role code_reviewer"
+# workdir = "."
 ```
 
-#### Output Mode Control
-
-The `output_mode` setting controls what the agent tool returns:
-
-- **`"none"`**: Returns only the final layer output (cleanest for tool use) - **Recommended**
-- **`"append"`**: Returns layer output + session messages (for debugging)
-- **`"replace"`**: Returns layer output (same as none for agents)
-- **`"last"`**: Returns only the last layer output
-- **`"restart"`**: Returns only the last layer output (same as last for agents)
-
-**Best Practice**: Use `output_mode = "none"` for clean tool responses that integrate well with other MCP tools.
+**Fields:**
+- `name` (string, required): Unique identifier — exposed as MCP tool `agent_<name>`
+- `description` (string, required): Shown as the MCP tool description to the AI
+- `command` (string, required): Shell command that starts an ACP server over stdio (e.g. `octomind acp --role developer`)
+- `workdir` (string, optional, default `"."` ): Working directory for the subprocess. Relative paths resolve from the session's working directory.
 
 #### Usage Examples
 
 Once configured, each agent becomes a separate tool:
 
-**Context Gatherer Agent:**
 ```bash
 # In session
 agent_context_gatherer(task="Analyze the authentication system architecture and gather all relevant files and patterns")
-```
-
-**Code Review Agent:**
-```bash
-# In session
 agent_code_reviewer(task="Review this function for performance issues and suggest improvements")
 ```
 
 #### Tool Parameters
 
-Each agent tool has the same parameter structure:
+Each agent tool accepts a single parameter:
 
-**Parameters:**
 - `task` (string, required): Task description in human language for the agent to process
 
 #### Key Features
 
-- **Unified Configuration**: Agents use the same `LayerConfig` structure as commands and layers
+- **ACP Protocol**: Each agent call spawns a real subprocess and drives the full ACP handshake
+- **Any ACP Server**: `command` can point to any ACP-compatible binary, not just Octomind
 - **Individual Tools**: Each agent becomes a separate MCP tool (e.g., `agent_context_gatherer`)
-- **Output Control**: `output_mode` setting controls what the agent tool returns
-- **Isolated Processing**: Each agent runs in its own session context
-- **Tool Access**: Agents can use MCP tools based on their MCP configuration
-- **Required Description**: Description field is required and used as MCP function description
-- **Flexible**: Easy to add new specialized agents with complete layer configuration
-
-#### call_llm - Direct LLM Call Tool
-
-The `call_llm` tool enables direct LLM calls with runtime parameters, bypassing agent configuration:
-
-**Parameters:**
-- `prompt` (string, required): The input/prompt to process
-- `model` (string, required): Model in 'provider:model' format (e.g., 'openai:gpt-4o', 'openrouter:anthropic/claude-sonnet-4')
-- `system` (string, required): System prompt for the LLM
-- `temperature` (number, optional): Temperature for randomness (0.0-2.0, default: 0.7)
-
-**Usage Examples:**
-```json
-// Basic call
-{"prompt": "Explain quantum computing", "model": "openai:gpt-4o", "system": "You are a helpful assistant"}
-
-// With temperature for creative output
-{"prompt": "Write a poem", "model": "openrouter:anthropic/claude-sonnet-4", "system": "You are a creative writer", "temperature": 1.2}
-```
-
-**Note:** Response size is controlled by global `mcp_response_tokens_threshold` setting.
+- **Isolated Execution**: Each call runs in its own subprocess with its own session
+- **Required Description**: `description` is required — it becomes the MCP function description shown to the AI
 
 ### Text Editor Tool Reference
 

@@ -61,8 +61,7 @@ graph TB
 - `plan(command="start|step|next|list|done|reset", ...)` - Structured task management with progress tracking
 - `workdir(path="...", reset=false)` - Get or set working directory for parallel execution isolation
 **Agent Server** (`src/mcp/agent/`):
-- `agent_*()` tools - Route tasks to configured AI layers for specialized processing
-- `call_llm(prompt="...", model="...", system="...", temperature=0.7)` - Direct LLM call with runtime parameters
+- `agent_*()` tools - Delegate tasks to configured ACP sub-agents (each spawns `octomind acp --role <role>` as a subprocess)
 
 **External Server Support**:
 - HTTP MCP servers with OAuth 2.1 + PKCE authentication
@@ -285,4 +284,4 @@ export OCTOMIND_ROLES__DEVELOPER__MAX_TOKENS="16384"
 
 ---
 
-**Octomind v0.18.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.
+**Octomind v0.20.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.

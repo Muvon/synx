@@ -419,7 +419,6 @@ async fn execute_tools_with_context(
 
 						tool_results.push(res.clone());
 
-
 						// Accumulate tool execution time
 						total_tool_time_ms += tool_time_ms;
 					}
