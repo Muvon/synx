@@ -965,8 +965,8 @@ async fn execute_tool_without_cancellation(
 						}
 					},
 					"agent" => {
-						// Handle any agent tool (agent_<name>) or call_llm
-						if call.tool_name.starts_with("agent_") || call.tool_name == "call_llm" {
+						// Handle any agent tool (agent_<name>)
+						if call.tool_name.starts_with("agent_") {
 							crate::log_debug!(
 								"Executing agent command '{}' via agent server '{}'",
 								call.tool_name,

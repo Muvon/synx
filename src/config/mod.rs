@@ -25,18 +25,27 @@ static ENV_TRACKER: OnceLock<Mutex<env_source::EnvTracker>> = OnceLock::new();
 pub fn get_env_tracker() -> &'static Mutex<env_source::EnvTracker> {
 	ENV_TRACKER.get_or_init(|| Mutex::new(env_source::EnvTracker::new()))
 }
-
 // Re-export all modules
+pub mod agents;
 pub mod env_source;
+
 pub mod layers;
+
 pub mod loading;
+
 pub mod mcp;
+
 pub mod migrations;
+
 // OAuth 2.1 + PKCE configuration
 pub mod oauth_config;
+
 pub mod providers;
+
 pub mod roles;
+
 pub mod validation;
+
 pub mod workflows;
 
 // Tests removed - strict configuration mode doesn't support Default implementations
@@ -196,9 +205,9 @@ pub struct Config {
 	// Base timeout for exponential backoff retry logic (config-only, no CLI override)
 	pub retry_timeout: u32,
 
-	// Agent configurations - array of layer definitions (same structure as commands)
+	// Agent configurations - simplified ACP-based definitions
 	#[serde(default)]
-	pub agents: Vec<crate::session::layers::LayerConfig>,
+	pub agents: Vec<crate::config::agents::AgentConfig>,
 
 	// REMOVED: Providers configuration - API keys now only from ENV variables for security
 

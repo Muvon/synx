@@ -727,101 +727,34 @@ allowed_tools = []
 # The output_mode controls what the agent tool returns:
 #   - "none": Returns only the final layer output (cleanest for tool use)
 #   - "append": Returns layer output + session messages (for debugging)
-#   - "replace": Returns layer output (same as none for agents)
-#   - "last": Returns only the last layer output
-#   - "restart": Returns only the last layer output (same as last for agents)
+# ═══════════════════════════════════════════════════════════════════════════════
+# AGENTS
+# Configure specialized AI agents for task delegation
+# Each agent becomes a separate MCP tool (e.g., agent_context_gatherer)
+# Agents now use ACP protocol directly - just specify the role to use
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Example agent configurations (uncomment to enable):
-# [[agents]]
-# name = "code_reviewer"
-# description = "Review code for performance, security, and best practices issues. Analyzes code quality and suggests improvements."
-# model = "openrouter:anthropic/claude-3.5-sonnet"
-# max_tokens = 8192
-# system_prompt = "You are a senior code reviewer. Analyze code for quality, performance, security, and best practices. Provide detailed feedback with specific suggestions for improvement."
-# temperature = 0.1
-# input_mode = "last"
-# output_mode = "none"  # Return only the review results (cleanest for tool use)
-# output_role = "assistant" # Current ignored, but probably will be used to replace CURRENT session in future
-#
-# [agents.mcp]
-# server_refs = ["developer", "filesystem"]
-# allowed_tools = ["text_editor", "view"]
-
-# [[agents]]
-# name = "debugger"
-# description = "Analyze bugs, trace issues, and suggest debugging approaches. Helps identify root causes and solutions."
-# model = "openrouter:anthropic/claude-3.5-sonnet"
-# max_tokens = 8192
-# system_prompt = "You are an expert bug hunter and debugger. Analyze code and logs to identify issues, trace problems to their root cause, and suggest fixes."
-# temperature = 0.1
-# input_mode = "last"
-# output_mode = "none"  # Return only the debug findings (cleanest for tool use)
-#
-# [agents.mcp]
-# server_refs = ["developer", "filesystem"]
-# allowed_tools = ["text_editor", "shell", "view"]
-
-# [[agents]]
-# name = "architect"
-# description = "Design system architecture and evaluate technical decisions. Provides high-level design guidance."
-# model = "openrouter:anthropic/claude-3.5-sonnet"
-# max_tokens = 8192
-# system_prompt = "You are a senior software architect. Design system architecture, evaluate technical decisions, and provide high-level design guidance."
-# temperature = 0.2
-# input_mode = "last"
-# output_mode = "none"  # Return only the architectural guidance (cleanest for tool use)
-#
-# [agents.mcp]
-# server_refs = ["developer", "filesystem"]
-# allowed_tools = ["text_editor", "view"]
-
-# Built-in context gatherer agent
+# Context Gatherer Agent - Gathers detailed context from files and codebase
+# Uses the context_gatherer role defined in [[roles]] section
 [[agents]]
 name = "context_gatherer"
 description = "Gather detailed context from files and codebase. Reads files, searches code patterns, and provides comprehensive information about specific areas of the codebase for development tasks."
-model = "openrouter:google/gemini-2.5-flash-preview"
-max_tokens = 16384
-system_prompt = """You are a comprehensive context gatherer and code analyst for development tasks. Your role is to thoroughly examine codebases, understand patterns, and provide detailed information about specific areas.
+command = "octomind acp --role context_gatherer"
+workdir = "."  # Working directory for agent execution (default: current directory)
 
-Your capabilities:
-- Read and analyze multiple files simultaneously
-- Search for code patterns semantically across the codebase
-- Understand file structures and relationships
-- Extract function signatures and code structure
-- Provide comprehensive context for development decisions
+# Example: Architect Agent - Design system architecture
+# [[agents]]
+# name = "architect"
+# description = "Design system architecture and evaluate technical decisions. Provides high-level design guidance."
+# command = "octomind acp --role architect"
+# workdir = "."
 
-Research Process:
-1. **Parallel Discovery**: Execute multiple tools simultaneously for maximum efficiency
-2. **Comprehensive Analysis**: Read relevant files, search patterns, examine structures
-3. **Contextual Understanding**: Connect different parts of the codebase
-4. **Detailed Reporting**: Provide thorough information for informed development
-
-Tools Strategy:
-- Use semantic_search() for finding related code patterns and functionality
-- Use text_editor to read and examine specific files in detail
-- Use view_signatures to understand code structure and interfaces
-- Use view to discover relevant files and understand project structure
-- Execute tools in parallel whenever possible for efficiency
-
-Always provide comprehensive, detailed analysis that helps developers understand the codebase and make informed decisions.
-
-%{SYSTEM}
-
-%{CONTEXT}"""
-temperature = 0.3
-# Default top_p for context_gatherer agent (0.0 to 1.0, nucleus sampling)
-top_p = 0.7
-# Default top_k for context_gatherer agent (1 to 200, limits token choices)
-top_k = 20
-input_mode = "last"
-output_mode = "none"  # Return only the gathered context (cleanest for tool use)
-output_role = "assistant"
-
-[agents.mcp]
-server_refs = ["filesystem", "octocode"]
-allowed_tools = ["text_editor", "batch_edit", "view", "semantic_search", "view_signatures"]
-
+# Example: Code Reviewer Agent - Review code for quality and best practices
+# [[agents]]
+# name = "code_reviewer"
+# description = "Review code for quality, best practices, security issues, and performance problems."
+# command = "octomind acp --role code_reviewer"
+# workdir = "."
 # ═══════════════════════════════════════════════════════════════════════════════
 # PROMPT TEMPLATES
 # Define reusable prompt templates for quick access via /prompt command
