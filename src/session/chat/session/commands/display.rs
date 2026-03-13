@@ -783,7 +783,7 @@ temperature = 0.2
 input_mode = "Last"
 
 [commands.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = []"#
 									.bright_white()
 							);

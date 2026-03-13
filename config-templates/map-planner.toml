@@ -113,7 +113,7 @@ Your job:
 Focus on clean, pragmatic execution. No over-engineering."""
 
 [roles.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = ["developer:*", "filesystem:*"]
 
 [[roles]]
@@ -248,7 +248,7 @@ Rules:
 """
 
 [layers.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = ["ast_grep", "view", "semantic_search", "view_signatures", "text_editor"]
 
 # ── Actor A (dlPFC) — independent explorer ───────────────────────────────────
@@ -293,7 +293,7 @@ Rules:
 - NEVER execute changes — propose intent only"""
 
 [layers.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = ["ast_grep", "view", "semantic_search", "view_signatures", "text_editor"]
 
 # ── Actor B (dlPFC) — independent explorer ───────────────────────────────────
@@ -340,7 +340,7 @@ Rules:
 - NEVER execute changes — propose intent only"""
 
 [layers.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = ["ast_grep", "view", "semantic_search", "view_signatures", "text_editor"]
 
 # ── Actor C (dlPFC) — independent explorer ───────────────────────────────────
@@ -387,7 +387,7 @@ Rules:
 - NEVER execute changes — propose intent only"""
 
 [layers.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = ["ast_grep", "view", "semantic_search", "view_signatures", "text_editor"]
 
 # ── Selector (tree search aggregator) ────────────────────────────────────────

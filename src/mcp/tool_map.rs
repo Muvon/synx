@@ -174,12 +174,12 @@ async fn build_tool_server_map_impl(config: &Config) -> Result<HashMap<String, M
 		let server_functions = match server.connection_type() {
 			McpConnectionType::Builtin => {
 				match server.name() {
-					"developer" => {
+					"core" => {
 						// Developer server only has shell and other dev tools
 						crate::mcp::get_filtered_server_functions(
-							"developer",
+							"core",
 							server.tools(),
-							crate::mcp::dev::get_all_functions,
+							crate::mcp::core::get_all_functions,
 						)
 					}
 					"filesystem" => crate::mcp::get_filtered_server_functions(

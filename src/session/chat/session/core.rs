@@ -16,7 +16,7 @@
 
 use super::utils::format_number;
 use crate::config::Config;
-use crate::mcp::dev::plan;
+use crate::mcp::core::plan;
 use crate::session::{
 	estimate_full_context_tokens, get_sessions_dir, load_session, CompressionStats, Session,
 };
@@ -1180,7 +1180,7 @@ mod tests {
 			},
 			last_response: String::new(),
 			model: "claude-3-5-sonnet".to_string(),
-			role: "developer".to_string(),
+			role: "core".to_string(),
 			temperature: 0.7,
 			top_p: 1.0,
 			top_k: 0,

@@ -119,7 +119,7 @@ impl CostTracker {
 	/// * `metrics` - Compression metrics (messages removed, tokens saved, ratio)
 	pub fn display_compression_result(
 		compression_type: &str,
-		metrics: &crate::mcp::dev::plan::compression::CompressionMetrics,
+		metrics: &crate::mcp::core::plan::compression::CompressionMetrics,
 	) {
 		use crate::log_info;
 		use colored::Colorize;

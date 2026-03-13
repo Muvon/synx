@@ -501,7 +501,7 @@ tools = []
 		assert!(server_names.contains(&"test_server"));
 		assert!(server_names.contains(&"clt"));
 		// Should not contain servers not referenced by the tester role
-		assert!(!server_names.contains(&"developer"));
+		assert!(!server_names.contains(&"core"));
 		assert!(!server_names.contains(&"filesystem"));
 	}
 
@@ -519,7 +519,7 @@ tools = []
 		let server_names: Vec<&str> = merged_config.mcp.servers.iter().map(|s| s.name()).collect();
 		assert!(server_names.contains(&"test_server"));
 		assert!(server_names.contains(&"clt"));
-		assert!(!server_names.contains(&"developer")); // Should not be included
+		assert!(!server_names.contains(&"core")); // Should not be included
 		assert!(!server_names.contains(&"filesystem")); // Should not be included
 	}
 

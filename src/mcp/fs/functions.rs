@@ -15,6 +15,9 @@
 // Optimized function definitions module - MCP function specifications with reduced tokens
 
 use super::super::McpFunction;
+use super::ast_grep::get_ast_grep_function;
+use super::shell::get_shell_function;
+use super::workdir::get_workdir_function;
 use serde_json::json;
 
 // Define the view function - unified read-only tool for files, directories, and content search
@@ -427,5 +430,8 @@ pub fn get_all_functions() -> Vec<McpFunction> {
 		get_text_editor_function(),
 		get_batch_edit_function(),
 		get_extract_lines_function(),
+		get_shell_function(),
+		get_workdir_function(),
+		get_ast_grep_function(),
 	]
 }

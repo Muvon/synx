@@ -18,10 +18,10 @@ use anyhow::Result;
 /// Handle /plan command - display current plan stored in MCP plan tool
 pub async fn handle_plan() -> Result<CommandResult> {
 	// Access the plan storage directly from the MCP plan tool
-	match crate::mcp::dev::plan::core::get_current_plan_display().await {
+	match crate::mcp::core::plan::core::get_current_plan_display().await {
 		Ok(plan_display) => {
 			// Get structured plan data
-			let plan_json = crate::mcp::dev::plan::core::get_current_plan_json()
+			let plan_json = crate::mcp::core::plan::core::get_current_plan_json()
 				.await
 				.ok();
 

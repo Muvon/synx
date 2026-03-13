@@ -485,7 +485,7 @@ fn calculate_adaptive_compression_ratio(session: &ChatSession, base_ratio: f64) 
 
 	// Tool density indicates activity level
 	let tool_density = info.tool_calls as f64 / current_api_calls;
-	let has_plan = crate::mcp::dev::plan::core::has_active_plan();
+	let has_plan = crate::mcp::core::plan::core::has_active_plan();
 
 	// Determine adjustment factor
 	let adjustment = if has_plan {
@@ -1068,7 +1068,7 @@ async fn apply_compression(
 	};
 
 	// Format compressed entry
-	let compression_id = crate::mcp::dev::plan::compression::get_compression_id()
+	let compression_id = crate::mcp::core::plan::compression::get_compression_id()
 		.unwrap_or_else(|| "unknown".to_string());
 
 	let compressed_entry = format_compressed_entry_with_context(
@@ -1089,7 +1089,7 @@ async fn apply_compression(
 	// Calculate metrics
 	let tokens_saved = tokens_before.saturating_sub(tokens_after);
 
-	let metrics = crate::mcp::dev::plan::compression::CompressionMetrics::new(
+	let metrics = crate::mcp::core::plan::compression::CompressionMetrics::new(
 		messages_removed,
 		tokens_saved,
 		tokens_before,

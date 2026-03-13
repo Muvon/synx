@@ -91,7 +91,7 @@ pub fn get_thread_original_working_directory() -> PathBuf {
 pub mod oauth;
 
 pub mod agent;
-pub mod dev;
+pub mod core;
 pub mod fs;
 pub mod health_monitor;
 pub mod process;
@@ -235,10 +235,10 @@ pub struct McpFunction {
 pub fn guess_tool_category(tool_name: &str) -> &'static str {
 	match tool_name {
 		"core" => "system",
-		"text_editor" => "developer",
-		"list_files" | "view" => "filesystem",
-		"shell" | "ast_grep" | "plan" | "ask" => "developer",
-		name if name.contains("file") || name.contains("editor") => "developer",
+		"text_editor" | "batch_edit" | "extract_lines" => "filesystem",
+		"shell" | "ast_grep" | "workdir" | "view" | "list_files" => "filesystem",
+		"plan" | "ask" => "core",
+		name if name.contains("file") || name.contains("editor") => "core",
 		name if name.contains("search") || name.contains("find") => "search",
 		name if name.contains("image") || name.contains("photo") => "media",
 		name if name.contains("web") || name.contains("http") => "web",
@@ -387,7 +387,7 @@ pub async fn initialize_servers_for_role_with_callback(
 				}
 			}
 		} else {
-			// Internal servers (Developer/Filesystem) don't need initialization
+			// Internal servers (Core/Filesystem) don't need initialization
 			crate::log_debug!(
 				"Skipping initialization for internal server: {} ({:?})",
 				server.name(),
@@ -459,10 +459,10 @@ pub async fn get_available_functions(config: &crate::config::Config) -> Vec<McpF
 		match server.connection_type() {
 			McpConnectionType::Builtin => {
 				match server.name() {
-					"developer" => {
+					"core" => {
 						let server_functions =
-							get_filtered_server_functions("developer", server.tools(), || {
-								dev::get_all_functions()
+							get_filtered_server_functions("core", server.tools(), || {
+								core::get_all_functions()
 							});
 						functions.extend(server_functions);
 					}
@@ -662,10 +662,10 @@ pub async fn build_tool_server_map(
 		let server_functions = match server.connection_type() {
 			McpConnectionType::Builtin => {
 				match server.name() {
-					"developer" => {
-						// Developer server only has shell and other dev tools (agent moved to separate server)
-						get_filtered_server_functions("developer", server.tools(), || {
-							dev::get_all_functions()
+					"core" => {
+						// Core server only has plan and ask tools
+						get_filtered_server_functions("core", server.tools(), || {
+							core::get_all_functions()
 						})
 					}
 					"filesystem" => {
@@ -786,42 +786,13 @@ async fn execute_tool_without_cancellation(
 		match target_server.connection_type() {
 			McpConnectionType::Builtin => {
 				match target_server.name() {
-					"developer" => match call.tool_name.as_str() {
-						"shell" => {
-							crate::log_debug!(
-								"Executing shell command via developer server '{}'",
-								target_server.name()
-							);
-							let mut result = dev::execute_shell_command(call).await?;
-							result.tool_id = call.tool_id.clone();
-							return Ok(result);
-						}
-						"ast_grep" => {
-							crate::log_debug!(
-								"Executing ast_grep command via developer server '{}'",
-								target_server.name()
-							);
-							match dev::execute_ast_grep_command(call).await {
-								Ok(mut result) => {
-									result.tool_id = call.tool_id.clone();
-									return Ok(result);
-								}
-								Err(e) => {
-									// Convert execution errors to proper MCP error results
-									return Ok(McpToolResult::error(
-										call.tool_name.clone(),
-										call.tool_id.clone(),
-										format!("AST-grep execution failed: {}", e),
-									));
-								}
-							}
-						}
+					"core" => match call.tool_name.as_str() {
 						"plan" => {
 							crate::log_debug!(
-								"Executing plan command via developer server '{}'",
+								"Executing plan command via core server '{}'",
 								target_server.name()
 							);
-							match dev::execute_plan(call).await {
+							match core::execute_plan(call).await {
 								Ok(mut result) => {
 									result.tool_id = call.tool_id.clone();
 									return Ok(result);
@@ -835,31 +806,12 @@ async fn execute_tool_without_cancellation(
 								}
 							}
 						}
-						"workdir" => {
-							crate::log_debug!(
-								"Executing workdir command via developer server '{}'",
-								target_server.name()
-							);
-							match dev::execute_workdir_command(call).await {
-								Ok(mut result) => {
-									result.tool_id = call.tool_id.clone();
-									return Ok(result);
-								}
-								Err(e) => {
-									return Ok(McpToolResult::error(
-										call.tool_name.clone(),
-										call.tool_id.clone(),
-										format!("Workdir execution failed: {}", e),
-									));
-								}
-							}
-						}
 						"ask" => {
 							crate::log_debug!(
-								"Executing ask via developer server '{}'",
+								"Executing ask via core server '{}'",
 								target_server.name()
 							);
-							match dev::execute_ask(call).await {
+							match core::execute_ask(call).await {
 								Ok(mut result) => {
 									result.tool_id = call.tool_id.clone();
 									return Ok(result);
@@ -875,12 +827,60 @@ async fn execute_tool_without_cancellation(
 						}
 						_ => {
 							return Err(anyhow::anyhow!(
-								"Tool '{}' not implemented in developer server",
+								"Tool '{}' not implemented in core server",
 								call.tool_name
 							));
 						}
 					},
 					"filesystem" => match call.tool_name.as_str() {
+						"shell" => {
+							crate::log_debug!(
+								"Executing shell command via filesystem server '{}'",
+								target_server.name()
+							);
+							let mut result = fs::execute_shell_command(call).await?;
+							result.tool_id = call.tool_id.clone();
+							return Ok(result);
+						}
+						"ast_grep" => {
+							crate::log_debug!(
+								"Executing ast_grep command via filesystem server '{}'",
+								target_server.name()
+							);
+							match fs::execute_ast_grep_command(call).await {
+								Ok(mut result) => {
+									result.tool_id = call.tool_id.clone();
+									return Ok(result);
+								}
+								Err(e) => {
+									// Convert execution errors to proper MCP error results
+									return Ok(McpToolResult::error(
+										call.tool_name.clone(),
+										call.tool_id.clone(),
+										format!("AST-grep execution failed: {}", e),
+									));
+								}
+							}
+						}
+						"workdir" => {
+							crate::log_debug!(
+								"Executing workdir command via filesystem server '{}'",
+								target_server.name()
+							);
+							match fs::execute_workdir_command(call).await {
+								Ok(mut result) => {
+									result.tool_id = call.tool_id.clone();
+									return Ok(result);
+								}
+								Err(e) => {
+									return Ok(McpToolResult::error(
+										call.tool_name.clone(),
+										call.tool_id.clone(),
+										format!("Workdir execution failed: {}", e),
+									));
+								}
+							}
+						}
 						"text_editor" => {
 							crate::log_debug!(
 								"Executing text_editor via filesystem server '{}'",

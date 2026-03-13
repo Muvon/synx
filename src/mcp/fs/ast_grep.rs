@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// AST-grep execution functionality for the Developer MCP provider
+// AST-grep execution functionality for the Filesystem MCP provider
 
 use super::super::{McpFunction, McpToolCall, McpToolResult};
 use anyhow::{anyhow, Result};

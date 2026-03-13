@@ -12,26 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Developer MCP provider - modular structure
-// Handles shell execution and other development tools
+// Core MCP provider - modular structure
+// Handles core tools: plan and ask
 
 pub mod ask;
-pub mod ast_grep;
 pub mod functions;
 pub mod plan;
-pub mod shell;
-pub mod workdir;
 
 #[cfg(test)]
-mod dev_tests;
+mod core_tests;
 
 #[cfg(test)]
 mod plan_tests;
 
 // Re-export main functionality
 pub use ask::execute_ask;
-pub use ast_grep::execute_ast_grep_command;
 pub use functions::get_all_functions;
 pub use plan::{clear_plan_data, execute_plan};
-pub use shell::execute_shell_command;
-pub use workdir::execute_workdir_command;

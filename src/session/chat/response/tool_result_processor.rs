@@ -147,8 +147,8 @@ pub async fn process_tool_results(
 	if plan_tool_executed {
 		// Check if we need to set start_index for the NEXT task
 		// This happens after plan(start) or plan(next) when start_index is None
-		if crate::mcp::dev::plan::core::get_current_task_start_index().is_none()
-			&& crate::mcp::dev::plan::core::has_active_plan()
+		if crate::mcp::core::plan::core::get_current_task_start_index().is_none()
+			&& crate::mcp::core::plan::core::has_active_plan()
 		{
 			// CRITICAL: Set start_index to last valid message index (the plan tool result)
 			// Compression will remove messages from (start_index + 1) to end_index
@@ -159,7 +159,7 @@ pub async fn process_tool_results(
 				crate::log_debug!("Cannot set start_index: no messages in session");
 			} else {
 				let start_index = message_count - 1; // Last valid index
-				crate::mcp::dev::plan::set_current_task_start_index(start_index);
+				crate::mcp::core::plan::set_current_task_start_index(start_index);
 				crate::log_debug!(
 					"Plan task start_index set to: {} (last message index, total messages: {})",
 					start_index,
@@ -169,9 +169,9 @@ pub async fn process_tool_results(
 		}
 
 		// If compression is pending (plan(next) was called), set the message range
-		if crate::mcp::dev::plan::has_pending_compression() {
+		if crate::mcp::core::plan::has_pending_compression() {
 			// Get the start index that was set when the PREVIOUS task started
-			if let Some(start_index) = crate::mcp::dev::plan::core::get_and_clear_start_index() {
+			if let Some(start_index) = crate::mcp::core::plan::core::get_and_clear_start_index() {
 				// Use last valid index (len - 1) since remove_messages_in_range uses inclusive end_index
 				let end_index = chat_session.get_message_count() - 1;
 
@@ -184,7 +184,7 @@ pub async fn process_tool_results(
 
 				// Set the message range on the pending compression task
 				if let Err(e) =
-					crate::mcp::dev::plan::set_pending_compression_range(start_index, end_index)
+					crate::mcp::core::plan::set_pending_compression_range(start_index, end_index)
 				{
 					log_info!(
 						"Failed to set compression range: {}. Compression will be skipped.",
@@ -202,7 +202,7 @@ pub async fn process_tool_results(
 
 	// Process any pending compression with proper error handling
 	let _task_compression_occurred =
-		match crate::mcp::dev::plan::process_pending_compression(chat_session).await {
+		match crate::mcp::core::plan::process_pending_compression(chat_session).await {
 			Ok(Some(metrics)) => {
 				chat_session
 					.session
@@ -231,7 +231,7 @@ pub async fn process_tool_results(
 
 	// Process phase compression (automatic)
 	let _phase_compression_occurred =
-		match crate::mcp::dev::plan::process_pending_phase_compression(chat_session).await {
+		match crate::mcp::core::plan::process_pending_phase_compression(chat_session).await {
 			Ok(Some(metrics)) => {
 				chat_session
 					.session
@@ -255,7 +255,7 @@ pub async fn process_tool_results(
 
 	// Process project compression (automatic)
 	let _project_compression_occurred =
-		match crate::mcp::dev::plan::process_pending_project_compression(chat_session).await {
+		match crate::mcp::core::plan::process_pending_project_compression(chat_session).await {
 			Ok(Some(metrics)) => {
 				chat_session
 					.session

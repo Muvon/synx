@@ -20,7 +20,7 @@
 
 #[cfg(test)]
 mod tests {
-	use crate::mcp::dev::plan::{clear_plan_data, execute_plan};
+	use crate::mcp::core::plan::{clear_plan_data, execute_plan};
 	use crate::mcp::{extract_mcp_content, McpToolCall};
 	use serde_json::json;
 	use serial_test::serial;

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Tests for the Developer MCP provider
+// Tests for the Core MCP provider
 
 #[cfg(test)]
 mod tests {
-	use crate::mcp::dev::ast_grep::execute_ast_grep_command;
-	use crate::mcp::dev::shell::execute_shell_command;
+	use crate::mcp::fs::ast_grep::execute_ast_grep_command;
+	use crate::mcp::fs::shell::execute_shell_command;
 	use crate::mcp::{extract_mcp_content, McpToolCall};
 	use serde_json::json;
 	use tokio;

@@ -107,7 +107,7 @@ pub fn extract_session_params<T: std::fmt::Debug>(args: &T, _config: &Config) ->
 		let end = args_str[start..].find('"').unwrap() + start;
 		args_str[start..end].to_string()
 	} else {
-		"developer".to_string() // Default role
+		"core".to_string() // Default role
 	};
 
 	// Get temperature - check if explicitly provided via CLI (now Optional)

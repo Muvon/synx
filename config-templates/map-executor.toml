@@ -117,7 +117,7 @@ Your job:
 You have full MCP tools available. Focus on clean, pragmatic review."""
 
 [roles.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = ["developer:*", "filesystem:*"]
 [[roles]]
 name = "assistant"
@@ -249,7 +249,7 @@ Rules:
 - DO NOT execute changes — only plan them"""
 
 [layers.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = ["semantic_search", "ast_grep", "view", "view_signatures", "text_editor"]
 
 # ── Actor A (dlPFC) — EXECUTOR with worktree isolation ────────────────────────────
@@ -305,7 +305,7 @@ Rules:
 - Prioritize KISS and DRY"""
 
 [layers.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = ["shell", "ast_grep", "view", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines", "workdir"]
 
 # ── Actor B (dlPFC) — EXECUTOR with worktree isolation ────────────────────────────
@@ -361,7 +361,7 @@ Rules:
 - Favor a different approach than the most obvious solution"""
 
 [layers.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = ["shell", "ast_grep", "view", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines", "workdir"]
 
 # ── Actor C (dlPFC) — EXECUTOR with worktree isolation ────────────────────────────
@@ -417,7 +417,7 @@ Rules:
 - Explore unconventional but valid solutions"""
 
 [layers.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = ["shell", "ast_grep", "view", "semantic_search", "view_signatures", "text_editor", "batch_edit", "extract_lines", "workdir"]
 # ── Selector (tree search aggregator) — compares worktrees ───────────────────────
 [[layers]]
@@ -470,7 +470,7 @@ Rules:
 - The selected worktree will be validated and potentially merged"""
 
 [layers.mcp]
-server_refs = ["developer"]
+server_refs = ["core"]
 allowed_tools = ["shell", "workdir"]
 
 # ── Monitor (ACC) ─────────────────────────────────────────────────────────────
@@ -516,7 +516,7 @@ Validation checklist:
 ✓ No unintended breaking changes"""
 
 [layers.mcp]
-server_refs = ["developer", "filesystem"]
+server_refs = ["core", "filesystem"]
 allowed_tools = ["shell", "ast_grep", "view", "view_signatures", "text_editor", "workdir"]
 
 # ── Predictor (OFC) ───────────────────────────────────────────────────────────

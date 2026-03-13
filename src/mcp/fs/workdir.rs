@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Working directory management for parallel execution isolation
+// Working directory management for the Filesystem MCP provider
 
 use super::super::{
 	get_thread_original_working_directory, get_thread_working_directory,

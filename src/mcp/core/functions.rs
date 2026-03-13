@@ -13,23 +13,14 @@
 // limitations under the License.
 
 // The plan tool provides structured, step-by-step task execution, progress tracking, and session integration.
-// Registered here as a developer MCP function. See src/mcp/dev/plan/ for details and compliance patterns.
-// Function definitions for the Developer MCP provider
+// Registered here as a core MCP function. See src/mcp/core/plan/ for details and compliance patterns.
+// Function definitions for the Core MCP provider
 
 use super::super::McpFunction;
 use super::ask::get_ask_function;
-use super::ast_grep::get_ast_grep_function;
 use super::plan::get_plan_function;
-use super::shell::get_shell_function;
-use super::workdir::get_workdir_function;
 
-// Get all available developer functions
+// Get all available core functions
 pub fn get_all_functions() -> Vec<McpFunction> {
-	vec![
-		get_shell_function(),
-		get_ast_grep_function(),
-		get_plan_function(),
-		get_workdir_function(),
-		get_ask_function(),
-	]
+	vec![get_plan_function(), get_ask_function()]
 }

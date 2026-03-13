@@ -269,7 +269,7 @@ async fn execute_tools_with_context(
 	// Take the global ask receiver once for this execution batch.
 	// If another batch already took it, ask_rx will be None and ask calls will
 	// return an error to the AI (handled in ask.rs).
-	let mut ask_rx = crate::mcp::dev::ask::take_ask_receiver();
+	let mut ask_rx = crate::mcp::core::ask::take_ask_receiver();
 
 	// Pin join_all so it can be polled across multiple select! iterations
 	// (needed when ask requests arrive mid-execution).
@@ -283,7 +283,7 @@ async fn execute_tools_with_context(
 			results = &mut all_tasks => {
 				// All tool tasks completed — return receiver so next batch can use ask.
 				if let Some(rx) = ask_rx.take() {
-					crate::mcp::dev::ask::return_ask_receiver(rx);
+					crate::mcp::core::ask::return_ask_receiver(rx);
 				}
 				break results;
 			}
@@ -330,7 +330,7 @@ async fn execute_tools_with_context(
 
 				// Return receiver so next batch can use ask, then return empty results.
 				if let Some(rx) = ask_rx.take() {
-					crate::mcp::dev::ask::return_ask_receiver(rx);
+					crate::mcp::core::ask::return_ask_receiver(rx);
 				}
 				return Ok((Vec::new(), total_tool_time_ms));
 			}
@@ -559,7 +559,7 @@ async fn execute_tools_with_context(
 /// For terminal modes: stops the spinner, prints the question, reads stdin.
 /// For WebSocket mode: sends an InputRequest via the notification channel and awaits the oneshot.
 async fn service_ask_request(
-	req: crate::mcp::dev::ask::AskRequest,
+	req: crate::mcp::core::ask::AskRequest,
 	config: &Config,
 	mode: OutputMode,
 ) {
@@ -596,7 +596,7 @@ async fn service_ask_request(
 		// WebSocket / JSONL mode: send InputRequest via the notification sender.
 		// The WS server will forward it to the client and route the InputResponse
 		// back via the global pending-answer slot in ask.rs.
-		crate::mcp::dev::ask::send_ws_input_request(req);
+		crate::mcp::core::ask::send_ws_input_request(req);
 	}
 }
 

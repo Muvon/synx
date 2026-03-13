@@ -40,7 +40,7 @@ pub async fn handle_done(
 	);
 
 	// Clear plan data
-	if let Err(e) = crate::mcp::dev::plan::clear_plan_data().await {
+	if let Err(e) = crate::mcp::core::plan::clear_plan_data().await {
 		crate::log_debug!("Failed to clear plan data: {}", e);
 	}
 

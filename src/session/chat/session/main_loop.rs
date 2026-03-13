@@ -810,7 +810,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		// Handle special /done command separately
 		if input.trim() == "/done" {
 			// Clear plan data
-			if let Err(e) = crate::mcp::dev::plan::clear_plan_data().await {
+			if let Err(e) = crate::mcp::core::plan::clear_plan_data().await {
 				log_debug!("Failed to clear plan data: {}", e);
 			}
 

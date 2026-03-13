@@ -289,8 +289,8 @@ welcome = "Hello! Octomind ready to serve you. Working dir: %{CWD} (Role: %{ROLE
 # workflow = "developer_workflow"
 
 [roles.mcp]
-server_refs = ["developer", "filesystem", "octocode", "agent"]
-allowed_tools = ["developer:*", "filesystem:*", "octocode:*", "agent_*"]
+server_refs = ["core", "filesystem", "octocode", "agent"]
+allowed_tools = ["core:*", "filesystem:*", "octocode:*", "agent_*"]
 
 # Assistant role - optimized for general assistance tasks
 [[roles]]
@@ -306,7 +306,9 @@ system = "You are a helpful assistant."
 welcome = "Hello! Octomind ready to assist you. Working dir: %{CWD} (Role: %{ROLE})"
 
 # MCP configuration for assistant role
-mcp = { server_refs = ["filesystem"], allowed_tools = ["view"] }
+[roles.mcp]
+server_refs = ["filesystem"]
+allowed_tools = ["view"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MCP (MODEL CONTEXT PROTOCOL) SERVERS
@@ -320,7 +322,7 @@ allowed_tools = []
 
 # Built-in MCP servers (always available)
 [[mcp.servers]]
-name = "developer"
+name = "core"
 type = "builtin"
 timeout_seconds = 30
 tools = []
@@ -336,8 +338,6 @@ name = "filesystem"
 type = "builtin"
 timeout_seconds = 30
 tools = []
-
-
 
 [[mcp.servers]]
 name = "octocode"
@@ -643,7 +643,7 @@ allowed_tools = []
 # output_role = "assistant"  # Options: "assistant", "user" (default: "assistant")
 #
 # [layers.mcp]
-# server_refs = ["developer", "filesystem"]
+# server_refs = ["core", "filesystem"]
 # allowed_tools = []
 #
 # [layers.parameters]
@@ -662,7 +662,7 @@ allowed_tools = []
 # output_role = "assistant"  # Role for session messages: "assistant" or "user"
 #
 # [layers.mcp]
-# server_refs = ["developer", "filesystem"]
+# server_refs = ["core", "filesystem"]
 # allowed_tools = ["text_editor", "batch_edit", "view"]
 #
 # [[layers]]
@@ -677,7 +677,7 @@ allowed_tools = []
 # output_role = "assistant"  # Role for session messages: "assistant" or "user"
 #
 # [layers.mcp]
-# server_refs = ["developer", "filesystem"]
+# server_refs = ["core", "filesystem"]
 # allowed_tools = ["text_editor", "shell", "view"]
 #
 # [[layers]]
@@ -692,7 +692,7 @@ allowed_tools = []
 # output_role = "assistant"  # Role for session messages: "assistant" or "user"
 #
 # [layers.mcp]
-# server_refs = ["developer", "filesystem"]
+# server_refs = ["core", "filesystem"]
 # allowed_tools = ["text_editor", "view"]
 #
 # Usage examples (requires agents config above):

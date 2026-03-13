@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Shell execution functionality for the Developer MCP provider
+// Shell execution functionality for the Filesystem MCP provider
 
 use super::super::{get_thread_working_directory, McpFunction, McpToolCall, McpToolResult};
 use anyhow::{anyhow, Result};

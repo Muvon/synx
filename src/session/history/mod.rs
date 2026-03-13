@@ -85,7 +85,7 @@ fn get_role_mutex(role: &str) -> std::sync::MutexGuard<'static, ()> {
 /// Migrate old global history file to role-based system
 fn migrate_legacy_history_if_needed(role: &str) -> Result<()> {
 	// Only migrate for developer role to avoid duplicating history across roles
-	if role != "developer" {
+	if role != "core" {
 		return Ok(());
 	}
 
