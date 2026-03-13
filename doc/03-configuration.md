@@ -185,7 +185,7 @@ tools = []
 - **API Keys**: Set via environment variables only (e.g., `OPENROUTER_API_KEY`)
 - **Server References**: Roles use `server_refs` to reference servers by name
 - **Tool Filtering**: Use `allowed_tools` to limit available tools per role
-- **Builtin Servers**: Developer, filesystem, and octocode are always available
+- **Builtin Servers**: Core, filesystem, and agent are always available
 ## Custom Instructions File
 
 Octomind supports automatic loading of custom instructions from a project-specific file. This feature allows you to provide context, guidelines, or project-specific information that will be automatically included in every new session.

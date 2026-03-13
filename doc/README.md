@@ -19,16 +19,16 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 
 ## Current Architecture Overview
 
-**Octomind v0.18.0** implements a session-first architecture with the following core components:
+**Octomind v0.20.0** implements a session-first architecture with the following core components:
 
 ### Session-First Design
 - **Interactive AI Conversations**: All functionality accessed through natural language sessions
 - **Persistent Context**: Smart context management with automatic compression when limits reached
 - **Role-Based Access**: Developer (full tools), Assistant (chat-only), and custom role configurations
 ### Built-in MCP Tools
-- **Developer Server**: `shell()`, `ast_grep()` - Execute commands and search code patterns
-- **Filesystem Server**: `view()`, `text_editor()`, `batch_edit()` - File operations
-- **Agent Server**: `agent_*()` - Route tasks to specialized AI processing layers
+- **Core Server**: `plan()`, `ask()` - Structured task management and user interaction
+- **Filesystem Server**: `view()`, `text_editor()`, `batch_edit()`, `extract_lines()`, `shell()`, `workdir()`, `ast_grep()` - File operations, command execution, and code analysis
+- **Agent Server**: `agent_*()` - Specialized AI task routing
 
 ### Multi-Provider AI Support
 - **7 Providers**: OpenRouter, OpenAI, Anthropic, Google, Amazon, Cloudflare, DeepSeek
@@ -70,7 +70,7 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 - **Compression Statistics**: `/info` command shows compression metrics, tokens saved, and cost savings
 - **Last 4 Turns Preservation**: Maintains recent context uncompressed for continuity
 ### MCP Tool System
-- **Built-in Servers**: Developer, Filesystem, and Agent servers with comprehensive tool sets
+- **Built-in Servers**: Core, Filesystem, and Agent servers with comprehensive tool sets
 - **Protocol Compliance**: Full MCP standard implementation with proper error handling
 - **Tool Routing**: Efficient tool-to-server mapping for instant execution
 - **Health Monitoring**: Server health checks and automatic recovery
@@ -134,8 +134,8 @@ Everything happens within interactive AI conversations. No separate indexing, co
 
 #### **MCP Tool Integration**
 Built-in servers provide development tools:
-- **Developer**: `shell()`, `ast_grep()` - Command execution and code analysis
-- **Filesystem**: `view()`, `text_editor()`, `batch_edit()` - File operations
+- **Core**: `plan()`, `ask()` - Structured task management and user interaction
+- **Filesystem**: `view()`, `text_editor()`, `batch_edit()`, `extract_lines()`, `shell()`, `workdir()`, `ast_grep()` - File operations, command execution, and code analysis
 - **Agent**: `agent_*()` - Specialized AI task routing
 
 
@@ -149,19 +149,8 @@ Unified interface supporting 7 providers with consistent `provider:model` format
 - OpenRouter (multi-provider access)
 - OpenAI, Anthropic, Google, Amazon, Cloudflare, DeepSeek
 
-#### **Smart Cost Optimization**
-- Automatic caching with cache markers
-- Real-time cost tracking and reporting
-- Provider-specific optimization features
-- Session and request spending thresholds
-- **Assistant Role**: Simple conversations without tools
-- **Custom Roles**: User-defined specialized configurations
 
-#### **MCP Tool Integration**
-Built-in development tools accessible through natural conversation:
-- File operations and code editing
-- Shell command execution
-- Code analysis and understanding
+
 
 #### **Layered Architecture**
 Multi-stage AI processing for complex tasks:
@@ -232,6 +221,6 @@ Default values
 
 ---
 
-**Octomind v0.18.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.
+**Octomind v0.20.0** - Session-first AI development assistant with built-in MCP tools and multi-provider support.
 
 **© 2026 Muvon Un Limited** | Apache License 2.0

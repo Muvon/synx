@@ -6,25 +6,23 @@ This guide explains how to add new built-in MCP servers to Octomind. Use this wh
 
 ## Built-in MCP Servers
 
-Octomind provides **four** built-in MCP servers with comprehensive development capabilities:
+Octomind provides **three** built-in MCP servers with comprehensive development capabilities:
 
-**Developer Server** (`src/mcp/dev/`):
-- `shell(command="...", background=false)` - Execute shell commands with output capture, foreground/background execution
-- `ast_grep(pattern="...", language="...", rewrite="...", ...)` - Search and refactor code using AST patterns
+**Core Server** (`src/mcp/core/`):
 - `plan(command="start|step|next|list|done|reset", ...)` - Structured task management with progress tracking
 - `ask(question="...")` - Pause execution and ask the user a clarification question; halts until answered. Use ONLY when genuinely blocked (missing requirement, ambiguous instruction, decision only the user can make) — question must be fully self-contained with all context, file paths, options, and references so the user can answer without looking anything up
 
 **Filesystem Server** (`src/mcp/fs/`):
-- `view(path=\"...\", lines=[start, end], pattern=\"...\", content=\"...\", ...)` - Read files, view directories, and search file content
-- `text_editor(command=\"create|str_replace|insert|line_replace|undo_edit\", path=\"...\", ...)` - Edit files
-- `batch_edit(path=\"...\", operations=[...])` - Multiple file operations atomically
-- `extract_lines(from_path=\"...\", from_range=[start, end], append_path=\"...\", append_line=N)` - Extract and move code blocks
-
+- `view(path="...", lines=[start, end], pattern="...", content="...", ...)` - Read files, view directories, and search file content
+- `text_editor(command="create|str_replace|insert|line_replace|undo_edit", path="...", ...)` - Edit files
+- `batch_edit(path="...", operations=[...])` - Multiple file operations atomically
+- `extract_lines(from_path="...", from_range=[start, end], append_path="...", append_line=N)` - Extract and move code blocks
+- `shell(command="...", background=false)` - Execute shell commands with output capture, foreground/background execution
+- `workdir(path="...", reset=false)` - Get or set working directory for parallel execution isolation
+- `ast_grep(pattern="...", language="...", rewrite="...", ...)` - Search and refactor code using AST patterns
 
 **Agent Server** (`src/mcp/agent/`):
 - `agent_*()` tools - Delegate tasks to configured ACP sub-agents (each spawns an ACP subprocess via the configured `command`)
-
-Each server provides a specific category of tools and can be enabled/disabled independently in role configurations.
 
 ## When to Add a New MCP Server
 
@@ -103,7 +101,7 @@ let hint = if crate::mcp::tool_map::get_server_for_tool("better_tool").is_some()
 ```
 
 **Existing hints (reference implementations):**
-- `src/mcp/dev/shell.rs` — `SHELL_MISUSE_HINTS` table: warns on `cat/grep/find/sed` when dedicated tools are enabled
+- `src/mcp/fs/shell.rs` — `SHELL_MISUSE_HINTS` table: warns on `cat/grep/find/sed` when dedicated tools are enabled
 - `src/mcp/fs/text_editing.rs` — `str_replace` hints `line_replace` when match spans multiple lines
 
 ## Step-by-Step Implementation

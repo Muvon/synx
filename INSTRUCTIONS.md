@@ -92,7 +92,7 @@ let hint = if crate::mcp::tool_map::get_server_for_tool("better_tool").is_some()
     "\n\n⚠️ Prefer `better_tool` here — reason."
 } else { "" };
 ```
-Reference: `src/mcp/dev/shell.rs` (`SHELL_MISUSE_HINTS`), `src/mcp/fs/text_editing.rs` (str_replace → line_replace hint).
+Reference: `src/mcp/fs/shell.rs` (`SHELL_MISUSE_HINTS`), `src/mcp/fs/text_editing.rs` (str_replace → line_replace hint).
 
 ## Adding a New MCP Tool
 

@@ -24,22 +24,21 @@ MCP enables AI models to use external tools and services through a standardized 
 
 Octomind provides three built-in MCP servers with comprehensive development capabilities:
 
-**Developer Server** (`src/mcp/dev/`):
-- `shell(command="...", background=false)` - Execute shell commands with output capture, foreground/background execution
-- `ast_grep(pattern="...", language="...", rewrite="...", ...)` - Search and refactor code using AST patterns
+**Core Server** (`src/mcp/core/`):
 - `plan(command="start|step|next|list|done|reset", ...)` - Structured task management with progress tracking
-- `workdir(path="...", reset=false)` - Get or set working directory for parallel execution isolation
+- `ask(question="...")` - Pause execution and ask the user a clarification question; halts until answered. Use ONLY when genuinely blocked (missing requirement, ambiguous instruction, decision only the user can make) — question must be fully self-contained with all context, file paths, options, and references so the user can answer without looking anything up
 
 **Filesystem Server** (`src/mcp/fs/`):
 - `view(path="...", lines=[start, end], pattern="...", content="...", ...)` - Read files, view directories, and search file content
 - `text_editor(command="create|str_replace|insert|line_replace|undo_edit", path="...", ...)` - Edit files
 - `batch_edit(path="...", operations=[...])` - Multiple file operations atomically
 - `extract_lines(from_path="...", from_range=[start, end], append_path="...", append_line=N)` - Extract and move code blocks
+- `shell(command="...", background=false)` - Execute shell commands with output capture, foreground/background execution
+- `workdir(path="...", reset=false)` - Get or set working directory for parallel execution isolation
+- `ast_grep(pattern="...", language="...", rewrite="...", ...)` - Search and refactor code using AST patterns
 
 **Agent Server** (`src/mcp/agent/`):
 - `agent_*()` tools - Delegate tasks to configured ACP sub-agents (each spawns an ACP subprocess via the configured `command`)
-**Tool Invocation:**
-
 ---
 
 ### plan — Structured Task Management Tool
@@ -89,7 +88,7 @@ The `plan` tool enables interactive, step-by-step task management inside Octomin
 - Visual progress feedback within session
 - Clean error handling and robust MCP protocol support
 
-See `src/mcp/dev/plan/` for code, and test integration in `src/session/chat/session/main_loop.rs`.
+See `src/mcp/core/plan/` for code, and test integration in `src/session/chat/session/main_loop.rs`.
 - Single tool: clean header, no index
 - Multiple tools: indexed headers
 
@@ -712,7 +711,7 @@ The compression system is implemented across multiple modules:
 **Core Compression:**
 - **`src/session/chat/conversation_compression.rs`**: Main compression engine with cache-aware economics, semantic chunking, and AI-driven decision making
 - **`src/session/cache.rs`**: Cache marker management system (2-marker system for cost optimization)
-- **`src/mcp/dev/plan/compression.rs`**: Plan-specific compression for structured task workflows
+- **`src/mcp/core/plan/compression.rs`**: Plan-specific compression for structured task workflows
 
 **Supporting Systems:**
 - **`src/session/chat/semantic_chunking.rs`**: Discourse-aware semantic chunking for preserving conversation structure
