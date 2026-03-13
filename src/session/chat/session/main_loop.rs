@@ -295,20 +295,68 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		.await;
 
 		let input_result = if let Some(prompt_text) = chat_session.pending_prompt.take() {
-			// Process pending prompt from /prompt command
-			log_debug!("Processing pending prompt template as user input");
+			// Process pending prompt from async job injection or /prompt command
+			log_debug!("Processing pending prompt as user input");
 			InputResult::Text(prompt_text)
 		} else {
-			// Read user input with command completion and cost estimation
-			read_user_input(
-				chat_session.estimated_cost,
-				&current_config,
-				&role,
-				current_context_tokens,
-				current_config.max_session_tokens_threshold,
-				&chat_session.session.info.name,
-				false, // Don't show status line after first interaction
-			)?
+			// Race blocking user input against async job completion.
+			// If a job arrives while the user is typing, inject it immediately
+			// without waiting for the user to press Enter.
+			let estimated_cost = chat_session.estimated_cost;
+			let config_clone = current_config.clone();
+			let role_clone = role.clone();
+			let session_name = chat_session.session.info.name.clone();
+			let max_threshold = current_config.max_session_tokens_threshold;
+
+			let input_handle = tokio::task::spawn_blocking(move || {
+				read_user_input(
+					estimated_cost,
+					&config_clone,
+					&role_clone,
+					current_context_tokens,
+					max_threshold,
+					&session_name,
+					false, // Don't show status line after first interaction
+				)
+			});
+
+			tokio::select! {
+				// User typed something
+				join_result = input_handle => {
+					join_result.unwrap_or_else(|e| {
+						log_debug!("Input thread panicked: {}", e);
+						Ok(InputResult::Text(String::new()))
+					})?
+				}
+				// Async job completed while user was at the prompt
+				Some(job) = chat_session.job_rx.recv() => {
+					let msg = if job.output.starts_with("ERROR: ") {
+						format!(
+							"[Async agent '{}' failed]\n\n{}",
+							job.agent_name,
+							job.output.trim_start_matches("ERROR: ")
+						)
+					} else {
+						format!(
+							"[Async agent '{}' completed]\n\n{}",
+							job.agent_name, job.output
+						)
+					};
+					// Unblock the reedline thread by writing a newline to stdin,
+					// so it doesn't silently consume the user's next real keypress.
+					// Unblock the reedline thread by writing a newline to stdin,
+					// so it doesn't silently consume the user's next real keypress.
+					#[cfg(unix)]
+					{
+						let mut stdin_write = unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(0) };
+						let _ = std::io::Write::write_all(&mut stdin_write, b"\n");
+						// Don't close fd 0 — forget the File so it doesn't drop/close stdin
+						std::mem::forget(stdin_write);
+					}
+
+					InputResult::Text(msg)
+				}
+			}
 		};
 
 		// Handle the input result with proper error recovery
