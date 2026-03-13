@@ -19,7 +19,7 @@ use super::{McpFunction, McpToolCall, McpToolResult};
 use crate::config::{Config, McpConnectionType, McpServerConfig};
 use crate::mcp::oauth::{self, token_store};
 use anyhow::{anyhow, Result};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -180,6 +180,10 @@ pub async fn get_server_functions(server: &McpServerConfig) -> Result<Vec<McpFun
 
 			// Prepare headers
 			let mut headers = HeaderMap::new();
+			headers.insert(
+				ACCEPT,
+				HeaderValue::from_static("application/json, text/event-stream"),
+			);
 			headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
 			// Add authentication - Try MCP Authorization discovery first, then manual OAuth, then static token
@@ -761,6 +765,10 @@ async fn execute_tool_with_cancellation(
 
 			// Prepare headers
 			let mut headers = HeaderMap::new();
+			headers.insert(
+				ACCEPT,
+				HeaderValue::from_static("application/json, text/event-stream"),
+			);
 			headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
 			// Add authentication - Try MCP Authorization discovery first, then manual OAuth, then static token
