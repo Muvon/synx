@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.20.0] - 2026-03-13
+
+### 📋 Release Summary
+
+This release enhances octomind's AI development assistance with improved task planning through context-aware compression and refined file viewing capabilities (092337a6, dbe430b6). New interactive tools enable better user collaboration, while multi-provider AI integration and worktree-based isolation improve development workflow reliability (fca84305, 0283858d). Multiple stability fixes address build compatibility, async operations, and error handling across platforms (27804788, e365f145, 8e65c3aa).
+
+
+### ✨ New Features & Enhancements
+
+- **plan**: add minimum context threshold for task compression `092337a6`
+- **mcp**: add interactive ask tool for user input `fca84305`
+- **mcp**: add content-based file filtering to view command `dbe430b6`
+- **config**: switch map actors to ollama models `538b717c`
+- **mcp**: add thread-local working directory support `f8b366da`
+- **config**: add MAP executor configuration template `621274f0`
+
+### 🔧 Improvements & Optimizations
+
+- **map-executor**: replace list_files with view tool `5460729a`
+- **fs**: unify file and directory viewing `e581e445`
+- **map-planner**: switch to XML subgoals and tighten planning rules `aa93d894`
+- **map-executor**: replace branch isolation with worktree isolation `0283858d`
+- **config**: simplify planner config and add MAP template `886e06ab`
+
+### 🐛 Bug Fixes & Stability
+
+- **brave**: update response field paths for image, video, and news `27804788`
+- **spinner**: prevent blocking async runtime during cleanup `8e65c3aa`
+- **ask**: return receiver after tool batch completes `33813555`
+- **build**: resolve openssl windows compatibility issue `e365f145`
+- **build**: resolve musl build failures with vendored openssl `476aa6d2`
+- **session**: skip empty instructions files to prevent blank messages `c3796ad6`
+- **fs**: improve error message when file exists on create `848ad54e`
+- **text_editing**: allow insert at index 0 for file beginning `6f9b060a`
+- use config max_retries instead of hardcoded 0 `9cd3f2dd`
+- **config**: correct map executor system prompts and formatting `91b3796b`
+- **cancellation**: prevent blocking on cancelled spawn tasks `01b59162`
+- **websocket**: suppress CLI output in websocket mode `b0e20677`
+
+### 🔄 Other Changes
+
+- **release**: add perl dependency for alpine build environment `f943eec0`
+- **release**: 0.20.0" `dc331422`
+- **deps**: bump octolib to 0.10.3 `1efe161a`
+- **release**: 0.20.0 `3db853c9`
+- **deps**: bump reedline to 0.46.0 `d3eeadd6`
+
+### 📊 Release Summary
+
+**Total commits**: 28 across 4 categories
+
+✨ **6** new features - *Enhanced functionality*
+🔧 **5** improvements - *Better performance & code quality*
+🐛 **12** bug fixes - *Improved stability*
+🔄 **5** other changes - *Maintenance & tooling*
+
 ## [0.19.0] - 2026-03-05
 
 ### 📋 Release Summary
