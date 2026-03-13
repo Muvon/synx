@@ -27,26 +27,16 @@ pub fn get_view_function() -> McpFunction {
 		description:
 			"Read files, view directories, and search file content. Unified read-only tool.
 
-			**File viewing** (path is a file):
-			- View entire file: `{\"path\": \"src/main.rs\"}`
-			- View line range: `{\"path\": \"src/main.rs\", \"lines\": [10, 20]}`
-			- Supports negative indexing: -1 = last line
-			- Returns plain text with 1-indexed line numbers
-			- Smart elision: shows [...X lines more] indicators when using line range
+			**File** (path is a file): returns plain text with 1-indexed line numbers.
+			- Whole file: `{\"path\": \"src/main.rs\"}`
+			- Line range (negative ok: -1 = last): `{\"path\": \"src/main.rs\", \"lines\": [10, 20]}`
 
-			**Multi-file viewing** (provide paths array):
-			- View multiple files: `{\"paths\": [\"src/main.rs\", \"src/lib.rs\"]}`
-			- Maximum 50 files per request
+			**Multi-file** (paths array, max 50): `{\"paths\": [\"src/main.rs\", \"src/lib.rs\"]}`
 
-			**Directory listing** (path is a directory):
-			- List files: `{\"path\": \"src/\"}`
-			- Filter by name pattern: `{\"path\": \"src\", \"pattern\": \"*.rs\"}`
-			- Search file content: `{\"path\": \"src\", \"content\": \"fn main\"}`
-			- Limit depth: `{\"path\": \".\", \"max_depth\": 2}`
-			- Include hidden: `{\"path\": \".\", \"include_hidden\": true}`
-
-			PERFORMANCE: Use patterns and max_depth to avoid large outputs.
-			Response size is controlled by global mcp_response_tokens_threshold setting."
+			**Directory** (path is a directory):
+			- List: `{\"path\": \"src/\"}` — filter: `\"pattern\": \"*.rs\"`, depth: `\"max_depth\": 2`
+			- Search content (ripgrep): `{\"path\": \"src\", \"content\": \"fn main\"}`
+			- Hidden files: `\"include_hidden\": true`"
 				.to_string(),
 		parameters: json!({
 			"type": "object",
@@ -107,102 +97,31 @@ pub fn get_text_editor_function() -> McpFunction {
 		description: "Perform text editing operations on files.
 
 			The `command` parameter specifies the operation to perform.
-			For READ operations (view, view_many, directory listing) use the `view` tool instead.
+			For READ operations use the `view` tool instead.
 
-			CRITICAL: LINE NUMBERS CHANGE AFTER EVERY EDIT OPERATION!
-			- After ANY edit (str_replace, insert, line_replace), line numbers become invalid
-			- ALWAYS use `view` tool first to get current line numbers before line_replace
-			- PREFER line_replace when you know exact lines (fastest), str_replace when you know content
-			- content parameter contains RAW FILE CONTENT - use actual whitespace characters, not escape sequences (tabs=actual tabs, NOT \\t)!
-			- FOR MULTIPLE EDITS: Use batch_edit tool instead if file hasn't been modified yet
+			CRITICAL: Line numbers change after every edit — always `view` first to get current numbers.
+			Use actual whitespace in content (tabs = real tabs, not \\t).
+			For 2+ edits on an unmodified file, prefer `batch_edit` instead.
 
-			Available commands:
+			Commands:
 
-			`create`: Create new file with specified content
-			- `{\"command\": \"create\", \"path\": \"src/new_module.rs\", \"content\": \"pub fn hello() {\\n    println!(\\\"Hello!\\\");\\n}\"}`
-			- Creates parent directories if they don't exist
-			- Returns error if file already exists to prevent accidental overwrites
+			`create`: Create new file. Fails if file already exists.
+			- `{\"command\": \"create\", \"path\": \"src/new.rs\", \"content\": \"...\"}` — creates parent dirs automatically.
 
-			`str_replace`: Replace specific string in file with new content
-			- `{\"command\": \"str_replace\", \"path\": \"src/main.rs\", \"old_text\": \"fn old_name()\", \"new_text\": \"fn new_name()\"}`
-			- The old_text must match exactly, including whitespace and indentation
-			- Returns error if string appears 0 times or more than once for safety
-			- Content-based replacement - works regardless of line numbers
-			- Use when exact text is known but line numbers uncertain
+			`str_replace`: Replace exact string. Fails if 0 or 2+ matches.
+			- `{\"command\": \"str_replace\", \"path\": \"src/main.rs\", \"old_text\": \"fn old()\", \"new_text\": \"fn new()\"}`
+			- Use when you know the text but not the line numbers.
 
-			`insert`: Insert text at specific location in file
-			- `{\"command\": \"insert\", \"path\": \"src/main.rs\", \"insert_after_line\": 5, \"content\": \"    // New comment\\n    let x = 10;\"}`
-			- insert_after_line specifies the line number after which to insert (0 for beginning of file)
-			- WARNING: Changes line numbers for all content AFTER insertion point
+			`insert`: Insert text after a line number (0 = beginning).
+			- `{\"command\": \"insert\", \"path\": \"src/main.rs\", \"insert_after_line\": 5, \"content\": \"...\"}`
 
-		`line_replace`: Replace content within specific line range
-		- `{\\\"command\\\": \\\"line_replace\\\", \\\"path\\\": \\\"src/main.rs\\\", \\\"lines\\\": [5, 8], \\\"content\\\": \\\"fn updated_function() {\\\\n    // New implementation\\\\n}\\\"}`
-		- Replaces lines from lines[0] to lines[1] (inclusive, 1-indexed)
-		- FASTEST option - 3x faster than str_replace (no content searching)
-		- **CRITICAL RULE**: Your `content` must ONLY contain lines that are NEW or MODIFIED within the specified range
-		- **DO NOT include unchanged lines** from outside your `lines` range, even for \"context\" - they will create duplicates
-		- **DUPLICATE DETECTION**: Tool warns if your content duplicates adjacent lines (but still applies replacement)
-		- **REMOVE LINES**: Use empty content (\\\"\\\" or \\\"\\\") to remove lines completely
-		- **USEFUL FOR REFACTORING**: Extract code with `extract_lines`, then remove original with `line_replace` + empty content
-		- Line numbers change after ANY edit operation
-		- NEVER use line_replace twice without viewing file between operations
-		- ALWAYS use `view` tool first to get current line numbers before line_replace
+			`line_replace`: Replace lines [start, end] with new content. Fastest option.
+			- `{\"command\": \"line_replace\", \"path\": \"src/main.rs\", \"lines\": [5, 8], \"content\": \"...\"}`
+			- content must ONLY contain the new lines — do NOT repeat unchanged surrounding lines.
+			- Use empty content to delete lines. Never call twice without re-viewing.
 
-			`undo_edit`: Revert most recent edit to specified file
-			- `{\"command\": \"undo_edit\", \"path\": \"src/main.rs\"}`
-			- Available for str_replace, insert, and line_replace operations
-
-			Error Handling:
-			- File not found: Returns descriptive error message
-			- Multiple matches: Returns error asking for more specific context
-			- No matches: Returns error with suggestion to check the text
-			- Permission errors: Returns permission denied message
-			- Line range errors: Validates line numbers exist in file
-
-			Best Practices:
-			- ALWAYS use `view` tool first to get current line numbers before any edit
-			- Never assume line numbers from previous operations - they change after every edit
-
-			OPTIMAL WORKFLOW:
-			- Use `view` tool to see file structure and get line numbers
-			- For single changes: use `line_replace` ONCE per file
-			- If more edits needed: `view` again to get fresh line numbers, then `line_replace` again
-
-			CHOOSE line_replace when:
-			- You know exact line numbers and need to change one or more lines with new
-			- Want 3x faster performance (no content searching needed)
-			- ONLY ONE line_replace per file before re-viewing
-			- File has already been modified (line numbers changed)
-
-			CHOOSE str_replace when:
-			- Modifying existing code/content (not building new)
-			- You know exact text content but not line numbers
-			- Changing existing function implementations or config values
-			- File has been modified and you can't trust line numbers
-
-			CHOOSE batch_edit when:
-			- Multiple edits needed on UNMODIFIED file (2+ operations)
-			- File hasn't been edited yet in this session
-			- Need atomic operations (all succeed or all fail)
-			- Use 'insert' for adding lines, 'replace' ONLY for lines that change content
-			- NEVER retype unchanged lines in replace operations
-
-			CHOOSE insert when:
-			- Building new documents or adding new sections
-			- Adding content that doesn't exist yet
-			- Creating plans, documentation, or structured content
-
-			CRITICAL LINE NUMBER RULES:
-			- Line numbers become INVALID after ANY edit operation
-			- NEVER use line_replace twice without viewing file between operations
-			- After str_replace, insert, or line_replace: line numbers change
-			- Always use `view` tool again to get fresh line numbers before next line_replace
-			- ONE line_replace per file per editing session - then re-view if more edits needed
-
-			General Guidelines:
-			- Use insert for adding new code at specific locations
-			- Use create for new files and modules
-			- Use undo_edit to revert the last operation if needed"
+			`undo_edit`: Revert the last edit on a file.
+			- `{\"command\": \"undo_edit\", \"path\": \"src/main.rs\"}`"
 			.to_string(),
 		parameters: json!({
 			"type": "object",
@@ -250,39 +169,14 @@ pub fn get_text_editor_function() -> McpFunction {
 pub fn get_extract_lines_function() -> McpFunction {
 	McpFunction {
 		name: "extract_lines".to_string(),
-		description: "Extract lines from a source file and append them to a target file without modifying the source file.
+		description: "Copy lines from a source file and append them into a target file. Source is not modified.
 
-			This tool is perfect for extracting code blocks, functions, or any text sections from one file
-			and appending them to another file. The source file remains unchanged.
+			- `append_line`: 0 = beginning, -1 = end, N = after line N.
 
-			**Parameters:**
-			- `from_path` (string, required): Path to the source file to extract lines from
-			- `from_range` (array, required): Two-element array [start, end] with 1-indexed line numbers (inclusive)
-			- `append_path` (string, required): Path to the target file where extracted lines will be appended (auto-created if doesn't exist)
-			- `append_line` (integer, required): Position where to append the extracted content:
-			  - `0`: Insert at the beginning of the file
-			  - `-1`: Append at the very end of the file
-			  - `N` (positive): Insert after line N (1-indexed)
-
-			**Examples:**
-			- Extract function: `{\"from_path\": \"src/utils.rs\", \"from_range\": [10, 25], \"append_path\": \"src/extracted.rs\", \"append_line\": -1}`
-			- Extract to beginning: `{\"from_path\": \"config.toml\", \"from_range\": [1, 5], \"append_path\": \"new_config.toml\", \"append_line\": 0}`
-			- Insert after line 3: `{\"from_path\": \"main.rs\", \"from_range\": [50, 60], \"append_path\": \"module.rs\", \"append_line\": 3}`
-
-			**Use Cases:**
-			- Extracting functions or code blocks for refactoring
-			- Moving configuration sections between files
-			- Creating new files with specific content from existing files
-			- Building modular code by extracting reusable components
-
-			**Returns:**
-			- Success: Information about extracted lines and where they were appended
-			- Error: Clear error message if file not found, invalid range, or write permission issues
-
-			**MCP Protocol Compliance:**
-			- Proper parameter validation with descriptive error messages
-			- Graceful handling of file system errors
-			- Returns structured success/error responses".to_string(),
+			Examples:
+			- `{\"from_path\": \"src/utils.rs\", \"from_range\": [10, 25], \"append_path\": \"src/new.rs\", \"append_line\": -1}`
+			- `{\"from_path\": \"config.toml\", \"from_range\": [1, 5], \"append_path\": \"new.toml\", \"append_line\": 0}`
+			- `{\"from_path\": \"main.rs\", \"from_range\": [50, 60], \"append_path\": \"module.rs\", \"append_line\": 3}`".to_string(),
 		parameters: json!({
 			"type": "object",
 			"properties": {
@@ -315,64 +209,20 @@ pub fn get_extract_lines_function() -> McpFunction {
 pub fn get_batch_edit_function() -> McpFunction {
 	McpFunction {
 		name: "batch_edit".to_string(),
-		description: "Perform multiple line-based operations on a SINGLE file using original line numbers.
+		description: "Perform multiple insert/replace operations on a SINGLE file atomically, using ORIGINAL line numbers.
 
-			This tool performs multiple insert and replace operations on a single file in one atomic operation.
-			All operations use the ORIGINAL file line numbers before any modifications, ensuring line stability.
+			Use when: 2+ edits on an unmodified file (all line numbers reference the file before any changes).
+			Do NOT use: after any prior edit to the file — line numbers will be stale.
 
-			**WHEN TO USE:**
-			- Multiple edits in single file (2+ changes)
-			- When you need to edit a file that hasn't been modified yet in this session
-			- For atomic operations that must all succeed or all fail
+			Operations:
+			- `insert`: line_range = N → insert after line N (0 = beginning)
+			- `replace`: line_range = [start, end] → remove those lines, insert new content
 
-			**WHEN NOT TO USE:**
-			- After ANY other file edit (text_editor, str_replace, etc.) - line numbers will be wrong
-			- For single operations - use text_editor instead
-			- On files that have been modified - get fresh line numbers first
+			Key rule — NEVER retype unchanged lines in replace:
+			❌ Bad: replace [1,3] with \"use std::fs;\\nuse std::io;\\nuse std::path::PathBuf;\" (retyped lines 1-2)
+			✅ Good: insert after line 2 with \"use std::path::PathBuf;\"
 
-			**CRITICAL USAGE RULES:**
-			- NEVER retype unchanged lines in replace operations - only replace lines that actually change
-			- Use 'insert' to ADD new lines between existing ones
-			- Use 'replace' ONLY when changing existing line content
-			- Replace operation REMOVES lines [start, end] and INSERTS new content in their place
-			- If lines X and Y stay the same, DO NOT include them in replace range
-
-			**Operation Types:**
-			- `insert`: line_range is single number N = insert AFTER line N (0 = beginning)
-			- `replace`: line_range is [start, end] = REMOVE lines start-end, INSERT new content
-
-			**WRONG vs RIGHT Examples:**
-
-			❌ WRONG - Adding import by retyping all lines 1-5:
-			File has:
-			  1: use std::fs;
-			  2: use std::io;
-			  3:
-			  4: fn main() {
-			Bad: {\"operation\": \"replace\", \"line_range\": [1, 3], \"content\": \"use std::fs;\\nuse std::io;\\nuse std::path::PathBuf;\"}
-			Problem: Retyped lines 1-2 that didn't change!
-
-			✅ RIGHT - Use insert to add new line:
-			{\"operation\": \"insert\", \"line_range\": 2, \"content\": \"use std::path::PathBuf;\"}
-			Result: New import added after line 2, lines 1-2 unchanged
-
-			❌ WRONG - Changing one line by replacing entire block:
-			File has:
-			  10: let x = 5;
-			  11: let y = 10;
-			  12: let z = 15;
-			Bad: {\"operation\": \"replace\", \"line_range\": [10, 12], \"content\": \"let x = 5;\\nlet y = 20;\\nlet z = 15;\"}
-			Problem: Retyped lines 10 and 12 that didn't change!
-
-			✅ RIGHT - Replace only the line that changes:
-			{\"operation\": \"replace\", \"line_range\": [11, 11], \"content\": \"let y = 20;\"}
-			Result: Only line 11 changed, lines 10 and 12 unchanged
-
-			**Parameters:**
-			- `path` (string): Path to the file to edit
-			- `operations` (array): Array of operations to perform
-
-			**Maximum 50 operations per call for performance**".to_string(),
+			Max 50 operations per call.".to_string(),
 		parameters: json!({
 			"type": "object",
 			"properties": {

@@ -55,24 +55,18 @@ pub fn get_all_functions(config: &crate::config::Config) -> Vec<McpFunction> {
 			.iter()
 			.map(|agent_config| McpFunction {
 				name: format!("agent_{}", agent_config.name),
-			description: format!(
-				"{}\n\n\
-				## Async Execution\n\n\
-				**async: false** (default) — Blocks until complete. Use when you need the result immediately.\n\n\
-				**async: true** — Returns immediately, runs asynchronously. Result appears as a user message when complete.\n\n\
-				**When to use async:**\n\
-				- Task takes 30+ seconds (large codebase analysis, multi-file refactoring)\n\
-				- You can continue other work while waiting\n\
-				- You don't need the result for your next immediate action\n\n\
-				**When NOT to use async:**\n\
-				- You need the result to make your next decision\n\
-				- Quick tasks (under 30 seconds)\n\
-				- Multi-step tasks where each step depends on the previous result\n\n\
-				**Result format:** `[Async agent 'name' completed]` or `[Async agent 'name' failed]`\n\n\
-				**Limits:** Max {} concurrent async jobs. Jobs are cancelled on session exit/interrupt.",
-				agent_config.description,
-				get_max_concurrent_jobs()
-			),
+		description: format!(
+			"{}\n\n\
+			## Async Execution\n\n\
+			**async: false** (default) — blocks until complete, result returned immediately.\n\
+			**async: true** — returns immediately, result injected as a user message when done.\n\n\
+			Use async when: task takes 30+ seconds, or you can continue other work while waiting.\n\
+			Use sync when: you need the result before your next action.\n\n\
+			Result format: `[Async agent 'name' completed]` or `[Async agent 'name' failed]`\n\
+			Max {} concurrent async jobs. Jobs cancelled on session exit.",
+			agent_config.description,
+			get_max_concurrent_jobs()
+		),
 				parameters: json!({
 					"type": "object",
 					"properties": {

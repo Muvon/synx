@@ -119,7 +119,6 @@ Examples:
 - `{\"pattern\": \"class $NAME\", \"language\": \"php\", \"paths\": [\"src/**/*.php\"]}`
 - `{\"pattern\": \"$OBJ.oldMethod($$$ARGS)\", \"rewrite\": \"$OBJ.newMethod($$$ARGS)\"}`
 - `{\"pattern\": \"TODO\", \"context\": 2}`
-
 ".to_string(),
 		parameters: json!({
 			"type": "object",

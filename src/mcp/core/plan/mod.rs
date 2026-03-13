@@ -52,68 +52,20 @@ use serde_json::json;
 pub fn get_plan_function() -> McpFunction {
 	McpFunction {
         name: "plan".to_string(),
-        description: "Execute structured plans with detailed task breakdown and step-by-step progression for COMPLEX, MULTI-STEP tasks that require careful coordination and context tracking.
+        description: "Structured step-by-step task tracker for COMPLEX, MULTI-STEP work spanning multiple files or components.
 
-⚠️  **WHEN TO USE PLANS:**
-- Complex implementations requiring multiple coordinated steps
-- Tasks that span multiple files, systems, or components
-- Long-running work that may be interrupted and resumed
-- Multi-phase projects (research → design → implement → test)
-- Tasks requiring specific sequencing and dependencies
-- Work that benefits from progress tracking and checkpoints
-
-🚫 **DO NOT USE PLANS FOR:**
-- Simple, single-step tasks (just do them directly!)
-- Quick fixes or small changes
-- Straightforward implementations that can be done in one go
-- Tasks that are obvious and don't need decomposition
-- Anything that takes less than 10-15 minutes
-- Simple questions or information requests
-
-**RULE OF THUMB:** If you can complete the task in a single focused session without losing context, DON'T use a plan. Plans are for complex work that genuinely benefits from structured breakdown and progress tracking.
-
-**MANDATORY: All tasks must include detailed descriptions!**
+Use for: multi-file implementations, long-running work that may be interrupted, tasks needing sequencing and checkpoints.
+Skip for: single-step changes, quick fixes, anything completable in one focused pass without losing context.
 
 Commands:
-- start: Create new plan with detailed tasks (ERROR if plan exists - use 'done' or 'reset' first)
-- step: Add progress details to current task (does NOT complete it)
-- next: Mark current task as COMPLETED and advance to next task
-- list: Show all tasks with full descriptions and progress status
-- done: Complete entire plan with final summary
+- start: Create plan with tasks array (ERROR if plan already exists — use 'done' or 'reset' first)
+- step: Add progress note to current task (does NOT advance it)
+- next: Mark current task DONE and advance to next
+- list: Show all tasks with status
+- done: Complete the plan with final summary
 - reset: Clear all plan data
 
-**Task Format (REQUIRED):**
-Each task must be an object with:
-- title: Short, clear task title
-- description: DETAILED explanation of exactly what needs to be done
-
-Example: tasks=[{\"title\": \"Setup database\", \"description\": \"Install PostgreSQL 14+, create 'myapp' database, set up users table with id, email, password_hash fields, configure connection pooling with max 20 connections, create indexes on email field, and test connectivity with sample queries\"}]
-
-<description_requirements>
-- Write descriptions as if someone else needs to complete the task from scratch
-- Include specific file paths, exact commands, configuration details
-- Specify expected outcomes and validation criteria
-- Add error handling steps and troubleshooting notes
-- Mention dependencies and prerequisites
-- Use technical specifics, not vague statements
-- Minimum 2-3 detailed sentences per task
-</description_requirements>
-
-<examples>
-❌ BAD: \"Fix authentication bug\"
-✅ GOOD: \"Debug authentication failure in src/auth/login.rs by adding logging to validate_token() function, check JWT expiration logic around line 45, test with expired tokens, and ensure proper error messages are returned to client with 401 status code\"
-
-❌ BAD: \"Update config\"
-✅ GOOD: \"Modify config-templates/default.toml to add new [database] section with connection_pool_size=20, timeout_seconds=30, and retry_attempts=3, then update src/config/mod.rs DatabaseConfig struct to include these fields with proper validation\"
-</examples>
-
-**Best Practices:**
-- Use detailed descriptions that explain EXACTLY what needs to be done
-- Include specific steps, requirements, and expected outcomes
-- Make descriptions comprehensive enough for context recovery after breaks
-- Think sequentially - each task should build on previous ones
-- Include technical details, file paths, commands, and configurations
-- Reserve for genuinely complex work that benefits from structured approach".to_string(),
+Each task requires `title` (short) and `description` (detailed: file paths, commands, expected outcomes, validation steps).".to_string(),
         parameters: json!({
             "type": "object",
             "properties": {

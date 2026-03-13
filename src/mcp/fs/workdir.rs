@@ -25,26 +25,13 @@ use serde_json::{json, Value};
 pub fn get_workdir_function() -> McpFunction {
 	McpFunction {
 		name: "workdir".to_string(),
-		description: "Get or set the working directory for file and shell operations.
+		description: "Get or set the working directory used by all MCP tools (shell, text_editor, etc.).
 
-This tool manages the runtime working directory used by all MCP tools (shell, text_editor, etc.).
+- Get current: `{}` or `{\"path\": null}`
+- Set new: `{\"path\": \"/path/to/dir\"}` (absolute or relative)
+- Reset to session root: `{\"reset\": true}`
 
-Parameters:
-- `path`: Optional path to set as new working directory. If not provided, returns current working directory.
-- `reset`: If true, resets to the original project directory (ignores `path` parameter).
-
-Use Cases:
-- Parallel execution: Each actor can work in its own isolated git worktree
-- Testing: Switch to a test directory before running tests
-- Multi-project workflows: Work across multiple related projects
-
-Examples:
-- Get current: `{\"path\": null}` or `{}`
-- Set new: `{\"path\": \"/path/to/worktree\"}`
-- Reset: `{\"reset\": true}`
-
-Note: This changes the working directory for the current thread only.
-File paths in subsequent tool calls will be relative to this directory.".to_string(),
+Changes apply to the current thread only. Subsequent tool calls resolve paths relative to this directory.".to_string(),
 		parameters: json!({
 			"type": "object",
 			"properties": {

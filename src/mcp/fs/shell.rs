@@ -21,40 +21,20 @@ use serde_json::{json, Value};
 pub fn get_shell_function() -> McpFunction {
 	McpFunction {
 		name: "shell".to_string(),
-		description: "Execute a command in the shell.
+		description: "Execute a command in the shell. Returns stdout+stderr combined, with success/failure indication.
 
-This will return the output and error concatenated into a single string, as
-you would see from running on the command line. There will also be an indication
-of if the command succeeded or failed.
+Each command runs in its own process — state (cd, exports) does not persist. Chain with `&&`: `cd foo && cargo build`.
 
-Parameters:
-- `command`: The shell command to execute (required)
-- `background`: Run command in background and return PID instead of waiting for completion (default: false)
+Use ripgrep (`rg`) for file/code search — not `find` or `ls -r` (those show ignored files):
+- By name: `rg --files | rg <name>`
+- By content: `rg '<pattern>' -l`
 
-**Important**: Each shell command runs in its own process in current working directory. Things like directory changes or
-sourcing files do not persist between tool calls. So you may need to repeat them each time by
-stringing together commands, e.g. `cd example && ls` or `source env/bin/activate && pip install numpy`
-
-**Important**: Use ripgrep - `rg` - when you need to locate a file or a code reference, other solutions
-may show ignored or hidden files. For example *do not* use `find` or `ls -r`
-- List files by name: `rg --files | rg <filename>`
-- List files that contain a regex: `rg '<regex>' -l`
-
-**Output Truncation:**
-Output size is controlled by global mcp_response_tokens_threshold setting.
-Avoid commands that produce large outputs (like `cat large_file` or `find /` without filters).
-Use more specific commands to reduce output size if responses are truncated.
-
-**Background Execution:**
-When `background` is true, the command runs in the background and returns immediately with the process PID.
-Background processes continue running until explicitly killed or the main application exits.
-Use the returned PID with `kill <pid>` command to terminate background processes.
-NO need to append `&` to your command when using `background: true` - this is handled automatically.
+Background: set `background: true` to get a PID immediately; kill with `kill <pid>`. No need to append `&`.
 
 Examples:
-- Foreground: `{\"command\": \"ls -la\"}`
-- Background: `{\"command\": \"python -m http.server 8000\", \"background\": true}`
-- Kill background: `{\"command\": \"kill 12345\"}` (where 12345 is the returned PID)
+- `{\"command\": \"cargo test\"}`
+- `{\"command\": \"python -m http.server 8000\", \"background\": true}`
+- `{\"command\": \"kill 12345\"}`
 ".to_string(),
 		parameters: json!({
 			"type": "object",
