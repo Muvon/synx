@@ -12,107 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// /done command handler - finalize current task with context reduction and initial message restoration
+// /done command handler - compress conversation context (same as automatic session compression)
 
 use super::super::core::ChatSession;
 use crate::config::Config;
 use anyhow::Result;
 use colored::Colorize;
 
-/// Finalize current task with context reduction and initial message restoration
+/// Compress conversation context, identical to the automatic pressure-based compression.
 ///
-/// This command:
-/// 1. Performs context reduction (summarization)
-/// 2. Clears plan data
-/// 3. Re-adds welcome message and custom instructions file
-/// 4. Resets session for fresh layered processing
-/// 5. Returns first_message_processed reset flag
+/// Runs `check_and_compress_conversation` directly — the AI decides whether compression
+/// is beneficial and produces a summary, preserving recent turns and all instructions.
 pub async fn handle_done(
 	session: &mut ChatSession,
 	config: &Config,
-	role: &str,
 	operation_cancelled: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(bool, bool)> {
-	// Returns (exit_flag, reset_first_message_processed)
-	println!(
-		"{}",
-		"🎯 /done command initiated - Finalizing current task...".bright_blue()
-	);
-
-	// Clear plan data
-	if let Err(e) = crate::mcp::core::plan::clear_plan_data().await {
-		crate::log_debug!("Failed to clear plan data: {}", e);
-	}
-
-	// Apply reducer functionality to optimize context
-	let result = crate::session::chat::context_reduction::perform_context_reduction(
-		session,
-		config,
-		role,
-		operation_cancelled,
-	)
-	.await;
-
-	if let Err(e) = result {
-		println!(
-			"{}: {}",
-			"❌ /done command failed - Error performing context reduction".bright_red(),
-			e
-		);
-	} else {
-		println!(
-			"{}",
-			"✅ Task finalized and context optimized. Re-adding initial messages...".bright_cyan()
-		);
-
-		// CRITICAL FIX: Re-add initial messages (welcome + custom instructions)
-		// Get current directory - use thread-local if set (ACP/WebSocket), otherwise process cwd
-		let current_dir = crate::mcp::get_thread_working_directory();
-		match crate::session::chat::session::get_initial_messages(config, role, &current_dir).await
+	let compressed =
+		match crate::session::chat::conversation_compression::check_and_compress_conversation(
+			session,
+			config,
+			operation_cancelled,
+		)
+		.await
 		{
-			Ok(initial_messages) => {
-				let system_msg_count = session
-					.session
-					.messages
-					.iter()
-					.take_while(|m| m.role == "system")
-					.count();
-
-				// Insert initial messages after system message(s)
-				for (i, msg) in initial_messages.into_iter().enumerate() {
-					session.session.messages.insert(system_msg_count + i, msg);
-				}
-
-				// Save the session with re-added messages
-				if let Err(e) = session.save() {
-					println!("{}: {}", "Failed to save session".bright_red(), e);
-				} else {
-					println!(
-						"{}",
-						"✅ /done complete: Welcome message and custom instructions file re-added."
-							.bright_green()
-					);
-				}
+			Ok(true) => {
+				println!("{}", "✅ Conversation compressed.".bright_green());
+				true
+			}
+			Ok(false) => {
+				println!(
+					"{}",
+					"ℹ️  No compression needed at this point.".bright_cyan()
+				);
+				false
 			}
 			Err(e) => {
-				println!(
-					"{}: {}",
-					"Failed to re-add initial messages".bright_yellow(),
-					e
-				);
+				println!("{}: {}", "❌ Compression failed".bright_red(), e);
+				false
 			}
-		}
+		};
 
-		println!(
-			"{}",
-			"\n🚀 Next message will be processed through the full layered architecture."
-				.bright_green()
-		);
+	crate::log_debug!("/done: compression={}", compressed);
 
-		// EditorConfig formatting has been removed to simplify dependencies
-		// Users can apply EditorConfig formatting manually or through their IDE
-	}
-
-	// Return flags: don't exit session, reset first_message_processed to false
-	Ok((false, true))
+	// Returns (exit_flag, reset_first_message_processed)
+	Ok((false, false))
 }

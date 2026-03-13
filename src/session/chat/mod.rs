@@ -18,7 +18,6 @@ pub mod animation_manager;
 pub mod assistant_output;
 mod command_executor;
 mod commands;
-mod context_reduction;
 pub(crate) mod context_truncation;
 pub(crate) mod conversation_compression;
 mod cost_tracker;
@@ -50,7 +49,6 @@ pub use commands::{
 	CACHE_COMMAND, CLEAR_COMMAND, COMMANDS, COPY_COMMAND, DONE_COMMAND, EXIT_COMMAND, HELP_COMMAND,
 	QUIT_COMMAND, RUN_COMMAND, SAVE_COMMAND,
 };
-pub use context_reduction::perform_context_reduction;
 pub use cost_tracker::CostTracker;
 pub use edit_mode::EmacsWithShortcutHelp;
 pub use formatting::format_duration;
