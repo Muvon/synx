@@ -424,7 +424,7 @@ impl GenericLayer {
 	> {
 		// Add each tool result as a tool message
 		for tool_result in &tool_results {
-			let tool_content = if let Some(output) = tool_result.result.get("output") {
+			let raw_content = if let Some(output) = tool_result.result.get("output") {
 				if let Some(output_str) = output.as_str() {
 					output_str.to_string()
 				} else {
@@ -433,6 +433,24 @@ impl GenericLayer {
 			} else {
 				serde_json::to_string(&tool_result.result).unwrap_or_default()
 			};
+
+			// Apply global MCP response token truncation (same as main session path)
+			let (tool_content, was_truncated) =
+				crate::utils::truncation::truncate_mcp_response_global(
+					&raw_content,
+					layer_config.mcp_response_tokens_threshold,
+				);
+			if was_truncated {
+				use colored::Colorize;
+				eprintln!(
+					"{}",
+					format!(
+						"⚠️  Tool '{}' response truncated to {} tokens (mcp_response_tokens_threshold)",
+						tool_result.tool_name, layer_config.mcp_response_tokens_threshold
+					)
+					.bright_yellow()
+				);
+			}
 
 			layer_session.session.messages.push(Message {
 				role: "tool".to_string(),
