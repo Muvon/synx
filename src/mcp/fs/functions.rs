@@ -100,7 +100,8 @@ pub fn get_text_editor_function() -> McpFunction {
 			For READ operations use the `view` tool instead.
 
 			CRITICAL: Line numbers change after every edit — always `view` first to get current numbers.
-			Use actual whitespace in content (tabs = real tabs, not \\t).
+			After any edit, line numbers shift. Next edit on same file MUST use fresh line numbers (view again).
+			Use actual whitespace in content (tabs = real tabs, not \t).
 			For 2+ edits on an unmodified file, prefer `batch_edit` instead.
 
 			Commands:

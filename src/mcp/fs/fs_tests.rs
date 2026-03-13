@@ -2122,10 +2122,6 @@ mod tests {
 			.await
 			.unwrap();
 
-		// Reset line count tracking since we rewrote the file
-		crate::mcp::fs::text_editing::reset_line_count_tracking(&file_path)
-			.await
-			.unwrap();
 		let call = McpToolCall {
 			tool_id: "test".to_string(),
 			tool_name: "batch_edit".to_string(),
