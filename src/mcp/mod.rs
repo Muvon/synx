@@ -421,6 +421,9 @@ pub async fn initialize_mcp_for_role_with_callback(
 ) -> Result<()> {
 	let config_for_role = config.get_merged_config_for_role(role);
 
+	// Set session context (role + project) so MCP servers receive it during initialization
+	process::init_session_context(role);
+
 	// Step 1: Initialize MCP servers first
 	if let Err(e) =
 		initialize_servers_for_role_with_callback(&config_for_role, progress_callback).await

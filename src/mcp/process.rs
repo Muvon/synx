@@ -87,6 +87,48 @@ lazy_static::lazy_static! {
 		RwLock::new(Vec::new());
 }
 
+// Session context (role + project) sent to MCP servers during initialization.
+lazy_static::lazy_static! {
+	static ref SESSION_CONTEXT: RwLock<(String, String)> = RwLock::new((String::new(), String::new()));
+}
+
+/// Derive a stable project identifier: SHA-256 of the git remote origin URL if available,
+/// otherwise SHA-256 of the absolute working directory path.
+fn derive_project_id() -> String {
+	use sha2::{Digest, Sha256};
+	let source = std::process::Command::new("git")
+		.args(["remote", "get-url", "origin"])
+		.output()
+		.ok()
+		.filter(|o| o.status.success())
+		.and_then(|o| String::from_utf8(o.stdout).ok())
+		.map(|s| s.trim().to_string())
+		.filter(|s| !s.is_empty())
+		.unwrap_or_else(|| {
+			std::env::current_dir()
+				.unwrap_or_default()
+				.to_string_lossy()
+				.into_owned()
+		});
+	let hash = Sha256::digest(source.as_bytes());
+	format!("{:x}", hash)[..16].to_string()
+}
+
+/// Set the session context (role + project) that will be sent to MCP servers on initialization.
+/// Call this before starting MCP servers for a session.
+pub fn set_session_context(role: &str, project: &str) {
+	*SESSION_CONTEXT.write().unwrap() = (role.to_string(), project.to_string());
+}
+pub fn get_session_context() -> (String, String) {
+	SESSION_CONTEXT.read().unwrap().clone()
+}
+
+/// Derive and set the project id from the current git remote / cwd, then store role.
+pub fn init_session_context(role: &str) {
+	let project = derive_project_id();
+	set_session_context(role, &project);
+}
+
 /// Register a channel sender so MCP notifications are forwarded as structured messages.
 /// Flushes any notifications that arrived before this call (e.g. during server initialization).
 /// Call this when starting a WebSocket or JSONL session.
@@ -619,6 +661,7 @@ async fn start_server_process(server: &McpServerConfig) -> Result<String> {
 
 // Initialize a stdin-based server following the MCP protocol
 async fn initialize_stdin_server(server_name: &str) -> Result<()> {
+	let (role, project) = SESSION_CONTEXT.read().unwrap().clone();
 	// Construct an initialize message according to the MCP protocol
 	let init_message = json!({
 		"jsonrpc": "2.0",
@@ -629,9 +672,14 @@ async fn initialize_stdin_server(server_name: &str) -> Result<()> {
 				"name": "octomind",
 				"version": env!("CARGO_PKG_VERSION")
 			},
-			"protocolVersion": "2025-03-26",  // Use latest protocol version
+			"protocolVersion": "2025-03-26",
 			"capabilities": {
-				// Empty capabilities object is fine for client
+				"experimental": {
+					"session": {
+						"role": role,
+						"project": project
+					}
+				}
 			}
 		}
 	});

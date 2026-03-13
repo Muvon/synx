@@ -107,6 +107,30 @@ pub fn create_initialize_request() -> Value {
 	})
 }
 
+fn create_session_initialize_request() -> Value {
+	let (role, project) = process::get_session_context();
+	json!({
+		"jsonrpc": "2.0",
+		"id": 1,
+		"method": "initialize",
+		"params": {
+			"protocolVersion": "2025-03-26",
+			"clientInfo": {
+				"name": "octomind",
+				"version": env!("CARGO_PKG_VERSION")
+			},
+			"capabilities": {
+				"experimental": {
+					"session": {
+						"role": role,
+						"project": project
+					}
+				}
+			}
+		}
+	})
+}
+
 fn create_tools_call_request(tool_name: &str, parameters: &Value) -> Value {
 	json!({
 		"jsonrpc": "2.0",
@@ -305,6 +329,14 @@ pub async fn get_server_functions(server: &McpServerConfig) -> Result<Vec<McpFun
 			// MCP uses JSON-RPC over HTTP with POST requests
 			let schema_url = server_url; // Use base URL for JSON-RPC
 
+			// Send initialize request with session context before listing tools
+			let init_request = create_session_initialize_request();
+			let _ = client
+				.post(&schema_url)
+				.headers(headers.clone())
+				.json(&init_request)
+				.send()
+				.await;
 			// Use shared JSON-RPC request builder
 			let jsonrpc_request = create_tools_list_request();
 
