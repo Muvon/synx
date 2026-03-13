@@ -150,6 +150,33 @@ jobs:
         # We have issue with onnx runtime so we use no default features
         cargo test --verbose --no-default-features
 
+  musl-build:
+    name: Musl Build (x86_64 + aarch64)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-22.04-arm
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build in Alpine (mirrors release pipeline)
+      run: |
+        docker run --rm \
+          -v "$(pwd):/workspace" \
+          -w /workspace \
+          rust:1.92.0-alpine3.21 \
+          sh -c "
+            apk add --no-cache git perl musl-dev pkgconfig gcc g++ protobuf-dev && \
+            rustup target add ${{ matrix.target }} && \
+            cargo build --target ${{ matrix.target }} --no-default-features
+          "
+
   security:
     name: Security Audit
     runs-on: ubuntu-latest
