@@ -23,7 +23,6 @@ use crate::session::{
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
-use std::fs::File;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -569,12 +568,6 @@ impl ChatSession {
 						);
 					}
 
-					// Create file if it doesn't exist
-					if !new_session_file.exists() {
-						let file = File::create(&new_session_file)?;
-						drop(file);
-					}
-
 					let mut chat_session = ChatSession::new(ChatSessionParams {
 						name: new_session_name.clone(),
 						model: params.model.clone(),
@@ -587,20 +580,6 @@ impl ChatSession {
 						role: params.role, // Add role parameter
 					});
 					chat_session.session.session_file = Some(new_session_file);
-
-					// Immediately save the session info in new JSON format
-					let summary_entry = serde_json::json!({
-						"type": "SUMMARY",
-						"timestamp": std::time::SystemTime::now()
-						.duration_since(std::time::UNIX_EPOCH)
-						.unwrap_or_default()
-						.as_secs(),
-						"session_info": &chat_session.session.info
-					});
-					crate::session::append_to_session_file(
-						chat_session.session.session_file.as_ref().unwrap(),
-						&serde_json::to_string(&summary_entry)?,
-					)?;
 
 					Ok(chat_session)
 				}
@@ -619,12 +598,6 @@ impl ChatSession {
 				);
 			}
 
-			// Create session file if it doesn't exist
-			if !session_file.exists() {
-				let file = File::create(&session_file)?;
-				drop(file);
-			}
-
 			let mut chat_session = ChatSession::new(ChatSessionParams {
 				name: session_name.clone(),
 				model: params.model,
@@ -637,20 +610,6 @@ impl ChatSession {
 				role: params.role,
 			});
 			chat_session.session.session_file = Some(session_file);
-
-			// Immediately save the session info in new JSON format
-			let summary_entry = serde_json::json!({
-				"type": "SUMMARY",
-				"timestamp": std::time::SystemTime::now()
-				.duration_since(std::time::UNIX_EPOCH)
-				.unwrap_or_default()
-				.as_secs(),
-				"session_info": &chat_session.session.info
-			});
-			crate::session::append_to_session_file(
-				chat_session.session.session_file.as_ref().unwrap(),
-				&serde_json::to_string(&summary_entry)?,
-			)?;
 
 			Ok(chat_session)
 		}

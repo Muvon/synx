@@ -167,10 +167,36 @@ impl ChatSession {
 		self.request_spending_checkpoint = self.session.info.total_cost;
 	}
 
+	// Write the initial SUMMARY entry the first time we touch the session file.
+	// Called before the first message write so the file always starts with metadata.
+	fn ensure_file_initialized(&mut self) -> Result<()> {
+		if let Some(session_file) = &self.session.session_file {
+			if !session_file.exists() {
+				let summary_entry = serde_json::json!({
+					"type": "SUMMARY",
+					"timestamp": std::time::SystemTime::now()
+						.duration_since(std::time::UNIX_EPOCH)
+						.unwrap_or_default()
+						.as_secs(),
+					"session_info": &self.session.info
+				});
+				let session_file = session_file.clone();
+				crate::session::append_to_session_file(
+					&session_file,
+					&serde_json::to_string(&summary_entry)?,
+				)?;
+			}
+		}
+		Ok(())
+	}
 	// Add a system message
 	pub fn add_system_message(&mut self, content: &str) -> Result<()> {
 		// Log to raw session log
+		// Log to raw session log
 		let _ = crate::session::logger::log_system_message(&self.session.info.name, content);
+
+		// Lazily create the session file with its initial SUMMARY on first write
+		self.ensure_file_initialized()?;
 
 		// Add message to session
 		self.session.add_message("system", content);
