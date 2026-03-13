@@ -710,8 +710,10 @@ pub async fn check_and_compress_conversation(
 	let tokens_before = calculate_range_tokens(session, start_idx, end_idx)?;
 
 	// Chunk messages semantically (LOCAL - no API call)
-	let messages_to_compress = &session.session.messages[start_idx..=end_idx];
-	let chunks = super::semantic_chunking::chunk_messages(messages_to_compress);
+	// Clone so the borrow ends before the mutable session borrow in ask_ai_decision_and_summary
+	let messages_to_compress: Vec<crate::session::Message> =
+		session.session.messages[start_idx..=end_idx].to_vec();
+	let chunks = super::semantic_chunking::chunk_messages(&messages_to_compress);
 
 	// Calculate target tokens based on ratio
 	let target_tokens = (tokens_before as f64 / target_ratio) as usize;
@@ -732,8 +734,14 @@ pub async fn check_and_compress_conversation(
 	};
 
 	// OPTIMIZATION: Single API call for decision + summary (1-hop instead of 2-hop)
-	let (should_compress, context_summary) =
-		ask_ai_decision_and_summary(session, config, &context_chunks, operation_rx).await?;
+	let (should_compress, context_summary) = ask_ai_decision_and_summary(
+		session,
+		config,
+		&messages_to_compress,
+		&context_chunks,
+		operation_rx,
+	)
+	.await?;
 
 	if !should_compress {
 		log_debug!("AI decided compression not beneficial at this point");
@@ -764,45 +772,108 @@ pub async fn check_and_compress_conversation(
 async fn ask_ai_decision_and_summary(
 	session: &mut ChatSession,
 	config: &Config,
+	messages_to_compress: &[crate::session::Message],
 	context_chunks: &[&super::semantic_chunking::SemanticChunk],
 	operation_rx: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(bool, String)> {
-	// Build enhanced prompt with file context support (similar to continuation)
-	let mut decision_prompt = String::from(
-		"Analyze the conversation history. Should older exchanges be compressed into a summary to save context space while preserving important information?\n\n\
-		Consider:\n\
-		- Are there repetitive or resolved topics that can be summarized?\n\
-		- Is there important context that must be preserved?\n\
-		- Would compression help focus on current topics?\n\n"
-	);
+	// SYSTEM: role identity + instructions (what the model must do and how to respond).
+	// Kept separate from the data so the model acts as a compressor, not a session participant.
+	let system_content = if !context_chunks.is_empty() {
+		"You are a conversation compressor. Your job is to analyze a conversation transcript \
+and decide whether it should be compressed to save context space.\n\n\
+Consider:\n\
+- Are there repetitive or resolved topics that can be summarized?\n\
+- Is there important context that must be preserved?\n\
+- Would compression help focus on current topics?\n\n\
+If YES, provide a structured summary that PRESERVES ALL CRITICAL CONTEXT for continuing:\n\n\
+**USER INTENT** (1-2 sentences):\n\
+What did the user ask for? What is the goal or objective?\n\n\
+**PROGRESS** (2-3 sentences):\n\
+What was completed? What is currently in progress? Include counts if applicable (e.g., 'Step 2 of 5 done').\n\n\
+**CURRENT WORK** (2-3 sentences):\n\
+What is being worked on RIGHT NOW? What was just being investigated or discussed?\n\n\
+**KEY ENTITIES** (preserve exactly):\n\
+- Resources: files, documents, URLs, or references being used\n\
+- Names: specific terms, identifiers, or labels involved\n\
+- Issues: any problems encountered and their status\n\
+- Decisions: choices made with reasoning\n\n\
+**NEXT STEPS** (1-2 sentences):\n\
+What needs to happen next to continue?\n\n\
+**Response format:**\n\
+YES\n\
+**USER INTENT**: [What the user asked for - 1-2 sentences]\n\
+**PROGRESS**: [What was completed, what's in progress - include counts if applicable]\n\
+**CURRENT WORK**: [What is being worked on RIGHT NOW]\n\
+**KEY ENTITIES**:\n\
+- Resources: [files, documents, URLs, or references being used]\n\
+- Names: [specific terms, identifiers, or labels involved]\n\
+- Issues: [any problems encountered and their status]\n\
+- Decisions: [choices made with reasoning]\n\
+**NEXT STEPS**: [What needs to happen next]\n\n\
+**OPTIONAL: If specific file contexts are needed to continue, include them:**\n\
+<context>\n\
+filename:startline:endline\n\
+filename:startline:endline\n\
+</context>\n\n\
+**Format requirements for file contexts:**\n\
+- Use <context> tags around file references\n\
+- Each line: filepath:number:number (no spaces)\n\
+- Use paths from project root (src/main.rs not ./src/main.rs)\n\
+- Line numbers must be positive, start ≤ end ≤ 10000\n\
+- Maximum 5 file ranges\n\
+- Only include files CRITICAL for continuing\n\n\
+OR respond with 'NO' if compression is not beneficial."
+	} else {
+		"You are a conversation compressor. Analyze the conversation transcript and respond \
+with ONLY 'YES' to compress or 'NO' to keep as-is."
+	};
 
-	// If there are context chunks, include them for summarization
+	// USER: plain-text transcript of the range being compressed + semantic chunk hints.
+	// Building a transcript (not raw messages) prevents the model from continuing the
+	// tool-calling loop — it sees text to analyze, not a live conversation to participate in.
+	let mut user_content = String::from("**Conversation transcript to compress:**\n\n");
+	for msg in messages_to_compress {
+		match msg.role.as_str() {
+			"system" => {} // skip system — already in our system message
+			"assistant" => {
+				// Include text content; summarize tool calls as one-liners
+				if !msg.content.trim().is_empty() {
+					user_content.push_str(&format!("[ASSISTANT]: {}\n", msg.content.trim()));
+				}
+				if let Some(calls) = msg.tool_calls.as_ref().and_then(|v| v.as_array()) {
+					for call in calls {
+						let name = call
+							.get("function")
+							.and_then(|f| f.get("name"))
+							.and_then(|n| n.as_str())
+							.unwrap_or("unknown");
+						user_content.push_str(&format!("[TOOL CALL]: {}\n", name));
+					}
+				}
+			}
+			"tool" => {
+				let name = msg.name.as_deref().unwrap_or("tool");
+				// Truncate long tool results to avoid bloating the prompt
+				let content = msg.content.trim();
+				let truncated = if content.len() > 500 {
+					format!("{}… [truncated]", &content[..500])
+				} else {
+					content.to_string()
+				};
+				user_content.push_str(&format!("[TOOL RESULT: {}]: {}\n", name, truncated));
+			}
+			_ => {
+				// user messages
+				if !msg.content.trim().is_empty() {
+					user_content.push_str(&format!("[USER]: {}\n", msg.content.trim()));
+				}
+			}
+		}
+	}
+
+	// Append semantic chunk hints if available (structural signals for the model)
 	if !context_chunks.is_empty() {
-		decision_prompt.push_str(
-			"If YES, provide a structured summary that PRESERVES ALL CRITICAL CONTEXT for continuing:\n\
-			\n\
-			**USER INTENT** (1-2 sentences):\n\
-			What did the user ask for? What is the goal or objective?\n\
-			\n\
-			**PROGRESS** (2-3 sentences):\n\
-			What was completed? What is currently in progress? Include counts if applicable (e.g., 'Step 2 of 5 done').\n\
-			\n\
-			**CURRENT WORK** (2-3 sentences):\n\
-			What is being worked on RIGHT NOW? What was just being investigated or discussed?\n\
-			\n\
-			**KEY ENTITIES** (preserve exactly):\n\
-			- Resources: files, documents, URLs, or references being used\n\
-			- Names: specific terms, identifiers, or labels involved\n\
-			- Issues: any problems encountered and their status\n\
-			- Decisions: choices made with reasoning\n\
-			\n\
-			**NEXT STEPS** (1-2 sentences):\n\
-			What needs to happen next to continue?\n\
-			\n\
-			**Context chunks to analyze:**\n\n",
-		);
-
-		// Add chunks with discourse relation markers for better AI understanding
+		user_content.push_str("\n**Key semantic chunks (structural hints):**\n");
 		for chunk in context_chunks {
 			let relation_hint = match chunk.discourse_relation {
 				super::semantic_chunking::DiscourseRelation::Cause => "[REASONING]",
@@ -812,65 +883,47 @@ async fn ask_ai_decision_and_summary(
 				super::semantic_chunking::DiscourseRelation::Elaboration => "[DETAIL]",
 				super::semantic_chunking::DiscourseRelation::None => "",
 			};
-
 			if relation_hint.is_empty() {
-				decision_prompt.push_str(&format!("- {}\n", chunk.content.trim()));
+				user_content.push_str(&format!("- {}\n", chunk.content.trim()));
 			} else {
-				decision_prompt.push_str(&format!("{} {}\n", relation_hint, chunk.content.trim()));
+				user_content.push_str(&format!("{} {}\n", relation_hint, chunk.content.trim()));
 			}
 		}
-
-		decision_prompt.push_str(
-			"\n\n**Response format:**\n\
-			YES\n\
-			**USER INTENT**: [What the user asked for - 1-2 sentences]\n\
-			**PROGRESS**: [What was completed, what's in progress - include counts if applicable]\n\
-			**CURRENT WORK**: [What is being worked on RIGHT NOW]\n\
-			**KEY ENTITIES**:\n\
-			- Resources: [files, documents, URLs, or references being used]\n\
-			- Names: [specific terms, identifiers, or labels involved]\n\
-			- Issues: [any problems encountered and their status]\n\
-			- Decisions: [choices made with reasoning]\n\
-			**NEXT STEPS**: [What needs to happen next]\n\
-			\n\
-			**OPTIONAL: If specific file contexts are needed to continue, include them:**\n\
-			<context>\n\
-			filename:startline:endline\n\
-			filename:startline:endline\n\
-			</context>\n\
-			\n\
-			**Format requirements for file contexts:**\n\
-			- Use <context> tags around file references\n\
-			- Each line: filepath:number:number (no spaces)\n\
-			- Use paths from project root (src/main.rs not ./src/main.rs)\n\
-			- Line numbers must be positive, start ≤ end ≤ 10000\n\
-			- Maximum 5 file ranges\n\
-			- Only include files CRITICAL for continuing\n\
-			\n\
-			OR respond with 'NO' if compression is not beneficial.",
-		);
-	} else {
-		decision_prompt.push_str("Respond with ONLY 'YES' to compress or 'NO' to keep as-is.");
 	}
 
-	// CRITICAL FIX: Include conversation history for AI to analyze
-	let mut messages = session.session.messages.clone();
-	messages.push(crate::session::Message {
-		role: "user".to_string(),
-		content: decision_prompt,
-		timestamp: std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap_or_default()
-			.as_secs(),
-		cached: false,
-		tool_call_id: None,
-		name: None,
-		tool_calls: None,
-		images: None,
-		videos: None,
-		thinking: None,
-		id: None,
-	});
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap_or_default()
+		.as_secs();
+
+	let messages = vec![
+		crate::session::Message {
+			role: "system".to_string(),
+			content: system_content.to_string(),
+			timestamp: now,
+			cached: false,
+			tool_call_id: None,
+			name: None,
+			tool_calls: None,
+			images: None,
+			videos: None,
+			thinking: None,
+			id: None,
+		},
+		crate::session::Message {
+			role: "user".to_string(),
+			content: user_content,
+			timestamp: now,
+			cached: false,
+			tool_call_id: None,
+			name: None,
+			tool_calls: None,
+			images: None,
+			videos: None,
+			thinking: None,
+			id: None,
+		},
+	];
 
 	// Use decision model configuration from CompressionDecisionConfig
 	let decision_config = &config.compression.decision;
