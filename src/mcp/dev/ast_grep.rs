@@ -71,76 +71,55 @@ pub fn get_ast_grep_function() -> McpFunction {
 		name: "ast_grep".to_string(),
 		description: "Search and refactor code using AST patterns with ast-grep (sg).
 
-This tool uses ast-grep for efficient and semantic code search and transformation using AST patterns.
-AST-grep understands code structure, making it superior to regex for code transformations.
-
-Parameters:
-- `pattern`: The AST pattern to search for (required)
-- `paths`: Optional array of file paths or glob patterns to search within (default: current directory)
-- `language`: Optional language of the code (e.g., 'rust', 'javascript', 'python', 'typescript', 'go', 'java', 'c', 'cpp', 'php')
-- `rewrite`: Optional rewrite pattern to apply for refactoring transformations
-- `json_output`: Optional boolean to get output in JSON format (default: false)
-- `context`: Optional number of lines of context to show around matches (default: 0)
-- `update_all`: Optional boolean to apply rewrites to all matches without confirmation (default: false)
-
-Note: Response size is controlled by global mcp_response_tokens_threshold setting.
-Use more specific patterns to reduce output size if responses are truncated.
+AST-grep understands code structure — superior to regex for code transformations.
 
 Pattern Syntax:
-- Use metavariables like $NAME, $ARGS, $BODY for flexible matching
-- Use $$$ for matching any number of statements/expressions
-- Use $_ for anonymous wildcards (non-capturing)
-- Patterns match AST structure, not text
-
-Meta Variables:
-- `$VAR` - matches single AST node (like `$NAME`, `$VALUE`)
-- `$$$` - matches zero or more nodes (like `$$$ARGS`, `$$$BODY`)
-- `$_` - anonymous wildcard, doesn't capture content
+- `$VAR` — matches exactly ONE AST node (not multiple args/params)
+- `$$$VAR` — matches ZERO or more nodes; use inside `()`, `{}`, `[]` for lists
+- `$_` — anonymous wildcard, matches one node without capturing
 - Same-named variables must match identical content
 
-Advanced Patterns:
-- Structural matching: `if ($COND) { $$$BODY }` finds all if statements
-- Method chains: `$OBJ.$METHOD1().$METHOD2($$$)` finds chained calls
-- Nested expressions: `console.log($$$)` matches even in `func(console.log(x))`
+CRITICAL — Patterns are structurally exact:
+Every element you include must be present; every element you omit must be absent.
+Optional syntax (return types, async, pub, decorators, type annotations, throws) must be in the pattern to match code that has it — and absent to match code that lacks it.
+When unsure, make TWO calls: one with the optional part, one without.
+
+- WRONG: `fn $NAME($ARGS)` — `$ARGS` is one node, misses multi-param functions
+- RIGHT: `fn $NAME($$$ARGS)` — matches zero or more parameters
+- `fn $NAME($$$ARGS) { $$$BODY }` does NOT match `fn foo() -> Bar {}` — return type absent from pattern
+- `function $NAME($$$ARGS) {}` does NOT match `async function foo() {}` — async absent from pattern
 
 Common Examples by Language:
 
 **JavaScript/TypeScript:**
-- Function calls: `console.log($$$)` or `$OBJ.$METHOD($$$)`
-- Function definitions: `function $NAME($ARGS) { $$$ }`
-- Arrow functions: `($ARGS) => $BODY`
-- Variable declarations: `const $VAR = $VALUE`
-- Import statements: `import $NAME from '$PATH'`
+- Function calls: `$OBJ.$METHOD($$$)` or `console.log($$$)`
+- Regular function: `function $NAME($$$ARGS) { $$$ }`
+- Async function (separate pattern): `async function $NAME($$$ARGS) { $$$ }`
+- Arrow function: `($$$ARGS) => $BODY`
+- Variable: `const $VAR = $VALUE`
+- Import: `import $NAME from '$PATH'`
 
 **PHP:**
-- Function calls: `$NAME($$$)`
-- Method calls: `$OBJ->$METHOD($$$)`
-- Class definitions: `class $NAME { $$$ }`
-- Variable assignments: `$$VAR = $VALUE`
+- Function calls: `$NAME($$$)` / method calls: `$OBJ->$METHOD($$$)`
+- Class: `class $NAME { $$$ }`
 
 **Rust:**
-- Function calls: `println!($$$)` or `$NAME($$$)`
-- Function definitions: `fn $NAME($ARGS) { $$$ }`
-- Struct definitions: `struct $NAME { $$$ }`
-- Use statements: `use $PATH;`
+- Fn without return: `fn $NAME($$$ARGS) { $$$BODY }`
+- Fn with return (separate pattern): `fn $NAME($$$ARGS) -> $RET { $$$BODY }`
+- Struct: `struct $NAME { $$$ }` / macro: `println!($$$)`
 
 **Python:**
-- Function calls: `print($$$)` or `$OBJ.$METHOD($$$)`
-- Function definitions: `def $NAME($ARGS): $$$`
-- Class definitions: `class $NAME: $$$`
-- Import statements: `import $NAME`
+- Fn without annotation: `def $NAME($$$ARGS): $$$`
+- Fn with return annotation (separate pattern): `def $NAME($$$ARGS) -> $RET: $$$`
+- Class: `class $NAME: $$$`
 
-Rewrite Examples:
-- Rename functions: pattern `old_func($ARGS)` → rewrite `new_func($ARGS)`
-- Add visibility: pattern `fn $NAME($ARGS)` → rewrite `pub fn $NAME($ARGS)`
-- Modernize JS: pattern `var $NAME = $VALUE` → rewrite `const $NAME = $VALUE`
-- Update method calls: pattern `$OBJ.oldMethod($ARGS)` → rewrite `$OBJ.newMethod($ARGS)`
+Examples:
+- `{\"pattern\": \"console.log($$$)\", \"language\": \"javascript\"}`
+- `{\"pattern\": \"oldFunc($$$ARGS)\", \"rewrite\": \"newFunc($$$ARGS)\", \"language\": \"javascript\"}`
+- `{\"pattern\": \"class $NAME\", \"language\": \"php\", \"paths\": [\"src/**/*.php\"]}`
+- `{\"pattern\": \"$OBJ.oldMethod($$$ARGS)\", \"rewrite\": \"$OBJ.newMethod($$$ARGS)\"}`
+- `{\"pattern\": \"TODO\", \"context\": 2}`
 
-Usage Examples:
-- Find console logs: `{\"pattern\": \"console.log($$$)\", \"language\": \"javascript\"}`
-- Rename function: `{\"pattern\": \"oldFunc($ARGS)\", \"rewrite\": \"newFunc($ARGS)\", \"language\": \"javascript\"}`
-- Find PHP classes: `{\"pattern\": \"class $NAME\", \"language\": \"php\", \"paths\": [\"src/**/*.php\"]}`
-- Search with context: `{\"pattern\": \"TODO\", \"context\": 2}`
 ".to_string(),
 		parameters: json!({
 			"type": "object",
