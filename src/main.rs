@@ -76,6 +76,11 @@ async fn main() -> Result<(), anyhow::Error> {
 		octomind::log_debug!("Failed to load .env file: {}", e);
 	}
 
+	// Seed the thread-local working directory with the real launch cwd immediately,
+	// so get_thread_working_directory() never falls back to a wrong std::env::current_dir().
+	let launch_cwd = std::env::current_dir().unwrap_or_default();
+	octomind::mcp::set_session_working_directory(launch_cwd);
+
 	let args = CliArgs::parse();
 
 	// Load configuration
