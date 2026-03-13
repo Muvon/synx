@@ -57,9 +57,134 @@ pub fn generate_file_context_content(file_contexts: &[(String, usize, usize)]) -
 
 	render_files_as_xml(&file_contents)
 }
+
+/// Extract file references from tool call arguments
+/// Returns raw refs (path or path:start:end) that need merging
+pub fn extract_file_refs_from_args(
+	tool_name: &str,
+	args: &serde_json::Value,
+	refs: &mut Vec<String>,
+) {
+	let file_read_tools = ["view", "text_editor", "batch_edit", "extract_lines"];
+
+	if !file_read_tools.contains(&tool_name) {
+		return;
+	}
+
+	let args_obj = match args.as_object() {
+		Some(obj) => obj,
+		None => return,
+	};
+
+	if let Some(path) = args_obj.get("path").and_then(|p| p.as_str()) {
+		let lines = args_obj.get("lines");
+		if let Some(lines) = lines {
+			if let Some(arr) = lines.as_array() {
+				if arr.len() >= 2 {
+					if let (Some(start), Some(end)) = (arr[0].as_u64(), arr[1].as_u64()) {
+						refs.push(format!("{}:{}:{}", path, start, end));
+						return;
+					}
+				}
+			}
+		}
+		refs.push(path.to_string());
+	}
+
+	if tool_name == "view" {
+		if let Some(paths) = args_obj.get("paths").and_then(|p| p.as_array()) {
+			for p in paths {
+				if let Some(path) = p.as_str() {
+					refs.push(path.to_string());
+				}
+			}
+		}
+	}
+
+	if tool_name == "extract_lines" {
+		if let Some(from_path) = args_obj.get("from_path").and_then(|p| p.as_str()) {
+			let from_range = args_obj.get("from_range");
+			if let Some(arr) = from_range.and_then(|r| r.as_array()) {
+				if arr.len() >= 2 {
+					if let (Some(start), Some(end)) = (arr[0].as_u64(), arr[1].as_u64()) {
+						refs.push(format!("{}:{}:{}", from_path, start, end));
+						return;
+					}
+				}
+			}
+			refs.push(from_path.to_string());
+		}
+	}
+}
+
+/// Merge overlapping file ranges to produce compact references
+/// Input: ["src/main.rs:10:50", "src/main.rs:30:100", "src/main.rs:200:250"]
+/// Output: ["src/main.rs:10:100", "src/main.rs:200:250"]
+pub fn merge_file_refs(refs: &[String]) -> Vec<String> {
+	use std::collections::{BTreeMap, BTreeSet};
+
+	let mut by_file: BTreeMap<String, Vec<(u64, u64)>> = BTreeMap::new();
+	let mut whole_files: BTreeSet<String> = BTreeSet::new();
+
+	for ref_str in refs {
+		let parts: Vec<&str> = ref_str.split(':').collect();
+		match parts.len() {
+			1 => {
+				whole_files.insert(parts[0].to_string());
+			}
+			3 => {
+				if let (Ok(start), Ok(end)) = (parts[1].parse::<u64>(), parts[2].parse::<u64>()) {
+					by_file
+						.entry(parts[0].to_string())
+						.or_default()
+						.push((start, end));
+				}
+			}
+			_ => {}
+		}
+	}
+
+	let mut merged: Vec<String> = Vec::new();
+
+	// Add whole files first (they supersede any ranges)
+	for path in whole_files {
+		by_file.remove(&path);
+		merged.push(path);
+	}
+
+	// Merge overlapping ranges per file
+	for (path, mut ranges) in by_file {
+		if ranges.is_empty() {
+			continue;
+		}
+
+		// Sort by start
+		ranges.sort_by_key(|r| r.0);
+
+		// Merge overlapping/adjacent ranges
+		let mut merged_ranges: Vec<(u64, u64)> = Vec::new();
+		for (start, end) in ranges {
+			if let Some(last) = merged_ranges.last_mut() {
+				// Overlap or adjacent (within 10 lines - merge small gaps)
+				if start <= last.1 + 10 {
+					last.1 = last.1.max(end);
+					continue;
+				}
+			}
+			merged_ranges.push((start, end));
+		}
+
+		// Convert to strings
+		for (start, end) in merged_ranges {
+			merged.push(format!("{}:{}:{}", path, start, end));
+		}
+	}
+
+	merged
+}
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::parse_file_contexts;
 
 	#[test]
 	fn test_parse_file_contexts_code_block() {

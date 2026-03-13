@@ -832,6 +832,11 @@ with ONLY 'YES' to compress or 'NO' to keep as-is."
 	// Building a transcript (not raw messages) prevents the model from continuing the
 	// tool-calling loop — it sees text to analyze, not a live conversation to participate in.
 	let mut user_content = String::from("**Conversation transcript to compress:**\n\n");
+
+	// Collect file references from tool calls for context preservation
+	// These can be re-read on demand after compression
+	let mut file_refs: Vec<String> = Vec::new();
+
 	for msg in messages_to_compress {
 		match msg.role.as_str() {
 			"system" => {} // skip system — already in our system message
@@ -848,6 +853,16 @@ with ONLY 'YES' to compress or 'NO' to keep as-is."
 							.and_then(|n| n.as_str())
 							.unwrap_or("unknown");
 						user_content.push_str(&format!("[TOOL CALL]: {}\n", name));
+
+						// Extract file references from tool arguments
+						// These allow the model to re-read files after compression
+						if let Some(args) = call.get("function").and_then(|f| f.get("arguments")) {
+							super::file_context::extract_file_refs_from_args(
+								name,
+								args,
+								&mut file_refs,
+							);
+						}
 					}
 				}
 			}
@@ -856,7 +871,13 @@ with ONLY 'YES' to compress or 'NO' to keep as-is."
 				// Truncate long tool results to avoid bloating the prompt
 				let content = msg.content.trim();
 				let truncated = if content.len() > 500 {
-					format!("{}… [truncated]", &content[..500])
+					let boundary = content
+						.char_indices()
+						.map(|(i, _)| i)
+						.take_while(|&i| i <= 500)
+						.last()
+						.unwrap_or(0);
+					format!("{}… [truncated]", &content[..boundary])
 				} else {
 					content.to_string()
 				};
@@ -887,6 +908,20 @@ with ONLY 'YES' to compress or 'NO' to keep as-is."
 				user_content.push_str(&format!("- {}\n", chunk.content.trim()));
 			} else {
 				user_content.push_str(&format!("{} {}\n", relation_hint, chunk.content.trim()));
+			}
+		}
+	}
+
+	// Append file references extracted from tool calls
+	// These allow the model to re-read critical files after compression
+	if !file_refs.is_empty() {
+		// Merge overlapping ranges and dedupe
+		let merged_refs = super::file_context::merge_file_refs(&file_refs);
+		if !merged_refs.is_empty() {
+			user_content.push_str("\n**File references (can be re-read on demand):**\n");
+			// Limit to prevent bloat
+			for ref_str in merged_refs.iter().take(10) {
+				user_content.push_str(&format!("- {}\n", ref_str));
 			}
 		}
 	}

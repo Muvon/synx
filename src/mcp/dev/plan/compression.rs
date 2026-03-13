@@ -278,9 +278,20 @@ pub async fn compress_completed_task(
 	// Get active plan context to preserve state after compression
 	let plan_context = super::core::get_plan_context();
 
+	// Extract file references from tool calls in the message range
+	// These allow the model to re-read critical files after compression
+	let file_refs = extract_file_refs_from_messages(
+		&session.session.messages[message_range.start_index..=message_range.end_index],
+	);
+
 	// Create compressed knowledge entry with validated summary
-	let compressed_entry =
-		format_compressed_summary(task, summary, &compression_id, plan_context.as_ref());
+	let compressed_entry = format_compressed_summary(
+		task,
+		summary,
+		&compression_id,
+		plan_context.as_ref(),
+		&file_refs,
+	);
 
 	// Calculate tokens in compressed entry
 	let tokens_after = estimate_tokens(&compressed_entry) as u64;
@@ -372,6 +383,7 @@ fn format_compressed_summary(
 	summary: &str,
 	compression_id: &str,
 	plan_context: Option<&(String, usize, usize, String)>,
+	file_refs: &[String],
 ) -> String {
 	let completed_at = task
 		.completed_at
@@ -395,6 +407,16 @@ fn format_compressed_summary(
 			- Status: IN PROGRESS (use plan commands to continue)\n\n",
 			plan_title, completed_count, total_tasks, current_task_title
 		));
+	}
+
+	// Include file references extracted from tool calls
+	// These allow the model to re-read critical files after compression
+	if !file_refs.is_empty() {
+		output.push_str("\n**File references (can be re-read on demand):**\n");
+		for ref_str in file_refs.iter().take(10) {
+			output.push_str(&format!("- {}\n", ref_str));
+		}
+		output.push('\n');
 	}
 
 	output.push_str(&format!(
@@ -698,6 +720,37 @@ async fn compress_project(
 	Ok(Some(metrics))
 }
 
+/// Extract file references from tool calls in messages
+/// Returns merged and deduplicated file refs (path or path:start:end)
+fn extract_file_refs_from_messages(messages: &[crate::session::Message]) -> Vec<String> {
+	let mut refs: Vec<String> = Vec::new();
+
+	for msg in messages {
+		if msg.role != "assistant" {
+			continue;
+		}
+
+		if let Some(calls) = msg.tool_calls.as_ref().and_then(|v| v.as_array()) {
+			for call in calls {
+				let name = call
+					.get("function")
+					.and_then(|f| f.get("name"))
+					.and_then(|n| n.as_str())
+					.unwrap_or("unknown");
+
+				if let Some(args) = call.get("function").and_then(|f| f.get("arguments")) {
+					crate::session::chat::file_context::extract_file_refs_from_args(
+						name, args, &mut refs,
+					);
+				}
+			}
+		}
+	}
+
+	// Merge overlapping ranges
+	crate::session::chat::file_context::merge_file_refs(&refs)
+}
+
 fn format_project_summary(
 	plan_title: &str,
 	summary: &str,
@@ -761,7 +814,7 @@ mod tests {
 		};
 
 		let formatted =
-			format_compressed_summary(&task, "Task completed successfully", "test_123", None);
+			format_compressed_summary(&task, "Task completed successfully", "test_123", None, &[]);
 		assert!(formatted.contains("## Task Completed: Test Task"));
 		assert!(formatted.contains("**Description**: Test description"));
 		assert!(formatted.contains("**Summary**: Task completed successfully"));

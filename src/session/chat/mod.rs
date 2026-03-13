@@ -23,7 +23,7 @@ pub(crate) mod context_truncation;
 pub(crate) mod conversation_compression;
 mod cost_tracker;
 mod edit_mode;
-mod file_context;
+pub(crate) mod file_context;
 pub mod formatting;
 mod input;
 mod layered_response;
