@@ -98,11 +98,8 @@ pub fn get_text_editor_function() -> McpFunction {
 
 			The `command` parameter specifies the operation to perform.
 			For READ operations use the `view` tool instead.
-
-			CRITICAL: Line numbers change after every edit — always `view` first to get current numbers.
-			After any edit, line numbers shift. Next edit on same file MUST use fresh line numbers (view again).
-			Use actual whitespace in content (tabs = real tabs, not \t).
-			For 2+ edits on an unmodified file, prefer `batch_edit` instead.
+			For line-based edits (insert after line, replace by line range), use `batch_edit` instead.
+			Note: every edit shifts line numbers — re-view the file before using str_replace after a batch_edit.
 
 			Commands:
 
@@ -113,14 +110,6 @@ pub fn get_text_editor_function() -> McpFunction {
 			- `{\"command\": \"str_replace\", \"path\": \"src/main.rs\", \"old_text\": \"fn old()\", \"new_text\": \"fn new()\"}`
 			- Use when you know the text but not the line numbers.
 
-			`insert`: Insert text after a line number (0 = beginning).
-			- `{\"command\": \"insert\", \"path\": \"src/main.rs\", \"insert_after_line\": 5, \"content\": \"...\"}`
-
-			`line_replace`: Replace lines [start, end] with new content. Fastest option.
-			- `{\"command\": \"line_replace\", \"path\": \"src/main.rs\", \"lines\": [5, 8], \"content\": \"...\"}`
-			- content must ONLY contain the new lines — do NOT repeat unchanged surrounding lines.
-			- Use empty content to delete lines. Never call twice without re-viewing.
-
 			`undo_edit`: Revert the last edit on a file.
 			- `{\"command\": \"undo_edit\", \"path\": \"src/main.rs\"}`"
 			.to_string(),
@@ -130,23 +119,16 @@ pub fn get_text_editor_function() -> McpFunction {
 			"properties": {
 				"command": {
 					"type": "string",
-					"enum": ["create", "str_replace", "insert", "line_replace", "undo_edit"],
-					"description": "The operation to perform: create, str_replace, insert, line_replace, undo_edit"
+					"enum": ["create", "str_replace", "undo_edit"],
+					"description": "The operation to perform: create, str_replace, undo_edit"
 				},
 				"path": {
 					"type": "string",
 					"description": "REQUIRED. Path to the file to operate on."
 				},
-				"lines": {
-					"type": "array",
-					"items": {"type": "integer"},
-					"minItems": 2,
-					"maxItems": 2,
-					"description": "Line range [start_line, end_line] for line_replace (1-indexed, inclusive). Supports negative indexing: -1 for last line"
-				},
 				"content": {
 					"type": "string",
-					"description": "Content for create, insert, or line_replace operations. Raw text with actual whitespace (not escape sequences)"
+					"description": "Content for create operation. Raw text with actual whitespace (not escape sequences)"
 				},
 				"old_text": {
 					"type": "string",
@@ -155,11 +137,6 @@ pub fn get_text_editor_function() -> McpFunction {
 				"new_text": {
 					"type": "string",
 					"description": "Replacement text for str_replace command. Raw text with actual whitespace (not escape sequences)"
-				},
-				"insert_after_line": {
-					"type": "integer",
-					"minimum": 0,
-					"description": "Insert content after this line number (0 = beginning of file, N = after line N)"
 				},
 			}
 		}),
@@ -215,13 +192,16 @@ pub fn get_batch_edit_function() -> McpFunction {
 			Use when: 2+ edits on an unmodified file (all line numbers reference the file before any changes).
 			Do NOT use: after any prior edit to the file — line numbers will be stale.
 
+			CRITICAL: Always `view` the exact line range before replacing — never assume what is at a line number.
+			Line numbers shift after every edit. If you edited this file before, re-view it first.
+
 			Operations:
 			- `insert`: line_range = N → insert after line N (0 = beginning)
 			- `replace`: line_range = [start, end] → remove those lines, insert new content
 
 			Key rule — NEVER retype unchanged lines in replace:
 			❌ Bad: replace [1,3] with \"use std::fs;\\nuse std::io;\\nuse std::path::PathBuf;\" (retyped lines 1-2)
-			✅ Good: insert after line 2 with \"use std::path::PathBuf;\"
+			✅ Good: replace [3,3] with \"use std::path::PathBuf;\" (only the line actually changing)
 
 			Max 50 operations per call.".to_string(),
 		parameters: json!({

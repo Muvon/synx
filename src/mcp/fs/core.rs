@@ -223,153 +223,78 @@ pub async fn execute_text_editor(call: &McpToolCall) -> Result<McpToolResult> {
 		"create" => {
 			let path = match call.parameters.get("path") {
 				Some(Value::String(p)) => p.clone(),
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'path' parameter for create command".to_string(),
-				)),
+				_ => {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						"Missing or invalid 'path' parameter for create command".to_string(),
+					))
+				}
 			};
 			let content = match call.parameters.get("content") {
 				Some(Value::String(txt)) => txt.clone(),
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'content' parameter for create command".to_string(),
-				)),
+				_ => {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						"Missing or invalid 'content' parameter for create command".to_string(),
+					))
+				}
 			};
 			file_ops::create_file_spec(call, &resolve_path(&path), &content).await
-		},
+		}
 		"str_replace" => {
-
 			let path = match call.parameters.get("path") {
 				Some(Value::String(p)) => p.clone(),
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'path' parameter for str_replace command".to_string(),
-				)),
+				_ => {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						"Missing or invalid 'path' parameter for str_replace command".to_string(),
+					))
+				}
 			};
 			let old_text = match call.parameters.get("old_text") {
 				Some(Value::String(s)) => s.clone(),
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'old_text' parameter".to_string(),
-				)),
+				_ => {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						"Missing or invalid 'old_text' parameter".to_string(),
+					))
+				}
 			};
 			let new_text = match call.parameters.get("new_text") {
 				Some(Value::String(s)) => s.clone(),
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'new_text' parameter".to_string(),
-				)),
+				_ => {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						"Missing or invalid 'new_text' parameter".to_string(),
+					))
+				}
 			};
 			text_editing::str_replace_spec(call, &resolve_path(&path), &old_text, &new_text).await
-		},
-		"insert" => {
-			let path = match call.parameters.get("path") {
-				Some(Value::String(p)) => p.clone(),
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'path' parameter for insert command".to_string(),
-				)),
-			};
-			let insert_after_line = match call.parameters.get("insert_after_line") {
-				Some(Value::Number(n)) => {
-					match n.as_u64() {
-						Some(num) => num as usize,
-						None => return Ok(McpToolResult::error(
-							call.tool_name.clone(),
-							call.tool_id.clone(),
-							"Invalid 'insert_after_line' parameter - must be a valid number".to_string(),
-						)),
-					}
-				},
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'insert_after_line' parameter".to_string(),
-				)),
-			};
-			let content = match call.parameters.get("content") {
-				Some(Value::String(s)) => s.clone(),
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'content' parameter for insert command".to_string(),
-				)),
-			};
-			text_editing::insert_text_spec(call, &resolve_path(&path), insert_after_line, &content).await
-		},
-		"line_replace" => {
-			let path = match call.parameters.get("path") {
-				Some(Value::String(p)) => p.clone(),
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'path' parameter for line_replace command".to_string(),
-				)),
-			};
-			let lines = match call.parameters.get("lines") {
-				Some(Value::Array(arr)) => {
-					if arr.len() != 2 {
-						return Ok(McpToolResult::error(
-							call.tool_name.clone(),
-							call.tool_id.clone(),
-							"'lines' must be an array of exactly 2 integers for line_replace command".to_string(),
-						));
-					}
-					let start = match arr[0].as_u64() {
-						Some(num) => num as usize,
-						None => return Ok(McpToolResult::error(
-							call.tool_name.clone(),
-							call.tool_id.clone(),
-							"Invalid start_line in lines parameter".to_string(),
-						)),
-					};
-					let end = match arr[1].as_u64() {
-						Some(num) => num as usize,
-						None => return Ok(McpToolResult::error(
-							call.tool_name.clone(),
-							call.tool_id.clone(),
-							"Invalid end_line in lines parameter".to_string(),
-						)),
-					};
-					(start, end)
-				},
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'lines' parameter for line_replace command".to_string(),
-				)),
-			};
-			let content = match call.parameters.get("content") {
-				Some(Value::String(s)) => s.clone(),
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'content' parameter for line_replace command".to_string(),
-				)),
-			};
-			text_editing::line_replace_spec(call, &resolve_path(&path), lines, &content).await
-		},
+		}
 		"undo_edit" => {
 			let path = match call.parameters.get("path") {
 				Some(Value::String(p)) => p.clone(),
-				_ => return Ok(McpToolResult::error(
-					call.tool_name.clone(),
-					call.tool_id.clone(),
-					"Missing or invalid 'path' parameter for undo_edit command".to_string(),
-				)),
+				_ => {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						"Missing or invalid 'path' parameter for undo_edit command".to_string(),
+					))
+				}
 			};
 			undo_edit(call, &resolve_path(&path)).await
-		},
+		}
 		_ => Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
-		format!("Invalid command: {command}. Allowed commands are: create, str_replace, insert, line_replace, undo_edit"),
+			format!(
+				"Invalid command: {command}. Allowed commands are: create, str_replace, undo_edit"
+			),
 		)),
 	}
 }

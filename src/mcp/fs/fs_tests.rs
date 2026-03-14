@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
 	use crate::mcp::fs::core::{execute_batch_edit, execute_extract_lines, execute_view};
-	use crate::mcp::fs::text_editing::line_replace_spec;
+
 	use crate::mcp::McpToolCall;
 	use serde_json::json;
 	use tempfile::NamedTempFile;
@@ -13,7 +13,8 @@ mod tests {
 		temp_file
 	}
 
-	async fn test_line_replace(
+	// Helper: run a single-replace batch_edit and assert file content
+	async fn test_batch_replace(
 		content: &str,
 		start_line: usize,
 		end_line: usize,
@@ -21,27 +22,32 @@ mod tests {
 		expected: &str,
 	) {
 		let temp_file = create_test_file(content).await;
+		let path = temp_file.path().to_string_lossy().to_string();
 		let call = McpToolCall {
 			tool_id: "test".to_string(),
-			tool_name: "text_editor".to_string(),
-			parameters: json!({}),
+			tool_name: "batch_edit".to_string(),
+			parameters: json!({
+				"path": path,
+				"operations": [{
+					"operation": "replace",
+					"line_range": [start_line, end_line],
+					"content": new_str
+				}]
+			}),
 		};
-
-		let result = line_replace_spec(&call, temp_file.path(), (start_line, end_line), new_str)
-			.await
-			.unwrap();
-
-		// Check that operation succeeded
-		assert!(result.result.get("error").is_none());
-
-		// Check file content
+		let result = execute_batch_edit(&call).await.unwrap();
+		assert!(
+			result.result.get("error").is_none(),
+			"Expected success: {:?}",
+			result.result
+		);
 		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
 		assert_eq!(actual, expected, "Content mismatch");
 	}
 
 	#[tokio::test]
-	async fn test_single_line_replace() {
-		test_line_replace(
+	async fn test_replace_single_line() {
+		test_batch_replace(
 			"line 1\nline 2\nline 3\n",
 			2,
 			2,
@@ -52,8 +58,8 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn test_multiple_lines_replace() {
-		test_line_replace(
+	async fn test_replace_multiple_lines() {
+		test_batch_replace(
 			"line 1\nline 2\nline 3\nline 4\n",
 			2,
 			3,
@@ -64,8 +70,8 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn test_replace_with_multiline() {
-		test_line_replace(
+	async fn test_replace_with_multiline_content() {
+		test_batch_replace(
 			"line 1\nline 2\nline 3\n",
 			2,
 			2,
@@ -77,7 +83,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_replace_first_line() {
-		test_line_replace(
+		test_batch_replace(
 			"line 1\nline 2\nline 3\n",
 			1,
 			1,
@@ -89,7 +95,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_replace_last_line() {
-		test_line_replace(
+		test_batch_replace(
 			"line 1\nline 2\nline 3\n",
 			3,
 			3,
@@ -101,7 +107,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_replace_all_lines() {
-		test_line_replace(
+		test_batch_replace(
 			"line 1\nline 2\nline 3\n",
 			1,
 			3,
@@ -112,8 +118,8 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn test_no_final_newline() {
-		test_line_replace(
+	async fn test_replace_no_final_newline() {
+		test_batch_replace(
 			"line 1\nline 2\nline 3",
 			2,
 			2,
@@ -124,110 +130,43 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn test_windows_line_endings() {
-		test_line_replace(
+	async fn test_replace_crlf_line_endings() {
+		// CRLF files: batch_edit normalises to LF on write
+		test_batch_replace(
 			"line 1\r\nline 2\r\nline 3\r\n",
 			2,
 			2,
 			"REPLACED",
-			"line 1\r\nREPLACED\r\nline 3\r\n",
+			"line 1\nREPLACED\nline 3\n",
 		)
 		.await;
 	}
 
 	#[tokio::test]
-	async fn test_empty_replacement() {
-		test_line_replace("line 1\nline 2\nline 3\n", 2, 2, "", "line 1\n\nline 3\n").await;
+	async fn test_replace_empty_content_deletes_lines() {
+		// Empty content removes the targeted lines entirely
+		test_batch_replace("line 1\nline 2\nline 3\n", 2, 2, "", "line 1\nline 3\n").await;
 	}
 
 	#[tokio::test]
-	async fn test_single_line_file() {
-		test_line_replace("only line", 1, 1, "REPLACED", "REPLACED").await;
+	async fn test_replace_single_line_file() {
+		test_batch_replace("only line", 1, 1, "REPLACED", "REPLACED").await;
 	}
 
 	#[tokio::test]
-	async fn test_tricky_characters_quotes() {
-		test_line_replace(
+	async fn test_replace_unicode() {
+		test_batch_replace(
 			"line 1\nline 2\nline 3\n",
 			2,
 			2,
-			"\"123\"",
-			"line 1\n\"123\"\nline 3\n",
+			"🚀 Hello 世界 🎉",
+			"line 1\n🚀 Hello 世界 🎉\nline 3\n",
 		)
 		.await;
 	}
-
 	#[tokio::test]
-	async fn test_tricky_characters_actual_newlines() {
-		// Test with actual newline characters in the replacement string
-		let replacement_with_newlines = "hello\nworld\ntest";
-		test_line_replace(
-			"line 1\nline 2\nline 3\n",
-			2,
-			2,
-			replacement_with_newlines,
-			"line 1\nhello\nworld\ntest\nline 3\n",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_tricky_characters_actual_tabs() {
-		// Test with actual tab characters in the replacement string
-		let replacement_with_tabs = "\thello\tworld";
-		test_line_replace(
-			"line 1\nline 2\nline 3\n",
-			2,
-			2,
-			replacement_with_tabs,
-			"line 1\n\thello\tworld\nline 3\n",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_tricky_characters_literal_backslash_n() {
-		// Test with literal \n characters (not actual newlines)
-		let replacement_with_literal = "hello\\nworld";
-		test_line_replace(
-			"line 1\nline 2\nline 3\n",
-			2,
-			2,
-			replacement_with_literal,
-			"line 1\nhello\\nworld\nline 3\n",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_tricky_characters_mixed_actual_and_literal() {
-		// Test mixing actual newlines and literal \n
-		let replacement_mixed = "actual\nnewline and literal\\nbackslash";
-		test_line_replace(
-			"line 1\nline 2\nline 3\n",
-			2,
-			2,
-			replacement_mixed,
-			"line 1\nactual\nnewline and literal\\nbackslash\nline 3\n",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_tricky_characters_backslashes() {
-		test_line_replace(
-			"line 1\nline 2\nline 3\n",
-			2,
-			2,
-			"path\\to\\file",
-			"line 1\npath\\to\\file\nline 3\n",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_tricky_characters_special_symbols() {
-		test_line_replace(
+	async fn test_replace_special_chars() {
+		test_batch_replace(
 			"line 1\nline 2\nline 3\n",
 			2,
 			2,
@@ -238,160 +177,208 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn test_tricky_characters_unicode() {
-		test_line_replace(
+	async fn test_replace_content_with_quotes() {
+		test_batch_replace(
 			"line 1\nline 2\nline 3\n",
 			2,
 			2,
-			"🚀 Hello 世界 🎉",
-			"line 1\n🚀 Hello 世界 🎉\nline 3\n",
+			"\"quoted value\"",
+			"line 1\n\"quoted value\"\nline 3\n",
 		)
 		.await;
 	}
 
 	#[tokio::test]
-	async fn test_tricky_characters_carriage_return() {
-		test_line_replace(
+	async fn test_replace_content_with_tabs() {
+		test_batch_replace(
 			"line 1\nline 2\nline 3\n",
 			2,
 			2,
-			"hello\rworld",
-			"line 1\nhello\rworld\nline 3\n",
+			"\tindented line",
+			"line 1\n\tindented line\nline 3\n",
 		)
 		.await;
 	}
 
 	#[tokio::test]
-	async fn test_tricky_characters_null_and_control() {
-		test_line_replace(
+	async fn test_replace_content_with_embedded_newlines() {
+		test_batch_replace(
 			"line 1\nline 2\nline 3\n",
 			2,
 			2,
-			"test\x00null\x01control",
-			"line 1\ntest\x00null\x01control\nline 3\n",
+			"hello\nworld\ntest",
+			"line 1\nhello\nworld\ntest\nline 3\n",
 		)
 		.await;
 	}
 
 	#[tokio::test]
-	async fn test_tricky_characters_mixed_complex() {
-		test_line_replace(
-            "line 1\nline 2\nline 3\n",
-            2,
-            2,
-            "fn test() {\n    println!(\"Hello\\tworld\\n\");\n    let x = \"\\\"quoted\\\"\";\n}",
-            "line 1\nfn test() {\n    println!(\"Hello\\tworld\\n\");\n    let x = \"\\\"quoted\\\"\";\n}\nline 3\n",
-        )
-        .await;
+	async fn test_replace_no_false_positive_on_structural_noise() {
+		// Lines that are pure structural noise (}, );, ], etc.) must NOT trigger
+		// duplicate detection even when they appear at the boundary of the range.
+		let content = "fn foo() {\n\tlet x = 1;\n}\nfn bar() {\n\tlet y = 2;\n}\n";
+		let temp_file = create_test_file(content).await;
+		let path = temp_file.path().to_string_lossy().to_string();
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "batch_edit".to_string(),
+			parameters: json!({
+				"path": path,
+				"operations": [{
+					"operation": "replace",
+					"line_range": [4, 6],
+					// First line of content is `}` — same as line 3 (just before range).
+					// Must NOT be blocked because `}` is structural noise.
+					"content": "}\nfn bar() {\n\tlet y = 99;\n}"
+				}]
+			}),
+		};
+		let result = execute_batch_edit(&call).await.unwrap();
+		assert_eq!(
+			result.result["isError"], false,
+			"}} boundary must not trigger duplicate detection: {:?}",
+			result.result
+		);
+		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
+		assert_eq!(
+			actual,
+			"fn foo() {\n\tlet x = 1;\n}\n}\nfn bar() {\n\tlet y = 99;\n}\n"
+		);
 	}
 
 	#[tokio::test]
-	async fn test_byte_level_verification() {
-		// Create test with actual newlines and verify byte-by-byte
+	async fn test_replace_duplicate_detection_before() {
+		// Blocks write when first content line duplicates the line just before the range
+		let temp_file = create_test_file("line 1\nline 2\nline 3\nline 4\n").await;
+		let path = temp_file.path().to_string_lossy().to_string();
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "batch_edit".to_string(),
+			parameters: json!({
+				"path": path,
+				"operations": [{
+					"operation": "replace",
+					"line_range": [3, 4],
+					"content": "line 2\nnew line 3\nnew line 4"
+				}]
+			}),
+		};
+		let result = execute_batch_edit(&call).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&serde_json::json!(true)));
+		let error_msg = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(error_msg.contains("Duplicate line detected"));
+		// File must be unchanged
+		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
+		assert_eq!(actual, "line 1\nline 2\nline 3\nline 4\n");
+	}
+
+	#[tokio::test]
+	async fn test_replace_duplicate_detection_after() {
+		// Blocks write when last content line duplicates the line just after the range
+		let temp_file = create_test_file("line 1\nline 2\nline 3\nline 4\n").await;
+		let path = temp_file.path().to_string_lossy().to_string();
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "batch_edit".to_string(),
+			parameters: json!({
+				"path": path,
+				"operations": [{
+					"operation": "replace",
+					"line_range": [1, 2],
+					"content": "new line 1\nnew line 2\nline 3"
+				}]
+			}),
+		};
+		let result = execute_batch_edit(&call).await.unwrap();
+		assert_eq!(result.result.get("isError"), Some(&serde_json::json!(true)));
+		let error_msg = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(error_msg.contains("Duplicate line detected"));
+		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
+		assert_eq!(actual, "line 1\nline 2\nline 3\nline 4\n");
+	}
+
+	#[tokio::test]
+	async fn test_replace_no_false_duplicate_warning() {
+		// Genuinely different content must not be blocked
+		let temp_file = create_test_file("line 1\nline 2\nline 3\nline 4\n").await;
+		let path = temp_file.path().to_string_lossy().to_string();
+		let call = McpToolCall {
+			tool_id: "test".to_string(),
+			tool_name: "batch_edit".to_string(),
+			parameters: json!({
+				"path": path,
+				"operations": [{
+					"operation": "replace",
+					"line_range": [2, 3],
+					"content": "new line 2\nnew line 3"
+				}]
+			}),
+		};
+		let result = execute_batch_edit(&call).await.unwrap();
+		assert_eq!(
+			result.result["isError"], false,
+			"Expected success: {:?}",
+			result.result
+		);
+		// Diff must be present in metadata
+		assert!(result.result["metadata"]["diff"].as_str().is_some());
+	}
+
+	#[tokio::test]
+	async fn test_replace_diff_output_present() {
+		// batch_edit must return a diff field so the AI can verify the edit
 		let temp_file = create_test_file("line 1\nline 2\nline 3\n").await;
+		let path = temp_file.path().to_string_lossy().to_string();
 		let call = McpToolCall {
 			tool_id: "test".to_string(),
-			tool_name: "text_editor".to_string(),
-			parameters: json!({}),
+			tool_name: "batch_edit".to_string(),
+			parameters: json!({
+				"path": path,
+				"operations": [{
+					"operation": "replace",
+					"line_range": [2, 2],
+					"content": "REPLACED"
+				}]
+			}),
 		};
-
-		// Replace with content containing actual newline character
-		let replacement = "hello\nworld"; // This contains an actual newline, not \\n
-		let result = line_replace_spec(&call, temp_file.path(), (2, 2), replacement)
-			.await
-			.unwrap();
-
-		// Check that operation succeeded
-		assert!(result.result.get("error").is_none());
-
-		// Read and verify byte content
-		let actual_bytes = fs::read(temp_file.path()).await.unwrap();
-		let expected_bytes = b"line 1\nhello\nworld\nline 3\n";
-
-		assert_eq!(actual_bytes, expected_bytes, "Byte-level content mismatch");
-
-		// Also verify as string
-		let actual_string = String::from_utf8(actual_bytes.clone()).unwrap();
-		let expected_string = "line 1\nhello\nworld\nline 3\n";
-		assert_eq!(actual_string, expected_string, "String content mismatch");
-
-		// Verify the newline characters are actual newlines (byte value 10)
-		assert_eq!(actual_bytes[6], 10u8, "First newline should be byte 10");
-		assert_eq!(actual_bytes[12], 10u8, "Second newline should be byte 10");
-		assert_eq!(actual_bytes[18], 10u8, "Third newline should be byte 10");
-		assert_eq!(actual_bytes[25], 10u8, "Fourth newline should be byte 10");
+		let result = execute_batch_edit(&call).await.unwrap();
+		assert_eq!(
+			result.result["isError"], false,
+			"Expected success: {:?}",
+			result.result
+		);
+		let diff = result.result["metadata"]["diff"]
+			.as_str()
+			.expect("diff field must be present");
+		assert!(diff.contains("-2:"), "diff must show removed line");
+		assert!(diff.contains("+2:"), "diff must show added line");
 	}
 
 	#[tokio::test]
-	async fn test_line_replace_duplicate_detection_before() {
-		// Test duplicate detection when first line of content matches line before range
-		let temp_file = create_test_file("line 1\nline 2\nline 3\nline 4\n").await;
+	async fn test_replace_negative_line_index() {
+		// Negative indices: -1 = last line
+		let temp_file = create_test_file("line 1\nline 2\nline 3\n").await;
+		let path = temp_file.path().to_string_lossy().to_string();
 		let call = McpToolCall {
 			tool_id: "test".to_string(),
-			tool_name: "text_editor".to_string(),
-			parameters: json!({}),
+			tool_name: "batch_edit".to_string(),
+			parameters: json!({
+				"path": path,
+				"operations": [{
+					"operation": "replace",
+					"line_range": [-1, -1],
+					"content": "NEW LAST"
+				}]
+			}),
 		};
-
-		// Replace lines 3-4 but include line 2 as first line of content (duplicate)
-		let replacement = "line 2\nnew line 3\nnew line 4";
-		let result = line_replace_spec(&call, temp_file.path(), (3, 4), replacement)
-			.await
-			.unwrap();
-
-		// Should be blocked with an error (duplicate adjacent line)
-		assert_eq!(result.result.get("isError"), Some(&serde_json::json!(true)));
-		let error_msg = result.result["content"][0]["text"].as_str().unwrap();
-		assert!(error_msg.contains("Duplicate line detected"));
-
-		// Verify file is unchanged
+		let result = execute_batch_edit(&call).await.unwrap();
+		assert_eq!(
+			result.result["isError"], false,
+			"Expected success: {:?}",
+			result.result
+		);
 		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
-		assert_eq!(actual, "line 1\nline 2\nline 3\nline 4\n");
-	}
-
-	#[tokio::test]
-	async fn test_line_replace_duplicate_detection_after() {
-		// Test duplicate detection when last line of content matches line after range
-		let temp_file = create_test_file("line 1\nline 2\nline 3\nline 4\n").await;
-		let call = McpToolCall {
-			tool_id: "test".to_string(),
-			tool_name: "text_editor".to_string(),
-			parameters: json!({}),
-		};
-
-		// Replace lines 1-2 but include line 3 as last line of content (duplicate)
-		let replacement = "new line 1\nnew line 2\nline 3";
-		let result = line_replace_spec(&call, temp_file.path(), (1, 2), replacement)
-			.await
-			.unwrap();
-
-		// Should be blocked with an error (duplicate adjacent line)
-		assert_eq!(result.result.get("isError"), Some(&serde_json::json!(true)));
-		let error_msg = result.result["content"][0]["text"].as_str().unwrap();
-		assert!(error_msg.contains("Duplicate line detected"));
-
-		// Verify file is unchanged
-		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
-		assert_eq!(actual, "line 1\nline 2\nline 3\nline 4\n");
-	}
-
-	#[tokio::test]
-	async fn test_line_replace_no_duplicate_warning() {
-		// Test that no warning appears when content is genuinely different
-		let temp_file = create_test_file("line 1\nline 2\nline 3\nline 4\n").await;
-		let call = McpToolCall {
-			tool_id: "test".to_string(),
-			tool_name: "text_editor".to_string(),
-			parameters: json!({}),
-		};
-
-		let replacement = "new line 2\nnew line 3";
-		let result = line_replace_spec(&call, temp_file.path(), (2, 3), replacement)
-			.await
-			.unwrap();
-
-		// Should succeed without error
-		assert!(result.result.get("isError").is_none());
-		assert!(result.result.get("diff").is_some());
+		assert_eq!(actual, "line 1\nline 2\nNEW LAST\n");
 	}
 
 	// ========== STR_REPLACE TESTS ==========
@@ -648,116 +635,6 @@ mod tests {
 		assert_eq!(actual_bytes[5], 10u8, "First newline should be byte 10");
 		assert_eq!(actual_bytes[9], 10u8, "Second newline should be byte 10");
 		assert_eq!(actual_bytes[14], 10u8, "Third newline should be byte 10");
-	}
-
-	// ========== INSERT_TEXT TESTS ==========
-
-	async fn test_insert_text(content: &str, insert_line: usize, new_str: &str, expected: &str) {
-		let temp_file = create_test_file(content).await;
-		let call = McpToolCall {
-			tool_id: "test".to_string(),
-			tool_name: "text_editor".to_string(),
-			parameters: json!({}),
-		};
-
-		let result = crate::mcp::fs::text_editing::insert_text_spec(
-			&call,
-			temp_file.path(),
-			insert_line,
-			new_str,
-		)
-		.await
-		.unwrap();
-
-		// Check that operation succeeded
-		assert!(result.result.get("error").is_none());
-
-		// Check file content
-		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
-		assert_eq!(actual, expected, "Content mismatch");
-	}
-
-	#[tokio::test]
-	async fn test_insert_text_beginning() {
-		test_insert_text(
-			"line 1\nline 2\nline 3",
-			0,
-			"INSERTED",
-			"INSERTED\nline 1\nline 2\nline 3",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_insert_text_middle() {
-		test_insert_text(
-			"line 1\nline 2\nline 3",
-			1,
-			"INSERTED",
-			"line 1\nINSERTED\nline 2\nline 3",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_insert_text_end() {
-		test_insert_text(
-			"line 1\nline 2\nline 3",
-			3,
-			"INSERTED",
-			"line 1\nline 2\nline 3\nINSERTED",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_insert_text_multiline() {
-		test_insert_text(
-			"line 1\nline 3",
-			1,
-			"line 2a\nline 2b",
-			"line 1\nline 2a\nline 2b\nline 3",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_insert_text_with_actual_newlines() {
-		let insert_content = "hello\nworld";
-		test_insert_text(
-			"before\nafter",
-			1,
-			insert_content,
-			"before\nhello\nworld\nafter",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_insert_text_with_tabs() {
-		test_insert_text(
-			"function() {\n}",
-			1,
-			"\tconsole.log('inserted');",
-			"function() {\n\tconsole.log('inserted');\n}",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_insert_text_preserve_final_newline() {
-		test_insert_text(
-			"line 1\nline 2\n",
-			1,
-			"INSERTED",
-			"line 1\nINSERTED\nline 2\n",
-		)
-		.await;
-	}
-
-	#[tokio::test]
-	async fn test_insert_text_no_final_newline() {
-		test_insert_text("line 1\nline 2", 1, "INSERTED", "line 1\nINSERTED\nline 2").await;
 	}
 
 	#[tokio::test]

@@ -197,11 +197,11 @@ pub async fn str_replace_spec(
 		.await
 		.map_err(|e| anyhow!("Permission denied. Cannot write to file: {}", e))?;
 
-	// Push hint into accumulator if str_replace matched multiple lines — line_replace is better
+	// Push hint into accumulator if str_replace matched multiple lines — batch_edit is better
 	let line_count = old_text.lines().count();
-	if line_count > 1 && crate::mcp::tool_map::get_server_for_tool("text_editor").is_some() {
+	if line_count > 1 && crate::mcp::tool_map::get_server_for_tool("batch_edit").is_some() {
 		crate::mcp::hint_accumulator::push_hint(&format!(
-			"`str_replace` matched {} lines. Prefer `line_replace` when you know the line range — it's faster and avoids content-search ambiguity.",
+			"`str_replace` matched {} lines. Prefer `batch_edit` when you know the line range — it's faster and avoids content-search ambiguity.",
 			line_count
 		));
 	}
@@ -718,6 +718,16 @@ fn parse_line_range(
 }
 
 // NEW REVOLUTIONARY BATCH_EDIT: Single file, multiple operations, original line numbers
+// Returns true when a line contains something beyond structural punctuation/whitespace.
+// Used by duplicate-line detection to skip lines like `}`, `);`, `],` that appear
+// constantly in code and would cause false positives.
+fn has_meaningful_content(line: &str) -> bool {
+	let noise: &[char] = &[
+		'}', ')', ']', '{', '(', '[', ',', ';', ':', '.', '/', '*', '-', '+', '|', '&', '!', '\t',
+		' ',
+	];
+	!line.trim_matches(noise).trim().is_empty()
+}
 pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result<McpToolResult> {
 	// Extract path from the call parameters - NEW: single file only
 	let path_str = match call.parameters.get("path").and_then(|v| v.as_str()) {
@@ -918,6 +928,59 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 		));
 	}
 
+	// Duplicate-line detection: validate Replace operations against original content
+	// before applying anything. Catches the #1 AI mistake of including surrounding lines.
+	//
+	// We only flag a match when the line has meaningful content after stripping structural
+	// noise characters (brackets, braces, punctuation, whitespace). Lines that reduce to
+	// nothing — }, ), ], );, },  etc. — are skipped to avoid false positives in code.
+	let original_lines: Vec<&str> = original_content.lines().collect();
+	for op in &batch_operations {
+		if op.operation_type != OperationType::Replace {
+			continue;
+		}
+		let (start, end) = match op.line_range {
+			LineRange::Range(s, e) => (s, e),
+			LineRange::Single(line) => (line, line),
+		};
+		let content_lines: Vec<&str> = op.content.lines().collect();
+		if content_lines.is_empty() {
+			continue;
+		}
+		// First content line matches the line immediately before the range
+		if start > 1 {
+			let line_before = original_lines[start - 2];
+			if has_meaningful_content(line_before) && content_lines[0].trim() == line_before.trim()
+			{
+				return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					format!(
+						"Duplicate line detected in operation {}: content's first line matches line {} (just before the replacement range [{}-{}]). \
+						Line {}: {:?}. Do NOT include surrounding unchanged lines — only provide the lines that replace [{}-{}].",
+						op.operation_index, start - 1, start, end, start - 1, line_before, start, end
+					),
+				));
+			}
+		}
+		// Last content line matches the line immediately after the range
+		if end < original_lines.len() {
+			let line_after = original_lines[end];
+			let last = content_lines[content_lines.len() - 1];
+			if has_meaningful_content(line_after) && last.trim() == line_after.trim() {
+				return Ok(McpToolResult::error(
+					call.tool_name.clone(),
+					call.tool_id.clone(),
+					format!(
+						"Duplicate line detected in operation {}: content's last line matches line {} (just after the replacement range [{}-{}]). \
+						Line {}: {:?}. Do NOT include surrounding unchanged lines — only provide the lines that replace [{}-{}].",
+						op.operation_index, end + 1, start, end, end + 1, line_after, start, end
+					),
+				));
+			}
+		}
+	}
+
 	// Apply all operations to the original content
 	let final_content = match apply_batch_operations(&original_content, &batch_operations).await {
 		Ok(content) => content,
@@ -949,6 +1012,75 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 		}
 	}
 
+	// Build annotated diff for each replace operation so the AI can verify edits landed correctly.
+	// Format: context lines "NNN: <line>", removed "-NNN: <line>", added "+NNN: <line>", gap "..."
+	const CONTEXT: usize = 3;
+	let new_lines: Vec<&str> = final_content.lines().collect();
+	let mut diffs: Vec<String> = Vec::new();
+
+	// Sort ops by original start line (ascending) for readable diff output
+	let mut display_ops = batch_operations.clone();
+	display_ops.sort_by_key(|op| match &op.line_range {
+		LineRange::Single(line) => *line,
+		LineRange::Range(start, _) => *start,
+	});
+
+	for op in &display_ops {
+		match op.operation_type {
+			OperationType::Replace => {
+				let (start, end) = match op.line_range {
+					LineRange::Range(s, e) => (s, e),
+					LineRange::Single(line) => (line, line),
+				};
+				let content_lines: Vec<&str> = op.content.lines().collect();
+				let removed: Vec<String> = original_lines[start - 1..end]
+					.iter()
+					.map(|l| l.to_string())
+					.collect();
+
+				let mut diff: Vec<String> = Vec::new();
+				let ctx_before_start = start.saturating_sub(CONTEXT).max(1);
+				if ctx_before_start > 1 {
+					diff.push("...".to_string());
+				}
+				for i in ctx_before_start..start {
+					diff.push(format!("{}: {}", i, original_lines[i - 1]));
+				}
+				for (i, old_line) in removed.iter().enumerate() {
+					diff.push(format!("-{}: {}", start + i, old_line));
+				}
+				for (i, new_line) in content_lines.iter().enumerate() {
+					diff.push(format!("+{}: {}", start + i, new_line));
+				}
+				let new_after_start = start + content_lines.len();
+				let new_after_end = (new_after_start + CONTEXT - 1).min(new_lines.len());
+				for new_i in new_after_start..=new_after_end {
+					if new_i >= 1 && new_i <= new_lines.len() {
+						diff.push(format!("{}: {}", new_i, new_lines[new_i - 1]));
+					}
+				}
+				if new_after_end < new_lines.len() {
+					diff.push("...".to_string());
+				}
+				diffs.push(diff.join("\n"));
+			}
+			OperationType::Insert => {
+				// For inserts just note where lines were added
+				let after = match op.line_range {
+					LineRange::Single(line) => line,
+					LineRange::Range(start, _) => start,
+				};
+				let content_lines: Vec<&str> = op.content.lines().collect();
+				let insert_at = after + 1; // new line numbers start here
+				let mut diff: Vec<String> = Vec::new();
+				for (i, new_line) in content_lines.iter().enumerate() {
+					diff.push(format!("+{}: {}", insert_at + i, new_line));
+				}
+				diffs.push(diff.join("\n"));
+			}
+		}
+	}
+
 	let successful_operations = batch_operations.len();
 	let total_operations = operations.len();
 
@@ -967,7 +1099,9 @@ pub async fn batch_edit_spec(call: &McpToolCall, operations: &[Value]) -> Result
 				"failed_operations": failed_operations,
 				"overall_success": failed_operations == 0
 			},
-			"operation_details": operation_details
+			"operation_details": operation_details,
+			"diff": diffs.join("\n---\n"),
+			"total_lines": new_lines.len()
 		}),
 	))
 }
