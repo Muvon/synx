@@ -338,15 +338,14 @@ mod tests {
 			.await
 			.unwrap();
 
-		// Should succeed but with warning
-		assert!(result.result.get("error").is_none());
-		let content_msg = result.result.get("content").unwrap().as_str().unwrap();
-		assert!(content_msg.contains("⚠️"));
-		assert!(content_msg.contains("Line 2 (before replacement range)"));
+		// Should be blocked with an error (duplicate adjacent line)
+		assert_eq!(result.result.get("isError"), Some(&serde_json::json!(true)));
+		let error_msg = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(error_msg.contains("Duplicate line detected"));
 
-		// Verify file has duplicate
+		// Verify file is unchanged
 		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
-		assert_eq!(actual, "line 1\nline 2\nline 2\nnew line 3\nnew line 4\n");
+		assert_eq!(actual, "line 1\nline 2\nline 3\nline 4\n");
 	}
 
 	#[tokio::test]
@@ -365,15 +364,14 @@ mod tests {
 			.await
 			.unwrap();
 
-		// Should succeed but with warning
-		assert!(result.result.get("error").is_none());
-		let content_msg = result.result.get("content").unwrap().as_str().unwrap();
-		assert!(content_msg.contains("⚠️"));
-		assert!(content_msg.contains("Line 3 (after replacement range)"));
+		// Should be blocked with an error (duplicate adjacent line)
+		assert_eq!(result.result.get("isError"), Some(&serde_json::json!(true)));
+		let error_msg = result.result["content"][0]["text"].as_str().unwrap();
+		assert!(error_msg.contains("Duplicate line detected"));
 
-		// Verify file has duplicate
+		// Verify file is unchanged
 		let actual = fs::read_to_string(temp_file.path()).await.unwrap();
-		assert_eq!(actual, "new line 1\nnew line 2\nline 3\nline 3\nline 4\n");
+		assert_eq!(actual, "line 1\nline 2\nline 3\nline 4\n");
 	}
 
 	#[tokio::test]
@@ -391,10 +389,9 @@ mod tests {
 			.await
 			.unwrap();
 
-		// Should succeed without warning
-		assert!(result.result.get("error").is_none());
-		let content_msg = result.result.get("content").unwrap().as_str().unwrap();
-		assert!(!content_msg.contains("⚠️"));
+		// Should succeed without error
+		assert!(result.result.get("isError").is_none());
+		assert!(result.result.get("diff").is_some());
 	}
 
 	// ========== STR_REPLACE TESTS ==========

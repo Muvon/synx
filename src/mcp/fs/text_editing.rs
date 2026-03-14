@@ -315,15 +315,6 @@ pub async fn line_replace_spec(
 
 	let (start_line, end_line) = lines;
 
-	// Validate content for escaped characters — catch both \t and \n independently
-	if content.contains("\\t") || content.contains("\\n") {
-		return Ok(McpToolResult::error(
-			call.tool_name.clone(),
-			call.tool_id.clone(),
-			"content must be RAW text — do not escape whitespace (use real tabs/newlines, not \\t or \\n)".to_string(),
-		));
-	}
-
 	// Validate line numbers
 	if start_line == 0 || end_line == 0 {
 		return Ok(McpToolResult::error(
