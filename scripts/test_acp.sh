@@ -96,10 +96,47 @@ else
   fail "prompt — skipped (no session)"
 fi
 
+# ── 3b. slash command (/help) ─────────────────────────────────────────────────
+info "Test 3b: session/prompt slash command (/help)"
+if [ -n "$SESSION_ID" ]; then
+  BEFORE_HELP=$(wc -l < "$TMPOUT" | tr -d ' ')
+  send "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"session/prompt\",\"params\":{\"sessionId\":\"$SESSION_ID\",\"prompt\":[{\"type\":\"text\",\"text\":\"/help\"}]}}"
+  if wait_for_id 31 10; then
+    R=$(get_response 31)
+    STOP=$(echo "$R" | jq -r '.result.stopReason // empty' 2>/dev/null)
+    CHUNK=$(tail -n +"$BEFORE_HELP" "$TMPOUT" | grep '"session/update"' | jq -r 'select(.params.update.sessionUpdate == "agent_message_chunk") | .params.update.content.text // empty' 2>/dev/null | tr -d '\n')
+    if [ "$STOP" = "end_turn" ] && echo "$CHUNK" | grep -qi "command"; then
+      ok "slash /help — stopReason=end_turn, got command output"
+    elif [ "$STOP" = "end_turn" ]; then
+      fail "slash /help — end_turn but unexpected output: \"$CHUNK\""
+    else
+      fail "slash /help — stopReason='$STOP'"
+    fi
+  else
+    fail "slash /help — timeout"
+  fi
+else
+  fail "slash /help — skipped (no session)"
+fi
+
+
+# ── 3c. save session (needed before load_session test) ────────────────────────
+info "Test 3c: session/prompt /save (persist session to disk)"
+if [ -n "$SESSION_ID" ]; then
+  send "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"session/prompt\",\"params\":{\"sessionId\":\"$SESSION_ID\",\"prompt\":[{\"type\":\"text\",\"text\":\"/save\"}]}}"
+  if wait_for_id 32 10; then
+    ok "save — session persisted to disk"
+  else
+    fail "save — timeout (load_session test may fail)"
+  fi
+fi
+
 # ── 4. new_session with injected MCP server ───────────────────────────────────
-info "Test 4: session/new with stdio MCP server injection"
+# Verifies that session/new succeeds even when an injected server fails to initialize.
+# 'echo hello' is not a real MCP server; the init failure is graceful (logged, skipped).
+info "Test 4: session/new with stdio MCP server injection (graceful init failure)"
 send "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"session/new\",\"params\":{\"cwd\":\"$CWD\",\"mcpServers\":[{\"name\":\"injected-echo\",\"command\":\"echo\",\"args\":[\"hello\"],\"env\":[]}]}}"
-if wait_for_id 4 15; then
+if wait_for_id 4 20; then
   R=$(get_response 4)
   SID2=$(echo "$R" | jq -r '.result.sessionId // empty' 2>/dev/null)
   if [ -n "$SID2" ]; then ok "session/new with MCP injection — sessionId=$SID2"
@@ -123,6 +160,7 @@ if [ -n "$SESSION_ID" ]; then
 else
   fail "load_session — skipped (no session)"
 fi
+
 
 # ── 6. cancel ─────────────────────────────────────────────────────────────────
 info "Test 6: session/cancel"

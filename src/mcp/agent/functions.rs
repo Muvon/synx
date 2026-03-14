@@ -34,11 +34,15 @@ fn get_max_concurrent_jobs() -> usize {
 }
 
 /// Initialize the job manager at session start. Returns the receiver for completed jobs.
+/// Idempotent: if already initialized (e.g. multiple ACP sessions), returns a closed receiver
+/// since the global singleton is already running.
 pub fn init_job_manager() -> tokio::sync::mpsc::Receiver<CompletedJob> {
 	let (manager, rx) = BackgroundJobManager::new(get_max_concurrent_jobs());
-	JOB_MANAGER
-		.set(Arc::new(manager))
-		.expect("job manager already initialized");
+	if JOB_MANAGER.set(Arc::new(manager)).is_err() {
+		// Already initialized — return a closed receiver; the existing manager handles jobs.
+		let (_, dummy_rx) = tokio::sync::mpsc::channel(1);
+		return dummy_rx;
+	}
 	rx
 }
 

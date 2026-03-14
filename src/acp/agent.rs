@@ -21,11 +21,12 @@ use std::rc::Rc;
 
 use agent_client_protocol::{
 	AgentCapabilities, AgentSideConnection, AuthenticateRequest, AuthenticateResponse,
-	CancelNotification, Client, ContentBlock, ContentChunk, ExtRequest, ExtResponse,
-	Implementation, InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
-	McpCapabilities, McpServer, NewSessionRequest, NewSessionResponse, PromptRequest,
-	PromptResponse, ProtocolVersion, SessionNotification, SessionUpdate, StopReason, ToolCall,
-	ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+	AvailableCommand, AvailableCommandInput, AvailableCommandsUpdate, CancelNotification, Client,
+	ContentBlock, ContentChunk, ExtRequest, ExtResponse, Implementation, InitializeRequest,
+	InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpCapabilities, McpServer,
+	NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, ProtocolVersion,
+	SessionNotification, SessionUpdate, StopReason, ToolCall, ToolCallStatus, ToolCallUpdate,
+	ToolCallUpdateFields, UnstructuredCommandInput,
 };
 
 use crate::config::mcp::McpServerConfig;
@@ -71,11 +72,16 @@ impl OctomindAgent {
 	}
 }
 
-/// Convert ACP MCP server list into McpServerConfig entries and inject them into the config.
+/// Convert ACP MCP server list into McpServerConfig entries and inject them into a config snapshot.
 ///
-/// Servers are added to the global registry (`config.mcp.servers`) and referenced by the role
-/// so that `get_enabled_servers()` picks them up during tool routing.
-fn inject_acp_mcp_servers(config: &mut Config, role: &str, servers: &[McpServer]) {
+/// Returns a modified clone of `base_config` with the injected servers merged in.
+/// `self.config` is never mutated — injected servers are scoped to the session only.
+fn build_config_with_injected_servers(
+	base_config: &Config,
+	role: &str,
+	servers: &[McpServer],
+) -> Config {
+	let mut config = base_config.clone();
 	for server in servers {
 		let server_config = match server {
 			McpServer::Stdio(s) => {
@@ -100,15 +106,80 @@ fn inject_acp_mcp_servers(config: &mut Config, role: &str, servers: &[McpServer]
 			}
 		};
 		let name = server_config.name().to_string();
-		// Add to global registry (dedup by name)
 		if !config.mcp.servers.iter().any(|s| s.name() == name) {
 			config.mcp.servers.push(server_config);
 		}
-		// Reference from the role so get_enabled_servers() includes it
 		if let Some(role_entry) = config.role_map.get_mut(role) {
 			if !role_entry.mcp.server_refs.contains(&name) {
 				role_entry.mcp.server_refs.push(name);
 			}
+		}
+	}
+	config
+}
+
+/// Build the list of available slash commands to advertise to ACP clients.
+///
+/// Command names are sent WITHOUT the leading `/` — the client prepends it when displaying.
+fn build_available_commands() -> Vec<AvailableCommand> {
+	let unstructured =
+		|hint: &str| AvailableCommandInput::Unstructured(UnstructuredCommandInput::new(hint));
+
+	vec![
+		AvailableCommand::new("help", "Show available commands"),
+		AvailableCommand::new("role", "View or change current role")
+			.input(unstructured("<role_name>")),
+		AvailableCommand::new("model", "View or change current AI model")
+			.input(unstructured("<provider:model>")),
+		AvailableCommand::new(
+			"done",
+			"Finalize task with memorization, summarization, and auto-commit",
+		),
+		AvailableCommand::new("save", "Save the current session"),
+		AvailableCommand::new("info", "Display token and cost breakdown for this session"),
+		AvailableCommand::new("clear", "Clear the screen"),
+		AvailableCommand::new("copy", "Copy last response to clipboard"),
+		AvailableCommand::new("context", "Display session context")
+			.input(unstructured("[all|assistant|user|tool|large]")),
+		AvailableCommand::new("truncate", "Smart context truncation to reduce token usage"),
+		AvailableCommand::new(
+			"summarize",
+			"Summarize entire conversation to reduce token usage",
+		),
+		AvailableCommand::new("cache", "Manage cache checkpoints")
+			.input(unstructured("[stats|clear|threshold]")),
+		AvailableCommand::new("list", "List all available sessions").input(unstructured("[page]")),
+		AvailableCommand::new("session", "Switch to or create a session")
+			.input(unstructured("[session_name]")),
+		AvailableCommand::new("run", "Execute a command layer")
+			.input(unstructured("<command_name>")),
+		AvailableCommand::new("workflow", "Execute a workflow")
+			.input(unstructured("<workflow_name> [input]")),
+		AvailableCommand::new("mcp", "MCP server management")
+			.input(unstructured("[info|list|full|health|dump|validate]")),
+		AvailableCommand::new("plan", "Display current plan stored in MCP plan tool"),
+		AvailableCommand::new("prompt", "Manage prompt templates")
+			.input(unstructured("[template_name]")),
+		AvailableCommand::new("image", "Attach image to next message")
+			.input(unstructured("<path>")),
+		AvailableCommand::new("video", "Attach video to next message")
+			.input(unstructured("<path>")),
+		AvailableCommand::new("loglevel", "Set logging level")
+			.input(unstructured("[none|info|debug]")),
+		AvailableCommand::new("report", "Generate detailed usage report for this session"),
+		AvailableCommand::new("exit", "Exit the session"),
+	]
+}
+
+/// Send the available commands list to the ACP client for the given session.
+async fn send_available_commands(conn: Option<std::rc::Rc<AgentSideConnection>>, session_id: &str) {
+	if let Some(conn) = conn {
+		let update = SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(
+			build_available_commands(),
+		));
+		let notif = SessionNotification::new(std::sync::Arc::<str>::from(session_id), update);
+		if let Err(e) = conn.session_notification(notif).await {
+			log_error!("ACP: failed to send available_commands_update: {}", e);
 		}
 	}
 }
@@ -158,8 +229,13 @@ impl agent_client_protocol::Agent for OctomindAgent {
 		crate::mcp::set_session_working_directory(args.cwd.clone());
 		let session_cwd = args.cwd.clone();
 
-		inject_acp_mcp_servers(&mut self.config.borrow_mut(), &self.role, &args.mcp_servers);
-		let config_snapshot = self.config.borrow().clone();
+		// Build a per-session config snapshot with injected servers merged in.
+		// self.config is never mutated — injected servers are scoped to this session only.
+		let config_snapshot = build_config_with_injected_servers(
+			&self.config.borrow(),
+			&self.role,
+			&args.mcp_servers,
+		);
 
 		// Start any newly injected servers and register their tools in the tool map.
 		// initialize_mcp_for_role is idempotent: already-running servers and already-registered
@@ -192,6 +268,9 @@ impl agent_client_protocol::Agent for OctomindAgent {
 			.borrow_mut()
 			.insert(session_id.clone(), SessionCancellation::new());
 
+		let conn = self.conn.borrow().clone();
+		send_available_commands(conn, &session_id).await;
+
 		Ok(NewSessionResponse::new(session_id))
 	}
 
@@ -213,6 +292,82 @@ impl agent_client_protocol::Agent for OctomindAgent {
 			.join("\n");
 
 		if input.trim().is_empty() {
+			return Ok(PromptResponse::new(StopReason::EndTurn));
+		}
+
+		// Slash commands are sent as regular prompts per the ACP spec.
+		// Intercept them here before the AI pipeline, execute via process_command,
+		// and stream the result back as an AgentMessageChunk.
+		if input.trim_start().starts_with('/') {
+			let (mut chat_session, session_cwd) =
+				match self.sessions.borrow_mut().remove(&session_id) {
+					Some(s) => s,
+					None => {
+						return Err(agent_client_protocol::Error::invalid_params()
+							.data(format!("session not found: {session_id}")));
+					}
+				};
+
+			crate::mcp::set_session_working_directory(session_cwd.clone());
+
+			let operation_rx = self
+				.cancellations
+				.borrow_mut()
+				.entry(session_id.clone())
+				.or_default()
+				.new_operation();
+
+			let mut config = self.config.borrow().clone();
+			let result = crate::session::chat::session::commands::process_command(
+				&mut chat_session,
+				input.trim(),
+				&mut config,
+				&self.role,
+				operation_rx,
+			)
+			.await;
+			// Write back any config mutations (e.g. model/role changes)
+			*self.config.borrow_mut() = config;
+
+			self.sessions
+				.borrow_mut()
+				.insert(session_id.clone(), (chat_session, session_cwd));
+
+			let text = match result {
+				Ok(crate::session::chat::session::commands::CommandResult::HandledWithOutput(
+					output,
+				)) => serde_json::to_string_pretty(&output.to_json())
+					.unwrap_or_else(|_| "Command executed.".to_string()),
+				Ok(crate::session::chat::session::commands::CommandResult::Handled) => {
+					"Command executed.".to_string()
+				}
+				Ok(crate::session::chat::session::commands::CommandResult::Exit) => {
+					"Session exit requested.".to_string()
+				}
+				Ok(crate::session::chat::session::commands::CommandResult::TreatAsUserInput) => {
+					let available: Vec<&str> = crate::session::chat::COMMANDS.to_vec();
+
+					format!(
+						"The {} command is not supported by Octomind.\n\nAvailable commands: {}",
+						input.trim(),
+						available.join(", ")
+					)
+				}
+				Err(e) => format!("Command failed: {e}"),
+			};
+
+			let conn = self.conn.borrow().clone();
+			if let Some(conn) = conn {
+				let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(text.into()));
+				let notif = SessionNotification::new(
+					std::sync::Arc::<str>::from(session_id.as_str()),
+					update,
+				);
+				if let Err(e) = conn.session_notification(notif).await {
+					log_error!("ACP: failed to send command result: {}", e);
+				}
+			}
+
 			return Ok(PromptResponse::new(StopReason::EndTurn));
 		}
 
@@ -411,10 +566,13 @@ impl agent_client_protocol::Agent for OctomindAgent {
 		crate::mcp::set_session_working_directory(args.cwd.clone());
 		let session_cwd = args.cwd.clone();
 
-		inject_acp_mcp_servers(&mut self.config.borrow_mut(), &self.role, &args.mcp_servers);
-
-		// Start any newly injected servers and register their tools — idempotent, see new_session.
-		let config_snapshot = self.config.borrow().clone();
+		// Build a per-session config snapshot with injected servers merged in.
+		// self.config is never mutated — injected servers are scoped to this session only.
+		let config_snapshot = build_config_with_injected_servers(
+			&self.config.borrow(),
+			&self.role,
+			&args.mcp_servers,
+		);
 		crate::mcp::initialize_mcp_for_role(&self.role, &config_snapshot)
 			.await
 			.map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))?;
@@ -440,10 +598,14 @@ impl agent_client_protocol::Agent for OctomindAgent {
 			.insert(session_id.clone(), (chat_session, session_cwd));
 		self.cancellations
 			.borrow_mut()
-			.insert(session_id, SessionCancellation::new());
+			.insert(session_id.clone(), SessionCancellation::new());
+
+		let conn = self.conn.borrow().clone();
+		send_available_commands(conn, &session_id).await;
 
 		Ok(LoadSessionResponse::new())
 	}
+
 	async fn ext_method(&self, args: ExtRequest) -> agent_client_protocol::Result<ExtResponse> {
 		super::commands::handle_ext_method(
 			args,
