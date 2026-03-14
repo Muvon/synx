@@ -424,28 +424,31 @@ pub trait Layer {
 				}
 			}
 			InputMode::All => {
-				// For "all" mode, we format the entire conversation context to include
-				// the original user request and any relevant message history
-				let mut context = String::new();
-
-				// Add previous assistant messages if available for context
-				let history = session
+				// Build a chronological transcript of the session in natural reading order
+				// (oldest → newest), followed by the current input as the task to act on.
+				// Skips system messages — those are already in the layer's own system prompt.
+				let transcript = session
 					.messages
 					.iter()
-					.filter(|m| m.role == "assistant")
-					.map(|m| m.content.clone())
-					.collect::<Vec<_>>();
+					.filter(|m| m.role != "system")
+					.map(|m| {
+						let label = match m.role.as_str() {
+							"assistant" => "Assistant",
+							"user" => "User",
+							other => other,
+						};
+						format!("[{}]\n{}", label, m.content)
+					})
+					.collect::<Vec<_>>()
+					.join("\n\n");
 
-				// Format as a structured prompt with original input and context
-				if !history.is_empty() {
-					context = format!(
-						"Previous conversation context:\n{}\n\n",
-						history.join("\n\n")
-					);
+				if transcript.is_empty() {
+					input.to_string()
+				} else {
+					format!("{}\n\n[Current task]\n{}", transcript, input)
 				}
-
-				format!("User request:\n{}\n\n{}", input, context)
 			}
+
 			InputMode::Summary => {
 				// For summary mode, we generate a concise summary of the conversation
 				// This helps maintain context while reducing token usage

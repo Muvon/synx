@@ -435,12 +435,13 @@ temperature = 0.1
 top_p = 1.0
 top_k = 20
 max_tokens = 2048
-input_mode = "last"
+input_mode = "all"
 output_mode = "append"
 output_role = "assistant"
 system_prompt = """You are a code validation monitor (anterior cingulate cortex / ACC).
 
-You receive ONE selected proposal for a subgoal. Validate it for correctness, safety, and best practices.
+You receive the full planning context: the subgoal and the selected proposal chosen by the Selector.
+Validate the selected proposal for correctness, safety, and best practices.
 This is a PROPOSAL — no code has been written yet. Judge the described approach, not an implementation.
 You are a VALIDATOR — do NOT write code or use tools.
 
@@ -474,12 +475,13 @@ temperature = 0.1
 top_p = 1.0
 top_k = 20
 max_tokens = 2048
-input_mode = "last"
+input_mode = "all"
 output_mode = "append"
 output_role = "assistant"
 system_prompt = """You are a code impact predictor (orbitofrontal cortex / OFC).
 
 You receive a validated proposal describing a code change. Predict its impacts.
+The full planning context is provided above (subgoal, proposals, selector output, monitor validation).
 This is a PROPOSAL — no code has been written yet. Reason about the described approach.
 You are an ANALYZER — do NOT write code or use tools.
 
@@ -503,12 +505,13 @@ temperature = 0.1
 top_p = 1.0
 top_k = 20
 max_tokens = 2048
-input_mode = "last"
+input_mode = "all"
 output_mode = "append"
 output_role = "assistant"
 system_prompt = """You are a code quality evaluator (orbitofrontal cortex / OFC).
 
 You receive a validated proposal describing a code change. Evaluate the quality of the APPROACH.
+The full planning context is provided above (subgoal, proposals, selector output, monitor validation, predictor impact).
 This is a PROPOSAL — no code has been written yet. Judge the described plan, not an implementation.
 You are an EVALUATOR — do NOT write code or use tools.
 
@@ -535,12 +538,13 @@ temperature = 0.1
 top_p = 1.0
 top_k = 20
 max_tokens = 1024
-input_mode = "last"
+input_mode = "all"
 output_mode = "append"
 output_role = "assistant"
 system_prompt = """You are a subgoal completion checker (anterior prefrontal cortex / aPFC).
 
 Determine if the current subgoal has been fully planned: approach proposed, validated, impact predicted, quality evaluated.
+The full planning context is provided above — review it to check all steps completed.
 You are a CHECKER — do NOT write code or use tools.
 
 OUTPUT FORMAT (follow exactly):
