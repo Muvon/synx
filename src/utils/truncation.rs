@@ -189,30 +189,13 @@ pub fn format_extracted_content_smart(
 /// Truncated content with clear indication if truncated
 pub fn truncate_content_smart(content: &str, max_tokens: usize) -> String {
 	let token_count = estimate_tokens(content);
-
 	if token_count <= max_tokens {
 		return content.to_string();
 	}
-
-	// Simple truncation - cut at character boundary
-	// Estimate roughly where to cut (tokens are ~4 chars average)
-	let estimated_chars = max_tokens * 3; // Conservative estimate
-	let truncated = if content.chars().count() > estimated_chars {
-		content.chars().take(estimated_chars).collect::<String>()
-	} else {
-		content.to_string()
-	};
-
-	// Find last newline to avoid cutting mid-line
-	let last_newline = truncated.rfind('\n').unwrap_or(truncated.chars().count());
-	let final_truncated: String = truncated.chars().take(last_newline).collect();
-
+	let truncated = crate::session::truncate_to_tokens(content, max_tokens);
 	format!(
-        "{}\n\n[Content truncated - {} tokens estimated, max {} allowed. Use more specific commands to reduce output size]",
-        final_truncated,
-        token_count,
-        max_tokens
-    )
+		"{truncated}\n\n[Content truncated - {token_count} tokens estimated, max {max_tokens} allowed. Use more specific commands to reduce output size]"
+	)
 }
 
 /// Simple line-based truncation for tool outputs

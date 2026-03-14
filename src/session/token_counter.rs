@@ -38,6 +38,20 @@ pub fn estimate_tokens(text: &str) -> usize {
 	tokens.len()
 }
 
+// Truncate text to at most max_tokens tokens, decoding back to a string.
+// Returns the truncated text (losslessly decoded from the token boundary).
+pub fn truncate_to_tokens(text: &str, max_tokens: usize) -> String {
+	let tokenizer = get_tokenizer();
+	let mut tokens = tokenizer.encode_ordinary(text);
+	if tokens.len() <= max_tokens {
+		return text.to_string();
+	}
+	tokens.truncate(max_tokens);
+	tokenizer
+		.decode(tokens)
+		.unwrap_or_else(|_| text[..text.len() / 2].to_string())
+}
+
 /// Calculate tokens for a single message including ALL fields
 ///
 /// Implements OpenAI's official token counting formula:
