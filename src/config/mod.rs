@@ -404,8 +404,14 @@ impl Config {
 		self.get_effective_max_tokens()
 	}
 
+	/// Check whether a role is defined in the config.
+	pub fn has_role(&self, role: &str) -> bool {
+		self.role_map.contains_key(role)
+	}
+
 	/// Get configuration for a specific role
 	/// Returns: (role_config, role_mcp_config, layers, commands, system_prompt)
+	/// Panics if the role is not found — call `has_role` first when the role comes from user input.
 	pub fn get_role_config(&self, role: &str) -> RoleConfigResult<'_> {
 		if let Some(role_config) = self.role_map.get(role) {
 			(

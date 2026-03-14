@@ -94,6 +94,16 @@ pub async fn setup_and_initialize_session<T: std::fmt::Debug>(
 		schema_file,
 	) = extract_session_params(args, config);
 
+	// Validate role exists before doing anything — give a clean error instead of a panic
+	if !config.has_role(&role) {
+		let available: Vec<&str> = config.role_map.keys().map(|s| s.as_str()).collect();
+		return Err(anyhow::anyhow!(
+			"Role '{}' not found. Available roles: {}",
+			role,
+			available.join(", ")
+		));
+	}
+
 	// Get role config for defaults
 	let (role_config, _, _, _, _) = config.get_role_config(&role);
 
