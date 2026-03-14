@@ -272,7 +272,7 @@ pub async fn list_directory(call: &McpToolCall, directory: &str) -> Result<McpTo
 		if context_lines > 0 {
 			cmd.arg("--context").arg(context_lines.to_string());
 		}
-		cmd.arg("-F").arg(content_pattern);
+		cmd.arg("-F").arg("--").arg(content_pattern);
 		cmd.arg(directory);
 		("content search", true)
 	} else {
