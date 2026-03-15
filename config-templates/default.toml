@@ -141,6 +141,10 @@ max_request_spending_threshold = 0.0
 # [roles.mcp]
 # server_refs = ["core", "filesystem", "agent"]
 # allowed_tools = ["core:*", "filesystem:*", "agent_*"]
+
+# Default empty roles array (tap-provided roles are loaded at runtime)
+roles = []
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # MCP (MODEL CONTEXT PROTOCOL) SERVERS
 # Configure external MCP servers and tools
