@@ -1,5 +1,87 @@
 # Changelog
 
+## [0.21.0] - 2026-03-15
+
+### 📋 Release Summary
+
+This release introduces background job management for asynchronous agent execution and real-time result injection while you type, plus a new /jobs command to monitor running tasks. Enhanced sandbox security now restricts file writes to your working directory and safe temporary paths. Multiple bug fixes improve text editing reliability, MCP server stability, and overall system performance.
+
+
+### ✨ New Features & Enhancements
+
+- **config**: add role validation before session setup `73d2a6c1`
+- **session**: add token-aware text truncation function `77e379b2`
+- **compression**: add force flag to bypass compression guards `aee1621c`
+- **sandbox**: restrict writes to cwd and safe temp paths `d4de75b1`
+- **logging**: add structured file tracing for ACP and WebSocket modes `65be2c21`
+- **acp**: add slash command support `978eea67`
+- **chat**: inject async job results while user is typing `753b6ef2`
+- **mcp**: add cancellation for background agent tasks `0602d8e5`
+- **chat**: add /jobs command to list background agent jobs `b69c1196`
+- **session**: add background job manager for async agents `0e9b6dae`
+- **mcp**: add session context to MCP server initialization `2acee52f`
+- **compression**: preserve file references in summaries `fe898a92`
+- **mcp**: add thread-local working directory for sessions `347d0b25`
+- **test**: add ACP smoke test script `5055ef40`
+- **acp**: advertise HTTP MCP transport support `324765b4`
+- **acp**: add session persistence and MCP server injection `3bde1abf`
+- **acp**: add stdio communication protocol support `73aeb16f`
+
+### 🔧 Improvements & Optimizations
+
+- **batch_edit**: simplify editor and add duplicate detection `4eead656`
+- **docs**: rename developer server to core `4c810ad6`
+- **mcp**: consolidate dev tools into filesystem server `57d5a91e`
+- **fs**: remove line count tracking `c856bd44`
+- **session**: defer session file creation until first write `073a52c5`
+- **done**: replace context reduction with compression `7eb8e77e`
+- **mcp**: simplify function descriptions `1f6b1610`
+- **mcp**: reorganize servers into core and filesystem categories `fcf809c3`
+- **background_jobs**: remove config and use CPU-based limit `3713a10d`
+- **mcp**: rename background to async for agent execution `19c2b164`
+- **agent**: remove background job management `32598f7e`
+- **background_jobs**: replace polling store with push channel `e34ce51e`
+- **agent**: remove direct LLM calls from server `1f8dab9e`
+- **agents**: migrate to ACP command-based system `31ca5b23`
+- **chat**: improve conversation compression prompt structure `20974200`
+- **mcp**: unify thread-local working directory handling `7c7cb519`
+- **session**: use struct update syntax for GenericSessionArgs `569a859d`
+
+### 🐛 Bug Fixes & Stability
+
+- **config**: switch planner layers to full context input mode `c684a15c`
+- **fs**: add double dash separator to grep command `6e5d317b`
+- **fs**: block duplicate adjacent lines in line_replace_spec `9f56d155`
+- **text_editing**: prevent context start from going below line 1 `b4f10028`
+- **text_editing**: block duplicate adjacent lines and require raw text `3efe4c44`
+- **sandbox**: correct comment formatting and add missing function `96c95255`
+- **logging**: respect output mode suppression in log macros `00e31020`
+- **generic**: add MCP response truncation to tool results `1b832f41`
+- **mcp**: seed thread-local working directory at startup `0cabeeb5`
+- **session**: use thread-local working directory for prompt setup `eaba508d`
+- **agent**: ensure cancellation token is available for prompt cancellation `e332e3e9`
+- **acp**: ensure MCP servers start before session setup `f0c76305`
+- **agent**: allow dynamic MCP server injection via mutable config `36206c68`
+
+### 📚 Documentation & Examples
+
+- **agent**: add background execution parameter documentation `f44ff26b`
+- **acp-editor**: add integration documentation `429420cf`
+
+### 🔄 Other Changes
+
+- **release**: add homebrew tap notification job `a4de4d8a`
+
+### 📊 Release Summary
+
+**Total commits**: 50 across 5 categories
+
+✨ **17** new features - *Enhanced functionality*
+🔧 **17** improvements - *Better performance & code quality*
+🐛 **13** bug fixes - *Improved stability*
+📚 **2** documentation updates - *Better developer experience*
+🔄 **1** other change - *Maintenance & tooling*
+
 ## [0.20.0] - 2026-03-13
 
 ### 📋 Release Summary
