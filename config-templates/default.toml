@@ -127,23 +127,20 @@ max_request_spending_threshold = 0.0
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Example: override the developer role with your own system prompt
-# [[roles]]
-# name = "developer"
-# temperature = 0.3
-# top_p = 0.7
-# top_k = 20
-# system = """
-# You are a senior developer assistant.
-# Working directory: {{CWD}}
-# """
-# welcome = "Hello! Ready to code. Working in {{CWD}} (Role: {{ROLE}})"
-#
-# [roles.mcp]
-# server_refs = ["core", "filesystem", "agent"]
-# allowed_tools = ["core:*", "filesystem:*", "agent_*"]
+[[roles]]
+name = "assistant"
+temperature = 0.3
+top_p = 0.7
+top_k = 20
+system = """
+You are helpful and knowledgeable assistant.
+Working directory: {{CWD}}
+"""
+welcome = "Hello! Ready to code. Working in {{CWD}} (Role: {{ROLE}})"
 
-# Default empty roles array (tap-provided roles are loaded at runtime)
-roles = []
+[roles.mcp]
+server_refs = ["core", "filesystem", "agent"]
+allowed_tools = ["core:*", "filesystem:*", "agent:*"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MCP (MODEL CONTEXT PROTOCOL) SERVERS
