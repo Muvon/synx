@@ -246,6 +246,17 @@ pub fn get_dynamic_agent_name_by_tool(tool_name: &str) -> Option<String> {
 pub fn clear_all() {
 	let manager = get_agent_manager();
 	let mut state = manager.write().unwrap();
+
+	// Collect keys first to avoid borrow issues when re-acquiring lock
+	let names: Vec<String> = state.agents.keys().cloned().collect();
+
+	// First unregister all tools from tool_map
+	for name in names {
+		drop(state); // Release lock before calling tool_map
+		crate::mcp::tool_map::unregister_dynamic_agent_tool(&name);
+		state = manager.write().unwrap(); // Re-acquire lock
+	}
+
 	state.agents.clear();
 	state.enabled.clear();
 }
