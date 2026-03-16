@@ -252,6 +252,70 @@ pub fn get_dynamic_server_name_by_tool(tool_name: &str) -> Option<String> {
 	None
 }
 
+/// Get the persist file path for a server name
+fn persist_file_path(name: &str) -> Result<std::path::PathBuf> {
+	let config_dir = crate::directories::get_config_dir()?;
+	Ok(config_dir.join(format!("mcp-{}.toml", name)))
+}
+
+/// Check if a server has been persisted to a config file
+pub fn is_persisted(name: &str) -> bool {
+	persist_file_path(name).map(|p| p.exists()).unwrap_or(false)
+}
+
+/// Persist a registered dynamic server to a TOML config file.
+///
+/// Writes `<config_dir>/mcp-<name>.toml` with `[[mcp.servers]]` format
+/// so it gets auto-loaded and merged on next startup.
+pub fn persist_server(name: &str) -> Result<std::path::PathBuf> {
+	let server = {
+		let manager = get_manager();
+		let state = manager.read().unwrap();
+		state
+			.servers
+			.get(name)
+			.cloned()
+			.ok_or_else(|| anyhow::anyhow!("Server '{}' not registered", name))?
+	};
+
+	// Wrap in the config structure so it serializes as [[mcp.servers]]
+	#[derive(serde::Serialize)]
+	struct PersistWrapper {
+		mcp: PersistMcp,
+	}
+	#[derive(serde::Serialize)]
+	struct PersistMcp {
+		servers: Vec<crate::config::McpServerConfig>,
+	}
+
+	let wrapper = PersistWrapper {
+		mcp: PersistMcp {
+			servers: vec![server],
+		},
+	};
+
+	let toml_str = toml::to_string_pretty(&wrapper)
+		.map_err(|e| anyhow::anyhow!("Failed to serialize server config: {}", e))?;
+
+	let path = persist_file_path(name)?;
+	std::fs::write(&path, toml_str)
+		.map_err(|e| anyhow::anyhow!("Failed to write {}: {}", path.display(), e))?;
+
+	Ok(path)
+}
+
+/// Remove a persisted server config file.
+///
+/// Deletes `<config_dir>/mcp-<name>.toml` if it exists.
+pub fn unpersist_server(name: &str) -> Result<()> {
+	let path = persist_file_path(name)?;
+	if path.exists() {
+		std::fs::remove_file(&path)
+			.map_err(|e| anyhow::anyhow!("Failed to remove {}: {}", path.display(), e))?;
+	}
+	Ok(())
+}
+
 /// Clear all dynamic servers (useful for testing).
 #[cfg(test)]
 pub fn clear_all() {
@@ -266,14 +330,14 @@ pub fn clear_all() {
 pub fn get_mcp_tool_function() -> McpFunction {
 	McpFunction {
 		name: "mcp".to_string(),
-		description: "Manage MCP servers at runtime without editing config. Use when:\n- You need a tool that's available in an MCP server but not currently configured\n- You want to test a server temporarily before adding to config\n- You need different servers for different tasks\n\nActions:\n- list: Show currently loaded dynamic servers and their tools\n- add: Register a new MCP server config (does NOT connect yet)\n- enable: Connect to a registered server and activate its tools\n- disable: Deactivate a server's tools (config stays registered)\n- remove: Unregister a server entirely".to_string(),
+		description: "Manage MCP servers at runtime without editing config. Use when:\n- You need a tool that's available in an MCP server but not currently configured\n- You want to test a server temporarily before adding to config\n- You need different servers for different tasks\n\nActions:\n- list: Show currently loaded dynamic servers and their tools\n- add: Register a new MCP server config (does NOT connect yet)\n- enable: Connect to a registered server and activate its tools\n- disable: Deactivate a server's tools (config stays registered)\n- remove: Unregister a server entirely\n- persist: Save a registered server to config dir so it auto-loads on next startup\n- unpersist: Remove a persisted server config file".to_string(),
 		parameters: json!({
 			"type": "object",
 			"properties": {
 				"action": {
 					"type": "string",
 					"description": "Action to perform",
-					"enum": ["add", "remove", "enable", "disable", "list"]
+					"enum": ["add", "remove", "enable", "disable", "list", "persist", "unpersist"]
 				},
 				"name": {
 					"type": "string",
@@ -339,11 +403,13 @@ pub async fn execute_mcp_command(call: &crate::mcp::McpToolCall) -> Result<McpTo
 		"enable" => handle_enable(call).await,
 		"disable" => handle_disable(call).await,
 		"remove" => handle_remove(call).await,
+		"persist" => handle_persist(call).await,
+		"unpersist" => handle_unpersist(call).await,
 		_ => Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
 			format!(
-				"Unknown action '{}'. Use: add, enable, disable, remove, list",
+				"Unknown action '{}'. Use: add, enable, disable, remove, list, persist, unpersist",
 				action
 			),
 		)),
@@ -364,12 +430,20 @@ async fn handle_list(call: &crate::mcp::McpToolCall) -> Result<McpToolResult> {
 	let mut lines = vec!["Dynamic MCP Servers:".to_string(), "".to_string()];
 	for (name, tools, is_enabled) in servers {
 		let status = if is_enabled { "\u{2713}" } else { "\u{2717}" };
+		let persisted = if is_persisted(&name) {
+			" \u{1F4BE}"
+		} else {
+			""
+		};
 		let tools_str = if tools.is_empty() {
 			"(all tools)".to_string()
 		} else {
 			tools.join(", ")
 		};
-		lines.push(format!("  {} [{}] \u{2192} {}", name, status, tools_str));
+		lines.push(format!(
+			"  {} [{}]{} \u{2192} {}",
+			name, status, persisted, tools_str
+		));
 	}
 
 	Ok(McpToolResult::success(
@@ -605,6 +679,77 @@ async fn handle_remove(call: &crate::mcp::McpToolCall) -> Result<McpToolResult> 
 			call.tool_id.clone(),
 			format!("Server '{}' not found in dynamic servers", name),
 		))
+	}
+}
+
+async fn handle_persist(call: &crate::mcp::McpToolCall) -> Result<McpToolResult> {
+	let params = &call.parameters;
+
+	let name = match params.get("name").and_then(|v| v.as_str()) {
+		Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+		_ => {
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				"Missing required parameter 'name'".to_string(),
+			));
+		}
+	};
+
+	match persist_server(&name) {
+		Ok(path) => Ok(McpToolResult::success(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!(
+				"Server '{}' persisted to {}. It will auto-load on next startup.",
+				name,
+				path.display()
+			),
+		)),
+		Err(e) => Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!("Failed to persist server: {}", e),
+		)),
+	}
+}
+
+async fn handle_unpersist(call: &crate::mcp::McpToolCall) -> Result<McpToolResult> {
+	let params = &call.parameters;
+
+	let name = match params.get("name").and_then(|v| v.as_str()) {
+		Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+		_ => {
+			return Ok(McpToolResult::error(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				"Missing required parameter 'name'".to_string(),
+			));
+		}
+	};
+
+	if !is_persisted(&name) {
+		return Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!("Server '{}' is not persisted", name),
+		));
+	}
+
+	match unpersist_server(&name) {
+		Ok(()) => Ok(McpToolResult::success(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!(
+				"Server '{}' unpersisted. It will no longer auto-load on startup.",
+				name
+			),
+		)),
+		Err(e) => Ok(McpToolResult::error(
+			call.tool_name.clone(),
+			call.tool_id.clone(),
+			format!("Failed to unpersist server: {}", e),
+		)),
 	}
 }
 

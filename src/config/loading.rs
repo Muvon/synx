@@ -19,7 +19,7 @@ use std::path::Path;
 use super::Config;
 
 /// Merge multiple TOML values into one - later values override/add to earlier ones
-/// Arrays are concatenated, tables are merged deeply, scalars override
+/// Arrays of tables are concatenated (e.g. [[mcp.servers]]), tables merge deeply, scalars override
 fn merge_toml_values(base: &toml::Value, override_: &toml::Value) -> toml::Value {
 	match (base, override_) {
 		// Merge tables (objects) deeply
@@ -34,9 +34,23 @@ fn merge_toml_values(base: &toml::Value, override_: &toml::Value) -> toml::Value
 			}
 			toml::Value::Table(result)
 		}
-		// Override_ completely replaces base for non-table types
+		// Concatenate arrays of tables (TOML [[...]] style)
+		// This allows split-file configs to ADD entries (e.g. mcp-*.toml adding [[mcp.servers]])
+		(toml::Value::Array(base_arr), toml::Value::Array(override_arr))
+			if is_array_of_tables(base_arr) && is_array_of_tables(override_arr) =>
+		{
+			let mut result = base_arr.clone();
+			result.extend(override_arr.iter().cloned());
+			toml::Value::Array(result)
+		}
+		// Scalar arrays and other types: override replaces
 		(_, override_) => override_.clone(),
 	}
+}
+
+/// Check if a TOML array contains only tables (i.e. [[...]] style)
+fn is_array_of_tables(arr: &[toml::Value]) -> bool {
+	!arr.is_empty() && arr.iter().all(|v| v.is_table())
 }
 
 /// Load and merge all TOML files from a directory
