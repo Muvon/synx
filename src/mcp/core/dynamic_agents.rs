@@ -689,9 +689,15 @@ pub fn get_all_functions() -> Vec<McpFunction> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::sync::Mutex;
+
+	// Serialize all tests that mutate the global DYNAMIC_AGENT_MANAGER to prevent
+	// race conditions when tests run in parallel (RUST_TEST_THREADS > 1).
+	static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 	#[test]
 	fn test_agent_register_enable_disable() {
+		let _guard = TEST_MUTEX.lock().unwrap();
 		clear_all();
 
 		let agent = DynamicAgentConfig {
@@ -735,6 +741,7 @@ mod tests {
 
 	#[test]
 	fn test_duplicate_agent() {
+		let _guard = TEST_MUTEX.lock().unwrap();
 		clear_all();
 
 		let agent = DynamicAgentConfig {
