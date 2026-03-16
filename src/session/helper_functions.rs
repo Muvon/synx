@@ -496,6 +496,13 @@ pub async fn get_all_placeholders(project_dir: &Path) -> HashMap<String, String>
 	placeholders.insert("{{SHELL}}".to_string(), system_info.shell_info);
 	placeholders.insert("{{OS}}".to_string(), system_info.os_info);
 	placeholders.insert("{{BINARIES}}".to_string(), system_info.binaries);
+	placeholders.insert(
+		"{{HOME}}".to_string(),
+		dirs::home_dir()
+			.unwrap_or_default()
+			.to_string_lossy()
+			.to_string(),
+	);
 
 	// Add specific parts of the context as individual placeholders
 	placeholders.insert(
