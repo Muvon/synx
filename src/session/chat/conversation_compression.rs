@@ -1245,12 +1245,11 @@ async fn apply_compression(
 	// Insert compressed summary (compressed block is always cached=true — new stable boundary)
 	session.insert_compressed_knowledge(start_idx, compressed_entry)?;
 
-	// CRITICAL FIX: Update first_prompt_idx to point to the compressed summary.
-	// After remove+insert, the compressed summary is at start_idx + 1.
-	// Without this update, the next compression would use the old first_prompt_idx,
-	// causing the compressed summary to be included in the drain range and
-	// re-compressed — leading to progressive context loss on every compression.
-	session.first_prompt_idx = Some(start_idx + 1);
+	// NOTE: first_prompt_idx is NOT updated here. It always points to the
+	// original first user message — the permanent anchor. On subsequent
+	// compressions, the old compressed summary (at start_idx+1) will be in
+	// the drain range and get re-compressed into a fresh summary. This is
+	// correct: each compression cycle folds all prior context into one summary.
 	// Calculate metrics
 	let tokens_saved = tokens_before.saturating_sub(tokens_after);
 
@@ -2342,359 +2341,132 @@ mod tests {
 	}
 
 	// ============================================================================
-	// SEQUENTIAL COMPRESSION TESTS: Verify first_prompt_idx update prevents
-	// re-compression of previous compressed summaries (progressive context loss bug)
+	// SEQUENTIAL COMPRESSION TESTS: Verify first_prompt_idx stays at original
+	// user message and old compressed summaries get re-compressed (not orphaned)
 	// ============================================================================
 
 	#[test]
 	#[allow(clippy::vec_init_then_push)]
-	fn sequential_compression_first_prompt_idx_updates_correctly() {
-		// CRITICAL TEST: After compression, first_prompt_idx must point to the
-		// compressed summary position (start_idx + 1), not the original user message.
-		//
-		// BUG SCENARIO (before fix):
-		// - First compression: first_prompt_idx stays at original user message (index 1)
-		// - Second compression: start_idx = 1 again, compressed summary at index 2
-		//   is in the drain range and gets re-compressed
-		// - Result: progressive context loss on each compression
-		//
-		// FIX: After compression, first_prompt_idx = Some(start_idx + 1)
-		// This makes the compressed summary the new anchor for next compression.
+	fn first_prompt_idx_never_changes_after_compression() {
+		// first_prompt_idx must always point to the original first user message.
+		// It is set once in main_loop.rs and never updated by compression.
+		// This ensures the anchor is always the original user prompt.
 
-		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0
-
-		// First user message (becomes first_prompt_idx)
-		messages.push(msg("user")); // 1
-
-		// Add enough conversation to trigger compression
-		messages.push(msg("assistant")); // 2
-		messages.push(msg("user")); // 3
-		messages.push(msg("assistant")); // 4
-		messages.push(msg("user")); // 5
-		messages.push(msg("assistant")); // 6
-		messages.push(msg("user")); // 7
-		messages.push(msg("assistant")); // 8
-
-		// First compression: start_idx = 1, end_idx = 4
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
-		assert_eq!(start_idx, 1, "start_idx must be first_prompt_idx");
-		assert!(end_idx >= 4, "end_idx must include compressible messages");
-
-		// After compression, first_prompt_idx should be updated to start_idx + 1
-		// This is the position where the compressed summary will be inserted
-		let new_first_prompt_idx = start_idx + 1;
-		assert_eq!(
-			new_first_prompt_idx, 2,
-			"first_prompt_idx must point to compressed summary position"
-		);
-
-		// On second compression, start_idx should be the NEW first_prompt_idx (2)
-		// This means the compressed summary at index 2 is the anchor (kept)
-		let second_start_idx = new_first_prompt_idx;
-		assert_eq!(
-			second_start_idx, 2,
-			"second compression start must be previous compressed summary"
-		);
-
-		// Verify: the compressed summary is NOT in the drain range
-		// drain range is start_idx+1..=end_idx, so index 2 is kept
-		// This is the KEY FIX: compressed summaries are never re-compressed
-	}
-
-	#[test]
-	#[allow(clippy::vec_init_then_push)]
-	fn sequential_compression_preserves_compressed_summaries() {
-		// TEST: Verify that on sequential compressions, previous compressed summaries
-		// are NOT included in the compression range (they become the anchor).
-
-		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0
-		messages.push(msg("user")); // 1 - original first user message
-
-		// Simulate state AFTER first compression:
-		// - Original user message at index 1 (kept as anchor)
-		// - Compressed summary at index 2 (inserted after compression)
-		// - New conversation messages after
-		let mut compressed = msg("assistant");
-		compressed.name = Some("plan_compression".to_string());
-		messages.push(compressed); // 2 - compressed summary from first compression
-
-		// Add new conversation after first compression
-		messages.push(msg("user")); // 3
-		messages.push(msg("assistant")); // 4
-		messages.push(msg("user")); // 5
-		messages.push(msg("assistant")); // 6
-		messages.push(msg("user")); // 7
-		messages.push(msg("assistant")); // 8
-
-		// With first_prompt_idx = 2 (pointing to compressed summary)
-		// find_compression_range should return start_idx = 2
-		let (start_idx, _end_idx) = find_compression_range(&messages, Some(2)).unwrap();
-
-		assert_eq!(
-			start_idx, 2,
-			"start_idx must be the compressed summary position"
-		);
-
-		// The drain range is start_idx+1..=end_idx = 3..=end_idx
-		// This means index 2 (compressed summary) is KEPT, not drained
-		// This is the critical fix: compressed summaries are preserved
-
-		// Verify: messages_to_compress should NOT include index 2
-		// (This is verified by the fix in check_and_compress_conversation)
-	}
-
-	#[test]
-	#[allow(clippy::vec_init_then_push)]
-	fn messages_to_compress_excludes_anchor_message() {
-		// CRITICAL TEST: messages_to_compress must be start_idx+1..=end_idx,
-		// NOT start_idx..=end_idx. The anchor at start_idx is KEPT by
-		// remove_messages_in_range, so it should NOT be in the compression input.
-
-		// No need to import estimate_message_tokens - we're just checking content presence
-
-		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0
-
-		// Anchor message (will be at start_idx, kept by remove_messages_in_range)
-		let mut anchor = msg("user"); // 1
-		anchor.content = "IMPORTANT CONTEXT THAT MUST NOT BE SUMMARIZED".to_string();
-		messages.push(anchor);
-
-		// Messages that will be compressed
-		messages.push(msg("assistant")); // 2
-		messages.push(msg("user")); // 3
-		messages.push(msg("assistant")); // 4
-
-		// Preserved messages (last 4 conversation messages)
-		messages.push(msg("user")); // 5
-		messages.push(msg("assistant")); // 6
-		messages.push(msg("user")); // 7
-		messages.push(msg("assistant")); // 8
-
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
-		assert_eq!(start_idx, 1, "start_idx must be first_prompt_idx");
-
-		// CORRECT: messages_to_compress should be start_idx+1..=end_idx
-		// This excludes the anchor message at start_idx
-		let correct_messages_to_compress: Vec<_> = messages[start_idx + 1..=end_idx].to_vec();
-
-		// WRONG (old bug): messages_to_compress was start_idx..=end_idx
-		// This would include the anchor message in the summarization input
-		let wrong_messages_to_compress: Vec<_> = messages[start_idx..=end_idx].to_vec();
-
-		// Verify the difference
-		assert_eq!(correct_messages_to_compress.len(), end_idx - start_idx);
-		assert_eq!(wrong_messages_to_compress.len(), end_idx - start_idx + 1);
-		assert!(wrong_messages_to_compress.len() > correct_messages_to_compress.len());
-
-		// The anchor message content should NOT be in correct_messages_to_compress
-		let anchor_content = "IMPORTANT CONTEXT THAT MUST NOT BE SUMMARIZED";
-		let anchor_in_correct = correct_messages_to_compress
-			.iter()
-			.any(|m| m.content.contains(anchor_content));
-		let anchor_in_wrong = wrong_messages_to_compress
-			.iter()
-			.any(|m| m.content.contains(anchor_content));
-
-		assert!(
-			!anchor_in_correct,
-			"Anchor message must NOT be in messages_to_compress"
-		);
-		assert!(
-			anchor_in_wrong,
-			"Old bug: anchor WAS in messages_to_compress"
-		);
-	}
-
-	#[test]
-	#[allow(clippy::vec_init_then_push)]
-	fn calculate_range_tokens_matches_actual_removal() {
-		// CRITICAL TEST: calculate_range_tokens must count exactly the messages
-		// that will be removed by remove_messages_in_range.
-		//
-		// remove_messages_in_range(start_idx, end_idx) drains start_idx+1..=end_idx
-		// So calculate_range_tokens must be called with (start_idx+1, end_idx)
-
-		use crate::session::estimate_message_tokens;
-
-		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0
-
-		// Anchor message (kept)
-		let mut anchor = msg("user");
-		anchor.content = "x".repeat(1000); // Large content
-		messages.push(anchor); // 1
-
-		// Messages to be removed
-		for i in 0..4 {
-			let mut m = msg(if i % 2 == 0 { "assistant" } else { "user" });
-			m.content = format!("Message {}", i);
-			messages.push(m);
-		} // 2, 3, 4, 5
-
-		// Preserved messages
-		for i in 0..4 {
-			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
-		} // 6, 7, 8, 9
-
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
-
-		// Calculate tokens that WILL BE REMOVED (correct)
-		let mut tokens_removed = 0u64;
-		for msg in messages.iter().take(end_idx + 1).skip(start_idx + 1) {
-			tokens_removed += estimate_message_tokens(msg) as u64;
-		}
-
-		// Calculate tokens in WRONG range (old bug: included anchor)
-		let mut tokens_with_anchor = 0u64;
-		for msg in messages.iter().take(end_idx + 1).skip(start_idx) {
-			tokens_with_anchor += estimate_message_tokens(msg) as u64;
-		}
-
-		// The anchor message tokens should NOT be counted as "compressible"
-		let anchor_tokens = estimate_message_tokens(&messages[start_idx]) as u64;
-
-		assert_eq!(
-			tokens_with_anchor - tokens_removed,
-			anchor_tokens,
-			"Difference must be exactly the anchor message tokens"
-		);
-
-		// CORRECT: calculate_range_tokens(session, start_idx + 1, end_idx)
-		// WRONG (old bug): calculate_range_tokens(session, start_idx, end_idx)
-	}
-
-	#[test]
-	#[allow(clippy::vec_init_then_push)]
-	fn triple_compression_no_progressive_context_loss() {
-		// EXTENSIVE TEST: Simulate three sequential compressions and verify
-		// that compressed summaries accumulate correctly without re-compression.
-
-		// Initial state: system + user + assistant pairs
 		let mut messages = Vec::new();
 		messages.push(msg("system")); // 0
 		messages.push(msg("user")); // 1 - first_prompt_idx
-
-		// Add enough messages for first compression
 		for i in 0..8 {
 			messages.push(msg(if i % 2 == 0 { "assistant" } else { "user" }));
 		} // 2-9
 
-		// === FIRST COMPRESSION ===
-		let first_prompt_idx = 1;
-		let (start1, _end1) = find_compression_range(&messages, Some(first_prompt_idx)).unwrap();
-		assert_eq!(start1, 1, "First compression starts at first_prompt_idx");
+		let first_prompt_idx = Some(1usize);
 
-		// After first compression:
-		// - Anchor at index 1 (kept)
-		// - Compressed summary inserted at index 2
-		// - first_prompt_idx updated to 2
-		let new_first_prompt_idx_1 = start1 + 1;
+		// First compression
+		let (start1, end1) = find_compression_range(&messages, first_prompt_idx).unwrap();
+		assert_eq!(start1, 1, "start_idx must be first_prompt_idx");
+		assert!(end1 >= 4);
+
+		// After compression, first_prompt_idx stays Some(1) — NOT updated.
+		// The compressed summary is inserted at index 2, but the anchor stays at 1.
 		assert_eq!(
-			new_first_prompt_idx_1, 2,
-			"first_prompt_idx must point to compressed summary"
+			first_prompt_idx,
+			Some(1),
+			"first_prompt_idx must not change"
 		);
 
-		// === SIMULATE STATE AFTER FIRST COMPRESSION ===
-		let mut messages_after_1 = Vec::new();
-		messages_after_1.push(msg("system")); // 0
-		messages_after_1.push(msg("user")); // 1 - original anchor (kept)
-		let mut comp1 = msg("assistant");
-		comp1.name = Some("plan_compression".to_string());
-		comp1.content = "COMPRESSED_V1".to_string();
-		messages_after_1.push(comp1); // 2 - compressed summary
-								// Preserved messages from first compression
-		messages_after_1.push(msg("user")); // 3
-		messages_after_1.push(msg("assistant")); // 4
-		messages_after_1.push(msg("user")); // 5
-		messages_after_1.push(msg("assistant")); // 6
+		// Simulate post-compression state: anchor at 1, summary at 2, preserved tail
+		let mut after = Vec::new();
+		after.push(msg("system")); // 0
+		after.push(msg("user")); // 1 - anchor (kept)
+		let mut comp = msg("assistant");
+		comp.name = Some("plan_compression".to_string());
+		after.push(comp); // 2 - compressed summary
+		for i in 0..8 {
+			after.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
+		} // 3-10
 
-		// Add more messages for second compression
-		for i in 0..4 {
-			messages_after_1.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
-		} // 7-10
-
-		// === SECOND COMPRESSION ===
-		let (start2, _end2) =
-			find_compression_range(&messages_after_1, Some(new_first_prompt_idx_1)).unwrap();
-
-		// CRITICAL: start2 must be 2 (the compressed summary position)
-		// NOT 1 (the original user message)
+		// Second compression — first_prompt_idx is STILL Some(1)
+		let (start2, end2) = find_compression_range(&after, first_prompt_idx).unwrap();
 		assert_eq!(
-			start2, 2,
-			"Second compression must start at compressed summary"
+			start2, 1,
+			"second compression also starts at original anchor"
+		);
+		assert!(end2 >= 4);
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn old_compressed_summary_is_recompressed_on_next_cycle() {
+		// After first compression, the summary sits at index 2 (role=assistant).
+		// On second compression with first_prompt_idx=Some(1), start_idx=1,
+		// so the drain range is [2..=end_idx] — the old summary IS drained.
+		// This is correct: each cycle folds all prior context into one fresh summary.
+
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("user")); // 1 - permanent anchor
+		let mut comp = msg("assistant");
+		comp.name = Some("plan_compression".to_string());
+		comp.content = "OLD_SUMMARY_V1".to_string();
+		messages.push(comp); // 2 - old compressed summary
+		for i in 0..8 {
+			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
+		} // 3-10
+
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		assert_eq!(start_idx, 1, "start at permanent anchor");
+
+		// Drain range is start_idx+1..=end_idx = 2..=end_idx
+		// Index 2 (old summary) IS in the drain range — it gets re-compressed
+		let drain_range = (start_idx + 1)..=end_idx;
+		assert!(
+			drain_range.contains(&2),
+			"Old compressed summary must be IN the drain range (re-compressed)"
 		);
 
-		// The drain range is start2+1..=end2
-		// This means COMPRESSED_V1 at index 2 is KEPT (anchor)
-		// The original user message at index 1 is also KEPT (before anchor)
-
-		// After second compression:
-		// - Index 0: system
-		// - Index 1: original user (kept, before anchor)
-		// - Index 2: COMPRESSED_V1 (anchor, kept)
-		// - Index 3: COMPRESSED_V2 (new compressed summary)
-		// - Preserved messages after
-		let new_first_prompt_idx_2 = start2 + 1;
-		assert_eq!(
-			new_first_prompt_idx_2, 3,
-			"first_prompt_idx must point to new compressed summary"
+		// messages_to_compress includes the old summary
+		let to_compress = &messages[start_idx + 1..=end_idx];
+		assert!(
+			to_compress
+				.iter()
+				.any(|m| m.content.contains("OLD_SUMMARY_V1")),
+			"Old summary must be included in messages sent to AI for re-compression"
 		);
+	}
 
-		// === SIMULATE STATE AFTER SECOND COMPRESSION ===
-		let mut messages_after_2 = Vec::new();
-		messages_after_2.push(msg("system")); // 0
-		messages_after_2.push(msg("user")); // 1 - original (kept)
-		let mut comp1_kept = msg("assistant");
-		comp1_kept.name = Some("plan_compression".to_string());
-		comp1_kept.content = "COMPRESSED_V1".to_string();
-		messages_after_2.push(comp1_kept); // 2 - first compressed (kept as anchor)
-		let mut comp2 = msg("assistant");
-		comp2.name = Some("plan_compression".to_string());
-		comp2.content = "COMPRESSED_V2".to_string();
-		messages_after_2.push(comp2); // 3 - second compressed
-								// Preserved messages
-		messages_after_2.push(msg("user")); // 4
-		messages_after_2.push(msg("assistant")); // 5
-		messages_after_2.push(msg("user")); // 6
-		messages_after_2.push(msg("assistant")); // 7
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn triple_compression_always_one_summary() {
+		// After N compressions, there is always exactly ONE compressed summary
+		// between the anchor and the preserved tail — never accumulating orphans.
+		//
+		// Cycle 1: [sys, user(anchor), asst, user, asst, ...] → drain 2..=end → insert summary at 2
+		// Cycle 2: [sys, user(anchor), summary_v1, user, asst, ...] → drain 2..=end → insert summary at 2
+		// Cycle 3: [sys, user(anchor), summary_v2, user, asst, ...] → drain 2..=end → insert summary at 2
+		//
+		// Each cycle: anchor stays at 1, old summary drained, new summary at 2.
 
-		// Add more messages for third compression
-		for i in 0..4 {
-			messages_after_2.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
-		} // 8-11
+		// Simulate state after 2nd compression
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("user")); // 1 - permanent anchor
+		let mut comp = msg("assistant");
+		comp.name = Some("plan_compression".to_string());
+		comp.content = "SUMMARY_V2".to_string();
+		messages.push(comp); // 2 - summary from 2nd compression
+		for i in 0..8 {
+			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
+		} // 3-10
 
-		// === THIRD COMPRESSION ===
-		let (start3, _end3) =
-			find_compression_range(&messages_after_2, Some(new_first_prompt_idx_2)).unwrap();
+		// 3rd compression — still starts at anchor (1)
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		assert_eq!(start_idx, 1);
 
-		// CRITICAL: start3 must be 3 (the second compressed summary position)
-		assert_eq!(
-			start3, 3,
-			"Third compression must start at second compressed summary"
-		);
+		// Old summary at 2 is in drain range
+		assert!((start_idx + 1..=end_idx).contains(&2));
 
-		// The drain range is start3+1..=end3
-		// This means:
-		// - Index 1: original user (kept, before all anchors)
-		// - Index 2: COMPRESSED_V1 (kept, before anchor)
-		// - Index 3: COMPRESSED_V2 (anchor, kept)
-		// - Index 4: COMPRESSED_V3 (new compressed summary)
-
-		// KEY INSIGHT: Each compressed summary is the anchor for the NEXT compression
-		// Previous summaries are NEVER re-compressed, they accumulate
-		// This prevents progressive context loss
-
-		let new_first_prompt_idx_3 = start3 + 1;
-		assert_eq!(
-			new_first_prompt_idx_3, 4,
-			"first_prompt_idx must point to third compressed summary"
-		);
-
-		// Verify: All three compressed summaries exist and are distinct
-		// No re-compression means no information loss from previous compressions
+		// After drain + insert: anchor at 1, new summary at 2, preserved tail after
+		// No accumulation of old summaries — always exactly one.
 	}
 
 	#[test]
@@ -2776,6 +2548,91 @@ mod tests {
 		assert!(
 			messages_to_remove < before_count,
 			"Must remove fewer messages than total"
+		);
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn messages_to_compress_excludes_anchor_message() {
+		// messages_to_compress must be start_idx+1..=end_idx (exclude anchor).
+		// The anchor at start_idx is KEPT by remove_messages_in_range.
+
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+
+		let mut anchor = msg("user"); // 1
+		anchor.content = "ANCHOR_CONTENT_MUST_NOT_BE_SUMMARIZED".to_string();
+		messages.push(anchor);
+
+		messages.push(msg("assistant")); // 2
+		messages.push(msg("user")); // 3
+		messages.push(msg("assistant")); // 4
+		messages.push(msg("user")); // 5
+		messages.push(msg("assistant")); // 6
+		messages.push(msg("user")); // 7
+		messages.push(msg("assistant")); // 8
+
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		assert_eq!(start_idx, 1);
+
+		let correct = &messages[start_idx + 1..=end_idx];
+		let wrong = &messages[start_idx..=end_idx];
+
+		assert_eq!(correct.len(), end_idx - start_idx);
+		assert_eq!(wrong.len(), end_idx - start_idx + 1);
+
+		assert!(
+			!correct.iter().any(|m| m.content.contains("ANCHOR_CONTENT")),
+			"Anchor must NOT be in messages_to_compress"
+		);
+		assert!(
+			wrong.iter().any(|m| m.content.contains("ANCHOR_CONTENT")),
+			"Old bug: anchor WAS in messages_to_compress"
+		);
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn calculate_range_tokens_matches_actual_removal() {
+		// calculate_range_tokens must count exactly the messages removed by
+		// remove_messages_in_range (start_idx+1..=end_idx), not including anchor.
+
+		use crate::session::estimate_message_tokens;
+
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+
+		let mut anchor = msg("user");
+		anchor.content = "x".repeat(1000);
+		messages.push(anchor); // 1
+
+		for i in 0..4 {
+			let mut m = msg(if i % 2 == 0 { "assistant" } else { "user" });
+			m.content = format!("Message {}", i);
+			messages.push(m);
+		} // 2-5
+
+		for i in 0..4 {
+			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
+		} // 6-9
+
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+
+		let mut tokens_removed = 0u64;
+		for msg in messages.iter().take(end_idx + 1).skip(start_idx + 1) {
+			tokens_removed += estimate_message_tokens(msg) as u64;
+		}
+
+		let mut tokens_with_anchor = 0u64;
+		for msg in messages.iter().take(end_idx + 1).skip(start_idx) {
+			tokens_with_anchor += estimate_message_tokens(msg) as u64;
+		}
+
+		let anchor_tokens = estimate_message_tokens(&messages[start_idx]) as u64;
+		assert_eq!(
+			tokens_with_anchor - tokens_removed,
+			anchor_tokens,
+			"Difference must be exactly the anchor message tokens"
 		);
 	}
 }
