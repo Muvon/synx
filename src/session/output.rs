@@ -60,6 +60,7 @@ impl OutputMode {
 	/// Create OutputMode from a runtime_output_mode string (no terminal detection needed)
 	pub fn from_runtime_mode(mode: &str) -> Self {
 		match mode {
+			"interactive" => Self::Interactive,
 			"jsonl" => Self::Jsonl,
 			"websocket" => Self::WebSocket,
 			_ => Self::NonInteractive,
@@ -180,6 +181,27 @@ mod tests {
 		);
 		assert_eq!(
 			OutputMode::from_cli_arg("unknown", false),
+			OutputMode::NonInteractive
+		);
+	}
+
+	#[test]
+	fn test_output_mode_from_runtime_mode() {
+		assert_eq!(
+			OutputMode::from_runtime_mode("interactive"),
+			OutputMode::Interactive
+		);
+		assert_eq!(
+			OutputMode::from_runtime_mode("plain"),
+			OutputMode::NonInteractive
+		);
+		assert_eq!(OutputMode::from_runtime_mode("jsonl"), OutputMode::Jsonl);
+		assert_eq!(
+			OutputMode::from_runtime_mode("websocket"),
+			OutputMode::WebSocket
+		);
+		assert_eq!(
+			OutputMode::from_runtime_mode("unknown"),
 			OutputMode::NonInteractive
 		);
 	}

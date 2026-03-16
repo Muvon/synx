@@ -22,7 +22,6 @@
 //! - Responds INSTANTLY to Ctrl+C cancellation (no delays)
 
 use crate::log_debug;
-use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -220,8 +219,8 @@ impl AnimationManager {
 		// Stop any existing animation first
 		self.stop_current().await;
 
-		// Don't show animation in non-interactive modes
-		if mode.should_suppress_cli_output() {
+		// Only show animation in interactive mode
+		if !mode.should_show_animations() {
 			return;
 		}
 
@@ -234,15 +233,14 @@ impl AnimationManager {
 		// Stop any existing animation first
 		self.stop_current().await;
 
-		// Don't show animation in non-interactive mode
-		if !std::io::stdin().is_terminal() {
-			// Show static line for non-interactive mode
-			use crate::config::with_thread_config;
-			let should_print =
-				with_thread_config(|config| !config.output_mode().should_suppress_cli_output())
-					.unwrap_or(true);
+		// Resolve output mode from thread config
+		let output_mode = crate::config::with_thread_config(|config| config.output_mode())
+			.unwrap_or(crate::session::output::OutputMode::NonInteractive);
 
-			if should_print {
+		// Only show animated spinner in interactive mode
+		if !output_mode.should_show_animations() {
+			// Show static line for non-interactive terminal modes (not jsonl/websocket)
+			if output_mode.is_terminal_mode() {
 				if cost > 0.0 {
 					println!(
 						" ── cost: ${:.5} ────────────────────────────────────────",

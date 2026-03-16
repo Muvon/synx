@@ -147,8 +147,14 @@ pub async fn setup_and_initialize_session<T: std::fmt::Debug>(
 		config_for_role.custom_instructions_file_name = path.clone();
 	}
 
-	// Store output_mode in config for later use in main loop
-	config_for_role.runtime_output_mode = Some(output_mode.clone());
+	// Store resolved output_mode in config for later use (animation decisions, etc.)
+	// Resolve "plain" → "interactive" when running in a terminal
+	let resolved_output_mode = if output_mode == "plain" && std::io::stdin().is_terminal() {
+		"interactive".to_string()
+	} else {
+		output_mode.clone()
+	};
+	config_for_role.runtime_output_mode = Some(resolved_output_mode);
 	if config_for_role.max_session_tokens_threshold > 0 {
 		if let Err(e) =
 			crate::session::validate_session_token_threshold(&config_for_role, &role, &current_dir)

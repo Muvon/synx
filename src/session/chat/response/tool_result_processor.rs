@@ -58,7 +58,10 @@ pub async fn process_tool_results(
 	// This prevents animation from covering prompts in race conditions
 	if !animation_manager.is_suspended() {
 		animation_manager
-			.start_animation(&crate::session::output::OutputMode::Interactive)
+			.start_animation(
+				&crate::config::with_thread_config(|c| c.output_mode())
+					.unwrap_or(crate::session::output::OutputMode::NonInteractive),
+			)
 			.await;
 	} else {
 		log_debug!("Animation suspended during tool result processing - not restarting");
