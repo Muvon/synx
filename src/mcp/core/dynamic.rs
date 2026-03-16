@@ -267,16 +267,33 @@ pub fn is_persisted(name: &str) -> bool {
 ///
 /// Writes `<config_dir>/mcp-<name>.toml` with `[[mcp.servers]]` format
 /// so it gets auto-loaded and merged on next startup.
+///
+/// If the server is currently enabled, sets auto_bind to the current role.
+/// If the server is disabled, clears auto_bind (so it won't auto-activate).
 pub fn persist_server(name: &str) -> Result<std::path::PathBuf> {
-	let server = {
+	let (server, is_enabled) = {
 		let manager = get_manager();
 		let state = manager.read().unwrap();
-		state
+		let server = state
 			.servers
 			.get(name)
 			.cloned()
-			.ok_or_else(|| anyhow::anyhow!("Server '{}' not registered", name))?
+			.ok_or_else(|| anyhow::anyhow!("Server '{}' not registered", name))?;
+		let is_enabled = *state.enabled.get(name).unwrap_or(&false);
+		(server, is_enabled)
 	};
+
+	// Determine auto_bind based on enabled state and current role
+	let auto_bind = if is_enabled {
+		// If enabled, set auto_bind to current role
+		crate::config::get_thread_role().map(|role| vec![role])
+	} else {
+		// If disabled, clear auto_bind
+		None
+	};
+
+	// Apply auto_bind change
+	let server = server.with_auto_bind(auto_bind);
 
 	// Wrap in the config structure so it serializes as [[mcp.servers]]
 	#[derive(serde::Serialize)]
@@ -330,7 +347,7 @@ pub fn clear_all() {
 pub fn get_mcp_tool_function() -> McpFunction {
 	McpFunction {
 		name: "mcp".to_string(),
-		description: "Manage MCP servers at runtime without editing config. Use when:\n- You need a tool that's available in an MCP server but not currently configured\n- You want to test a server temporarily before adding to config\n- You need different servers for different tasks\n\nActions:\n- list: Show currently loaded dynamic servers and their tools\n- add: Register a new MCP server config (does NOT connect yet)\n- enable: Connect to a registered server and activate its tools\n- disable: Deactivate a server's tools (config stays registered)\n- remove: Unregister a server entirely\n- persist: Save a registered server to config dir so it auto-loads on next startup\n- unpersist: Remove a persisted server config file".to_string(),
+		description: "Manage MCP servers at runtime without editing config. Use when:\n- You need a tool that's available in an MCP server but not currently configured\n- You want to test a server temporarily before adding to config\n- You need different servers for different tasks\n\nActions:\n- list: Show currently loaded dynamic servers and their tools\n- add: Register a new MCP server config (does NOT connect yet)\n- enable: Connect to a registered server and activate its tools\n- disable: Deactivate a server's tools (config stays registered)\n- remove: Unregister a server entirely\n- persist: Save a registered server to config dir. If enabled, auto-binds to current role. If disabled, clears auto_bind.\n- unpersist: Remove a persisted server config file".to_string(),
 		parameters: json!({
 			"type": "object",
 			"properties": {
@@ -527,6 +544,7 @@ async fn handle_add(call: &crate::mcp::McpToolCall) -> Result<McpToolResult> {
 				args,
 				timeout_seconds,
 				tools,
+				auto_bind: None,
 			}
 		}
 		"http" => {
@@ -545,7 +563,6 @@ async fn handle_add(call: &crate::mcp::McpToolCall) -> Result<McpToolResult> {
 				.get("auth_token")
 				.and_then(|v| v.as_str())
 				.map(String::from);
-
 			McpServerConfig::Http {
 				name,
 				url,
@@ -553,6 +570,7 @@ async fn handle_add(call: &crate::mcp::McpToolCall) -> Result<McpToolResult> {
 				oauth: None,
 				timeout_seconds,
 				tools,
+				auto_bind: None,
 			}
 		}
 		_ => {
@@ -696,16 +714,45 @@ async fn handle_persist(call: &crate::mcp::McpToolCall) -> Result<McpToolResult>
 		}
 	};
 
+	// Check if server is enabled to determine auto_bind behavior
+	let is_enabled = {
+		let manager = get_manager();
+		let state = manager.read().unwrap();
+		*state.enabled.get(&name).unwrap_or(&false)
+	};
+
+	let current_role = crate::config::get_thread_role();
+
 	match persist_server(&name) {
-		Ok(path) => Ok(McpToolResult::success(
-			call.tool_name.clone(),
-			call.tool_id.clone(),
-			format!(
-				"Server '{}' persisted to {}. It will auto-load on next startup.",
-				name,
-				path.display()
-			),
-		)),
+		Ok(path) => {
+			let msg = if is_enabled {
+				if let Some(ref role) = current_role {
+					format!(
+						"Server '{}' persisted to {}. Auto-bind set to role '{}'.",
+						name,
+						path.display(),
+						role
+					)
+				} else {
+					format!(
+						"Server '{}' persisted to {}. It will auto-load on next startup.",
+						name,
+						path.display()
+					)
+				}
+			} else {
+				format!(
+					"Server '{}' persisted to {}. Auto-bind cleared (server disabled).",
+					name,
+					path.display()
+				)
+			};
+			Ok(McpToolResult::success(
+				call.tool_name.clone(),
+				call.tool_id.clone(),
+				msg,
+			))
+		}
 		Err(e) => Ok(McpToolResult::error(
 			call.tool_name.clone(),
 			call.tool_id.clone(),

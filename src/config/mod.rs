@@ -313,11 +313,13 @@ impl McpConfig {
 					McpServerConfig::Builtin {
 						timeout_seconds,
 						tools,
+						auto_bind,
 						..
 					} => McpServerConfig::Builtin {
 						name,
 						timeout_seconds,
 						tools,
+						auto_bind,
 					},
 					McpServerConfig::Http {
 						name: _,
@@ -326,6 +328,7 @@ impl McpConfig {
 						oauth,
 						timeout_seconds,
 						tools,
+						auto_bind,
 					} => McpServerConfig::Http {
 						name,
 						url,
@@ -333,12 +336,14 @@ impl McpConfig {
 						oauth,
 						timeout_seconds,
 						tools,
+						auto_bind,
 					},
 					McpServerConfig::Stdin {
 						command,
 						args,
 						timeout_seconds,
 						tools,
+						auto_bind,
 						..
 					} => McpServerConfig::Stdin {
 						name,
@@ -346,6 +351,7 @@ impl McpConfig {
 						args,
 						timeout_seconds,
 						tools,
+						auto_bind,
 					},
 				}
 			})
@@ -384,12 +390,14 @@ impl Config {
 
 	/// Get enabled servers for a role with runtime core server injection
 	/// This ensures core servers are ALWAYS available regardless of config file state
+	/// Also includes servers that auto-bind to the given role.
 	pub fn get_enabled_servers_for_role(
 		&self,
 		role_mcp_config: &RoleMcpConfig,
+		role_name: Option<&str>,
 	) -> Vec<McpServerConfig> {
 		// Use the updated RoleMcpConfig method that has runtime injection
-		role_mcp_config.get_enabled_servers(&self.mcp.servers)
+		role_mcp_config.get_enabled_servers(&self.mcp.servers, role_name)
 	}
 	/// Get the global log level (system-wide setting)
 	pub fn get_log_level(&self) -> LogLevel {
@@ -448,7 +456,8 @@ impl Config {
 
 		// CRITICAL FIX: Create a legacy McpConfig for backward compatibility with existing code
 		// Use the new runtime injection method to ensure core servers are ALWAYS available
-		let enabled_servers = self.get_enabled_servers_for_role(role_mcp_config);
+		// Also includes servers that auto-bind to this role.
+		let enabled_servers = self.get_enabled_servers_for_role(role_mcp_config, Some(mode));
 
 		crate::log_debug!(
 			"TRACE: Role '{}' server_refs: {:?}",
@@ -508,10 +517,9 @@ impl Config {
 }
 
 // Logging macros for different log levels
-// These macros automatically check the current log level and only print if appropriate
-
 thread_local! {
 	static CURRENT_CONFIG: RefCell<Option<Config>> = const { RefCell::new(None) };
+	static CURRENT_ROLE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Set the current config for the thread (to be used by logging macros)
@@ -521,6 +529,18 @@ pub fn set_thread_config(config: &Config) {
 	});
 }
 
+/// Set the current role for the thread (to be used by MCP tools)
+pub fn set_thread_role(role: &str) {
+	CURRENT_ROLE.with(|r| {
+		*r.borrow_mut() = Some(role.to_string());
+	});
+}
+
+/// Get the current role for the thread
+pub fn get_thread_role() -> Option<String> {
+	CURRENT_ROLE.with(|r| (*r.borrow()).clone())
+}
+
 /// Get the current config for the thread
 pub fn with_thread_config<F, R>(f: F) -> Option<R>
 where
@@ -528,7 +548,6 @@ where
 {
 	CURRENT_CONFIG.with(|c| (*c.borrow()).as_ref().map(f))
 }
-// ============================================================================
 // LOGGING MACROS
 // ============================================================================
 // These macros route log output based on whether tracing is initialized:

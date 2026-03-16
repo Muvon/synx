@@ -25,6 +25,9 @@ pub enum McpServerConfig {
 		name: String,
 		timeout_seconds: u64,
 		tools: Vec<String>,
+		/// Roles that should automatically include this server (without explicit server_refs)
+		#[serde(skip_serializing_if = "Option::is_none")]
+		auto_bind: Option<Vec<String>>,
 	},
 	#[serde(rename = "http")]
 	Http {
@@ -38,6 +41,9 @@ pub enum McpServerConfig {
 		oauth: Option<OAuthConfig>,
 		timeout_seconds: u64,
 		tools: Vec<String>,
+		/// Roles that should automatically include this server (without explicit server_refs)
+		#[serde(skip_serializing_if = "Option::is_none")]
+		auto_bind: Option<Vec<String>>,
 	},
 	#[serde(rename = "stdio")]
 	Stdin {
@@ -46,6 +52,9 @@ pub enum McpServerConfig {
 		args: Vec<String>,
 		timeout_seconds: u64,
 		tools: Vec<String>,
+		/// Roles that should automatically include this server (without explicit server_refs)
+		#[serde(skip_serializing_if = "Option::is_none")]
+		auto_bind: Option<Vec<String>>,
 	},
 }
 
@@ -98,6 +107,23 @@ impl McpServerConfig {
 			McpServerConfig::Http { tools, .. } => tools,
 			McpServerConfig::Stdin { tools, .. } => tools,
 		}
+	}
+
+	/// Get auto_bind roles for this server (if configured)
+	/// Returns roles that should automatically include this server
+	pub fn auto_bind_roles(&self) -> Option<&[String]> {
+		match self {
+			McpServerConfig::Builtin { auto_bind, .. } => auto_bind.as_deref(),
+			McpServerConfig::Http { auto_bind, .. } => auto_bind.as_deref(),
+			McpServerConfig::Stdin { auto_bind, .. } => auto_bind.as_deref(),
+		}
+	}
+
+	/// Check if this server auto-binds to a specific role
+	pub fn auto_binds_to(&self, role_name: &str) -> bool {
+		self.auto_bind_roles()
+			.map(|roles| roles.iter().any(|r| r == role_name))
+			.unwrap_or(false)
 	}
 
 	/// Get URL for HTTP servers (if available)
@@ -173,6 +199,7 @@ impl McpServerConfig {
 			name: name.to_string(),
 			timeout_seconds,
 			tools,
+			auto_bind: None,
 		}
 	}
 
@@ -201,6 +228,7 @@ impl McpServerConfig {
 			oauth,
 			timeout_seconds,
 			tools,
+			auto_bind: None,
 		}
 	}
 
@@ -218,9 +246,60 @@ impl McpServerConfig {
 			args,
 			timeout_seconds,
 			tools,
+			auto_bind: None,
 		}
 	}
 
+	/// Create a copy of this config with a different auto_bind value
+	///
+	/// This is useful for persisting servers with modified auto_bind settings.
+	pub fn with_auto_bind(&self, auto_bind: Option<Vec<String>>) -> Self {
+		match self {
+			McpServerConfig::Builtin {
+				name,
+				timeout_seconds,
+				tools,
+				..
+			} => McpServerConfig::Builtin {
+				name: name.clone(),
+				timeout_seconds: *timeout_seconds,
+				tools: tools.clone(),
+				auto_bind,
+			},
+			McpServerConfig::Http {
+				name,
+				url,
+				auth_token,
+				oauth,
+				timeout_seconds,
+				tools,
+				..
+			} => McpServerConfig::Http {
+				name: name.clone(),
+				url: url.clone(),
+				auth_token: auth_token.clone(),
+				oauth: oauth.clone(),
+				timeout_seconds: *timeout_seconds,
+				tools: tools.clone(),
+				auto_bind,
+			},
+			McpServerConfig::Stdin {
+				name,
+				command,
+				args,
+				timeout_seconds,
+				tools,
+				..
+			} => McpServerConfig::Stdin {
+				name: name.clone(),
+				command: command.clone(),
+				args: args.clone(),
+				timeout_seconds: *timeout_seconds,
+				tools: tools.clone(),
+				auto_bind,
+			},
+		}
+	}
 	/// Validate the server configuration
 	///
 	/// Returns `Ok(())` if valid, or `Err(String)` with error message.
@@ -293,12 +372,21 @@ impl RoleMcpConfig {
 
 	/// Get enabled servers from the global registry for this role
 	/// Now works with array format (consistent with layers)
-	pub fn get_enabled_servers(&self, global_servers: &[McpServerConfig]) -> Vec<McpServerConfig> {
-		if self.server_refs.is_empty() {
+	///
+	/// If role_name is provided, also includes servers that auto-bind to this role.
+	pub fn get_enabled_servers(
+		&self,
+		global_servers: &[McpServerConfig],
+		role_name: Option<&str>,
+	) -> Vec<McpServerConfig> {
+		if self.server_refs.is_empty() && role_name.is_none() {
 			return Vec::new();
 		}
 
 		let mut result = Vec::new();
+		let mut added_names = std::collections::HashSet::new();
+
+		// First: add servers from explicit server_refs
 		for server_name in &self.server_refs {
 			// Find server by name in the array
 			if let Some(server_config) = global_servers.iter().find(|s| s.name() == *server_name) {
@@ -312,11 +400,13 @@ impl RoleMcpConfig {
 						McpServerConfig::Builtin {
 							name,
 							timeout_seconds,
+							auto_bind,
 							..
 						} => McpServerConfig::Builtin {
 							name,
 							timeout_seconds,
 							tools: filtered_tools,
+							auto_bind,
 						},
 						McpServerConfig::Http {
 							name,
@@ -324,6 +414,7 @@ impl RoleMcpConfig {
 							auth_token,
 							oauth,
 							timeout_seconds,
+							auto_bind,
 							tools: _,
 						} => McpServerConfig::Http {
 							name,
@@ -332,12 +423,14 @@ impl RoleMcpConfig {
 							oauth,
 							timeout_seconds,
 							tools: filtered_tools,
+							auto_bind,
 						},
 						McpServerConfig::Stdin {
 							name,
 							command,
 							args,
 							timeout_seconds,
+							auto_bind,
 							..
 						} => McpServerConfig::Stdin {
 							name,
@@ -345,14 +438,27 @@ impl RoleMcpConfig {
 							args,
 							timeout_seconds,
 							tools: filtered_tools,
+							auto_bind,
 						},
 					};
 				}
 				result.push(server);
+				added_names.insert(server_name.clone());
 			} else {
 				crate::log_debug!(
 					"Server '{server_name}' referenced by role but not found in global registry"
 				);
+			}
+		}
+
+		// Second: add servers that auto-bind to this role
+		if let Some(role) = role_name {
+			for server_config in global_servers {
+				if server_config.auto_binds_to(role) && !added_names.contains(server_config.name())
+				{
+					result.push(server_config.clone());
+					added_names.insert(server_config.name().to_string());
+				}
 			}
 		}
 

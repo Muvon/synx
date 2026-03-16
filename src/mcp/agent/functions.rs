@@ -364,11 +364,12 @@ fn build_agent_config(
 		}
 
 		// Use RoleMcpConfig to resolve server_refs with tool filtering
+		// Note: auto_bind is not applied here since agent configs don't have a role context
 		let role_mcp = crate::config::RoleMcpConfig {
 			server_refs: agent.server_refs.clone(),
 			allowed_tools: agent.allowed_tools.clone(),
 		};
-		let enabled_servers = role_mcp.get_enabled_servers(&all_servers);
+		let enabled_servers = role_mcp.get_enabled_servers(&all_servers, None);
 
 		crate::log_debug!(
 			"Dynamic agent '{}' enabling {} servers from server_refs: {:?}",

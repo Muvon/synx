@@ -75,6 +75,7 @@ pub async fn handle_role(
 	let old_model = session.model.clone();
 	session.role = new_role.to_string();
 	session.temperature = role_config.temperature;
+	crate::config::set_thread_role(&session.role);
 	// Apply role model override if set, otherwise keep current session model
 	if let Some(role_model) = &role_config.model {
 		session.model = role_model.clone();

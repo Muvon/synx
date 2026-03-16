@@ -124,7 +124,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 	// Set the thread-local config for logging macros
 	crate::config::set_thread_config(&current_config);
-
+	crate::config::set_thread_role(&role);
 	// Main interaction loop
 	loop {
 		// SMART CANCELLATION: Handle cancellation with surgical cleanup
@@ -534,7 +534,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 								current_config = updated_config.get_merged_config_for_role(&role);
 								// Update thread config for logging macros
 								crate::config::set_thread_config(&current_config);
-								log_info!("Configuration reloaded successfully");
+								crate::config::set_thread_role(&role);
 							}
 							Err(e) => {
 								log_info!("Error reloading configuration: {}", e);
@@ -835,7 +835,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	// Set the thread-local config for logging macros
 	let mut current_config = config_for_role.clone();
 	crate::config::set_thread_config(&current_config);
-
+	crate::config::set_thread_role(&role);
 	// Use initial_input as the input for this session (convert to owned String for mutability)
 	// Use initial_input as the input for this session (convert to owned String for mutability)
 	let mut input = initial_input.to_string();

@@ -283,7 +283,9 @@ impl LayerConfig {
 			};
 
 			// Use base_config's server registry - it should contain all configured servers
-			let enabled_servers = layer_mcp_config.get_enabled_servers(&base_config.mcp.servers);
+			// Note: auto_bind is not applied here since layers don't have a role context
+			let enabled_servers =
+				layer_mcp_config.get_enabled_servers(&base_config.mcp.servers, None);
 
 			crate::log_debug!(
 				"Layer '{}' enabling {} servers from server_refs: {:?}",
