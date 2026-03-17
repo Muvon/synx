@@ -853,7 +853,7 @@ async fn execute_tool_without_cancellation(
 								"Executing mcp command via core server '{}'",
 								target_server.name()
 							);
-							match core::execute_mcp_command(call).await {
+							match core::execute_mcp_command(call, config).await {
 								Ok(result) => return Ok(result),
 								Err(e) => {
 									return Ok(McpToolResult::error(

@@ -352,7 +352,7 @@ pub fn clear_all() {
 pub fn get_mcp_tool_function() -> McpFunction {
 	McpFunction {
 		name: "mcp".to_string(),
-		description: "Manage MCP servers at runtime without editing config. Use when:\n- You need a tool that's available in an MCP server but not currently configured\n- You want to test a server temporarily before adding to config\n- You need different servers for different tasks\n\nActions:\n- list: Show currently loaded dynamic servers and their tools\n- add: Register a new MCP server config (does NOT connect yet)\n- enable: Connect to a registered server and activate its tools\n- disable: Deactivate a server's tools (config stays registered)\n- remove: Unregister a server entirely\n- persist: Save a registered server to config dir. If enabled, auto-binds to current role. If disabled, clears auto_bind.\n- unpersist: Remove a persisted server config file".to_string(),
+		description: "Manage MCP servers at runtime without editing config. Use when:\n- You need a tool that's available in an MCP server but not currently configured\n- You want to test a server temporarily before adding to config\n- You need different servers for different tasks\n\nActions:\n- list: Show all MCP servers (configured + dynamic) with status and persistence info\n- add: Register a new MCP server config (does NOT connect yet)\n- enable: Connect to a registered server and activate its tools\n- disable: Deactivate a server's tools (config stays registered)\n- remove: Unregister a server entirely\n- persist: Save a registered server to config dir. If enabled, auto-binds to current role. If disabled, clears auto_bind.\n- unpersist: Remove a persisted server config file".to_string(),
 		parameters: json!({
 			"type": "object",
 			"properties": {
@@ -404,7 +404,10 @@ pub fn get_mcp_tool_function() -> McpFunction {
 }
 
 /// Execute the mcp tool command
-pub async fn execute_mcp_command(call: &crate::mcp::McpToolCall) -> Result<McpToolResult> {
+pub async fn execute_mcp_command(
+	call: &crate::mcp::McpToolCall,
+	config: &crate::config::Config,
+) -> Result<McpToolResult> {
 	let params = &call.parameters;
 
 	// Extract action
@@ -420,7 +423,7 @@ pub async fn execute_mcp_command(call: &crate::mcp::McpToolCall) -> Result<McpTo
 	};
 
 	match action {
-		"list" => handle_list(call).await,
+		"list" => handle_list(call, config).await,
 		"add" => handle_add(call).await,
 		"enable" => handle_enable(call).await,
 		"disable" => handle_disable(call).await,
@@ -438,34 +441,87 @@ pub async fn execute_mcp_command(call: &crate::mcp::McpToolCall) -> Result<McpTo
 	}
 }
 
-async fn handle_list(call: &crate::mcp::McpToolCall) -> Result<McpToolResult> {
-	let servers = list_servers();
+async fn handle_list(
+	call: &crate::mcp::McpToolCall,
+	config: &crate::config::Config,
+) -> Result<McpToolResult> {
+	let mut lines = Vec::new();
 
-	if servers.is_empty() {
-		return Ok(McpToolResult::success(
-			call.tool_name.clone(),
-			call.tool_id.clone(),
-			"No dynamic MCP servers registered yet. Use 'add' to register a server.".to_string(),
-		));
+	// Configured servers from the current role's config (passed directly)
+	let configured_servers: Vec<(String, String, Vec<String>)> = config
+		.mcp
+		.servers
+		.iter()
+		.map(|s| {
+			let type_str = match s.connection_type() {
+				crate::config::McpConnectionType::Builtin => "builtin",
+				crate::config::McpConnectionType::Http => "http",
+				crate::config::McpConnectionType::Stdin => "stdio",
+			};
+			(
+				s.name().to_string(),
+				type_str.to_string(),
+				s.tools().to_vec(),
+			)
+		})
+		.collect();
+
+	// Dynamic servers (runtime-added, may or may not be enabled)
+	let dynamic_servers = list_servers();
+
+	if !configured_servers.is_empty() {
+		lines.push("Configured servers:".to_string());
+		lines.push("".to_string());
+		for (name, type_str, tools) in &configured_servers {
+			// Configured servers are always active in the current role
+			let status = "✓ active";
+			let persisted = if is_persisted(name) { " 💾" } else { "" };
+			let tools_str = if tools.is_empty() {
+				"(all tools)".to_string()
+			} else {
+				tools.join(", ")
+			};
+			lines.push(format!(
+				"  {name} [{type_str}] {status}{persisted} → {tools_str}"
+			));
+		}
 	}
 
-	let mut lines = vec!["Dynamic MCP Servers:".to_string(), "".to_string()];
-	for (name, tools, is_enabled) in servers {
-		let status = if is_enabled { "\u{2713}" } else { "\u{2717}" };
-		let persisted = if is_persisted(&name) {
-			" \u{1F4BE}"
-		} else {
-			""
-		};
-		let tools_str = if tools.is_empty() {
-			"(all tools)".to_string()
-		} else {
-			tools.join(", ")
-		};
-		lines.push(format!(
-			"  {} [{}]{} \u{2192} {}",
-			name, status, persisted, tools_str
-		));
+	// Only show dynamic servers not already listed as configured
+	let configured_names: std::collections::HashSet<&str> = configured_servers
+		.iter()
+		.map(|(n, _, _)| n.as_str())
+		.collect();
+
+	let extra_dynamic: Vec<_> = dynamic_servers
+		.iter()
+		.filter(|(name, _, _)| !configured_names.contains(name.as_str()))
+		.collect();
+
+	if !extra_dynamic.is_empty() {
+		if !lines.is_empty() {
+			lines.push("".to_string());
+		}
+		lines.push("Dynamic servers:".to_string());
+		lines.push("".to_string());
+		for (name, tools, is_enabled) in extra_dynamic {
+			let status = if *is_enabled {
+				"✓ enabled"
+			} else {
+				"✗ disabled"
+			};
+			let persisted = if is_persisted(name) { " 💾" } else { "" };
+			let tools_str = if tools.is_empty() {
+				"(all tools)".to_string()
+			} else {
+				tools.join(", ")
+			};
+			lines.push(format!("  {name} {status}{persisted} → {tools_str}"));
+		}
+	}
+
+	if lines.is_empty() {
+		lines.push("No MCP servers configured or registered.".to_string());
 	}
 
 	Ok(McpToolResult::success(
