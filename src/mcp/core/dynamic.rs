@@ -263,6 +263,13 @@ pub fn is_persisted(name: &str) -> bool {
 	persist_file_path(name).map(|p| p.exists()).unwrap_or(false)
 }
 
+/// Result of a persist operation — contains all info needed for the response message.
+pub struct PersistResult {
+	pub path: std::path::PathBuf,
+	/// The auto_bind roles that were written, or None if cleared.
+	pub auto_bind: Option<Vec<String>>,
+}
+
 /// Persist a registered dynamic server to a TOML config file.
 ///
 /// Writes `<config_dir>/mcp-<name>.toml` with `[[mcp.servers]]` format
@@ -270,7 +277,7 @@ pub fn is_persisted(name: &str) -> bool {
 ///
 /// If the server is currently enabled, sets auto_bind to the current role.
 /// If the server is disabled, clears auto_bind (so it won't auto-activate).
-pub fn persist_server(name: &str) -> Result<std::path::PathBuf> {
+pub fn persist_server(name: &str) -> Result<PersistResult> {
 	let (server, is_enabled) = {
 		let manager = get_manager();
 		let state = manager.read().unwrap();
@@ -285,15 +292,13 @@ pub fn persist_server(name: &str) -> Result<std::path::PathBuf> {
 
 	// Determine auto_bind based on enabled state and current role
 	let auto_bind = if is_enabled {
-		// If enabled, set auto_bind to current role
 		crate::config::get_thread_role().map(|role| vec![role])
 	} else {
-		// If disabled, clear auto_bind
 		None
 	};
 
 	// Apply auto_bind change
-	let server = server.with_auto_bind(auto_bind);
+	let server = server.with_auto_bind(auto_bind.clone());
 
 	// Wrap in the config structure so it serializes as [[mcp.servers]]
 	#[derive(serde::Serialize)]
@@ -318,7 +323,7 @@ pub fn persist_server(name: &str) -> Result<std::path::PathBuf> {
 	std::fs::write(&path, toml_str)
 		.map_err(|e| anyhow::anyhow!("Failed to write {}: {}", path.display(), e))?;
 
-	Ok(path)
+	Ok(PersistResult { path, auto_bind })
 }
 
 /// Remove a persisted server config file.
@@ -714,38 +719,24 @@ async fn handle_persist(call: &crate::mcp::McpToolCall) -> Result<McpToolResult>
 		}
 	};
 
-	// Check if server is enabled to determine auto_bind behavior
-	let is_enabled = {
-		let manager = get_manager();
-		let state = manager.read().unwrap();
-		*state.enabled.get(&name).unwrap_or(&false)
-	};
-
-	let current_role = crate::config::get_thread_role();
-
 	match persist_server(&name) {
-		Ok(path) => {
-			let msg = if is_enabled {
-				if let Some(ref role) = current_role {
+		Ok(result) => {
+			let msg = match &result.auto_bind {
+				Some(roles) => {
 					format!(
 						"Server '{}' persisted to {}. Auto-bind set to role '{}'.",
 						name,
-						path.display(),
-						role
-					)
-				} else {
-					format!(
-						"Server '{}' persisted to {}. It will auto-load on next startup.",
-						name,
-						path.display()
+						result.path.display(),
+						roles.join(", ")
 					)
 				}
-			} else {
-				format!(
-					"Server '{}' persisted to {}. Auto-bind cleared (server disabled).",
-					name,
-					path.display()
-				)
+				None => {
+					format!(
+						"Server '{}' persisted to {}. Auto-bind cleared (server disabled).",
+						name,
+						result.path.display()
+					)
+				}
 			};
 			Ok(McpToolResult::success(
 				call.tool_name.clone(),

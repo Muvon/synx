@@ -36,12 +36,14 @@ fn merge_toml_values(base: &toml::Value, override_: &toml::Value) -> toml::Value
 		}
 		// Concatenate arrays of tables (TOML [[...]] style)
 		// This allows split-file configs to ADD entries (e.g. mcp-*.toml adding [[mcp.servers]])
+		// Last entry wins for same-name items (dedup by "name" field)
 		(toml::Value::Array(base_arr), toml::Value::Array(override_arr))
-			if is_array_of_tables(base_arr) && is_array_of_tables(override_arr) =>
+			if is_array_of_tables(base_arr) || is_array_of_tables(override_arr) =>
 		{
 			let mut result = base_arr.clone();
 			result.extend(override_arr.iter().cloned());
-			toml::Value::Array(result)
+			// Deduplicate by "name" field — last entry wins (override files loaded after base)
+			dedup_tables_by_name(result)
 		}
 		// Scalar arrays and other types: override replaces
 		(_, override_) => override_.clone(),
@@ -51,6 +53,41 @@ fn merge_toml_values(base: &toml::Value, override_: &toml::Value) -> toml::Value
 /// Check if a TOML array contains only tables (i.e. [[...]] style)
 fn is_array_of_tables(arr: &[toml::Value]) -> bool {
 	!arr.is_empty() && arr.iter().all(|v| v.is_table())
+}
+
+/// Deduplicate an array of tables by "name" field, keeping the last occurrence.
+/// Items without a "name" field are always kept.
+fn dedup_tables_by_name(arr: Vec<toml::Value>) -> toml::Value {
+	let mut seen = std::collections::HashMap::new();
+	let mut result = Vec::new();
+
+	// First pass: record last index for each name
+	for (i, item) in arr.iter().enumerate() {
+		if let Some(name) = item
+			.as_table()
+			.and_then(|t| t.get("name"))
+			.and_then(|v| v.as_str())
+		{
+			seen.insert(name.to_string(), i);
+		}
+	}
+
+	// Second pass: keep only the last occurrence of each name (and all unnamed items)
+	for (i, item) in arr.into_iter().enumerate() {
+		let name = item
+			.as_table()
+			.and_then(|t| t.get("name"))
+			.and_then(|v| v.as_str())
+			.map(|s| s.to_string());
+
+		match name {
+			Some(n) if seen.get(&n) == Some(&i) => result.push(item),
+			Some(_) => {} // Earlier duplicate — skip
+			None => result.push(item),
+		}
+	}
+
+	toml::Value::Array(result)
 }
 
 /// Load and merge all TOML files from a directory
