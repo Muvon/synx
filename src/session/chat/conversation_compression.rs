@@ -724,43 +724,17 @@ pub async fn check_and_compress_conversation(
 	// so its tokens must NOT be counted as "compressible".
 	let tokens_before = calculate_range_tokens(session, start_idx + 1, end_idx)?;
 
-	// Chunk messages semantically (LOCAL - no API call)
-	// Clone so the borrow ends before the mutable session borrow in ask_ai_decision_and_summary
+	// Clone messages to compress so the borrow ends before the mutable session borrow
 	// CRITICAL: Only include messages that will actually be removed (start_idx+1..=end_idx).
 	// The anchor at start_idx is kept — including it would make the AI summarize content
 	// that remains in the conversation, causing duplication.
 	let messages_to_compress: Vec<crate::session::Message> =
 		session.session.messages[start_idx + 1..=end_idx].to_vec();
-	let chunks = super::semantic_chunking::chunk_messages(&messages_to_compress);
-
-	// Calculate target tokens based on ratio
-	let target_tokens = (tokens_before as f64 / target_ratio) as usize;
-
-	// Select top chunks within budget (LOCAL - no API call)
-	let selected = super::semantic_chunking::select_chunks_within_budget(&chunks, target_tokens);
-
-	// Group by type and relation (LOCAL - no API call)
-	let (critical_text, reference_text, context_chunks) = group_chunks_by_type(&selected);
-
-	// Combine critical and reference
-	let preserved_text = if !critical_text.is_empty() && !reference_text.is_empty() {
-		format!("{}\n{}", critical_text, reference_text)
-	} else if !critical_text.is_empty() {
-		critical_text
-	} else {
-		reference_text
-	};
 
 	// OPTIMIZATION: Single API call for decision + summary (1-hop instead of 2-hop)
-	let (should_compress, context_summary) = ask_ai_decision_and_summary(
-		session,
-		config,
-		&messages_to_compress,
-		&context_chunks,
-		operation_rx,
-		force,
-	)
-	.await?;
+	let (should_compress, context_summary) =
+		ask_ai_decision_and_summary(session, config, &messages_to_compress, operation_rx, force)
+			.await?;
 
 	if !should_compress {
 		log_debug!("AI decided compression not beneficial at this point");
@@ -775,7 +749,6 @@ pub async fn check_and_compress_conversation(
 		session,
 		start_idx,
 		end_idx,
-		&preserved_text,
 		&context_summary,
 		tokens_before,
 		target_ratio,
@@ -795,7 +768,6 @@ async fn ask_ai_decision_and_summary(
 	session: &mut ChatSession,
 	config: &Config,
 	messages_to_compress: &[crate::session::Message],
-	context_chunks: &[&super::semantic_chunking::SemanticChunk],
 	operation_rx: tokio::sync::watch::Receiver<bool>,
 	force: bool,
 ) -> Result<(bool, String)> {
@@ -803,35 +775,38 @@ async fn ask_ai_decision_and_summary(
 	// Kept separate from the data so the model acts as a compressor, not a session participant.
 	//
 	// SINGLE PATH: always produce a full summary when compressing — no silent YES/NO-only fallback.
-	// The prompt encodes two non-negotiable priorities:
-	//   1. RECENCY — messages marked [RECENT] are the most important; compress older ones harder.
-	//   2. USER/ASSISTANT PAIRS — every user question and assistant answer must survive in some form;
-	//      tool calls are secondary context that can be reduced to one-liners.
+	// The prompt encodes three priorities:
+	//   1. CURRENT TASK — the user's most recent request dominates; older tasks compress aggressively.
+	//   2. RECENCY — messages marked [RECENT] are preserved with highest fidelity.
+	//   3. TOOL CALLS — secondary context, reduced to one-liners.
 	let system_content = if force {
 		"You are a conversation compressor. \
 The user has explicitly requested compression. You MUST produce a summary — do NOT refuse. \
 Do not start with YES or NO. Just write the summary directly using the format below.\n\n\
 ## CRITICAL PRIORITIES\n\n\
-**Priority 1 — RECENCY**: Messages marked [RECENT] are the most important part of the transcript. \
-Preserve them with the highest fidelity — quote or paraphrase them closely. Older messages can be compressed more aggressively.\n\n\
-**Priority 2 — USER/ASSISTANT PAIRS**: Every [USER] question and every [ASSISTANT] answer is \
-primary signal. Capture every user request and every assistant response — never drop one.\n\n\
+**Priority 1 — CURRENT TASK**: The user's MOST RECENT task/request is what matters most. \
+If the user pivoted to a new topic mid-conversation, the new topic IS the current intent. \
+Older completed/abandoned tasks can be compressed to a single line each.\n\n\
+**Priority 2 — RECENCY**: Messages marked [RECENT] represent the current state of work. \
+Preserve them with the highest fidelity — quote or closely paraphrase. \
+Older messages can be compressed aggressively.\n\n\
 **Priority 3 — TOOL CALLS are secondary**: Summarize what was done in one line each.\n\n\
 ## SUMMARY FORMAT\n\n\
-**USER INTENT** (1-2 sentences):\n\
-What did the user ask for overall?\n\n\
+**SESSION CONTEXT** (1 sentence):\n\
+Brief overview of the session — what brought us here. Keep it short.\n\n\
+**CURRENT TASK** (1-2 sentences):\n\
+What is the user working on RIGHT NOW? This is the most recent request — highlight it as the primary focus.\n\n\
 **PROGRESS** (2-4 sentences):\n\
-What was completed? What is currently in progress?\n\n\
-**RECENT EXCHANGES** (preserve with high fidelity — these are the most recent [RECENT] messages):\n\
-For each recent user/assistant pair: quote or closely paraphrase the user question and the assistant answer.\n\n\
+What was completed for the current task? What is in progress? What was the outcome?\n\n\
+**RECENT EXCHANGES** (preserve with high fidelity — the most recent [RECENT] messages):\n\
+For each recent user/assistant pair: quote or closely paraphrase.\n\n\
 **KEY ENTITIES** (preserve exactly — copy values verbatim):\n\
-- Files/paths: exact file paths, line numbers, or code locations being worked on\n\
-- Names: specific identifiers, function names, variable names, config keys\n\
-- Issues: any errors, bugs, or problems encountered and their current status\n\
-- Decisions: choices made with the reasoning behind them\n\
-- URLs/references: any links or external references\n\n\
+- Files/paths: exact file paths, line numbers, code locations\n\
+- Names: identifiers, function names, variable names, config keys\n\
+- Errors/issues: problems encountered and their status\n\
+- Decisions: choices made with reasoning\n\n\
 **NEXT STEPS** (1-2 sentences):\n\
-What needs to happen next to continue the work?\n\n\
+What needs to happen next to continue the current task?\n\n\
 **OPTIONAL — file contexts needed to continue:**\n\
 If specific file ranges are critical for the next step, include them:\n\
 <context>\n\
@@ -844,47 +819,45 @@ paths from project root; line numbers 1–10000; max 5 ranges; only truly critic
 Your job is to produce a lossless summary of a conversation transcript so the session can continue \
 without losing any important context.\n\n\
 ## CRITICAL PRIORITIES (read carefully before summarizing)\n\n\
-**Priority 1 — RECENCY**: Messages marked [RECENT] are the most important part of the transcript. \
-They represent the current state of work. Preserve them with the highest fidelity — quote or \
-paraphrase them closely. Older messages (no [RECENT] marker) can be compressed more aggressively.\n\n\
-**Priority 2 — USER/ASSISTANT PAIRS**: Every [USER] question and every [ASSISTANT] answer is \
-primary signal. You MUST capture every user request and every assistant response in your summary — \
-never silently drop one. Paraphrase if needed, but nothing can be omitted.\n\n\
-**Priority 3 — TOOL CALLS are secondary**: [TOOL CALL] and [TOOL RESULT] lines are supporting \
-context. Summarize what was done (e.g. 'read file X', 'ran shell command Y, got Z') in one line \
-each. Do not reproduce full tool output.\n\n\
+**Priority 1 — CURRENT TASK**: The user's MOST RECENT task/request is what matters most. \
+If the user pivoted to a new topic mid-conversation, the new topic IS the current intent. \
+Older completed/abandoned tasks can be compressed to a single line each.\n\n\
+**Priority 2 — RECENCY**: Messages marked [RECENT] represent the current state of work. \
+Preserve them with the highest fidelity — quote or closely paraphrase. \
+Older messages without [RECENT] can be compressed aggressively.\n\n\
+**Priority 3 — TOOL CALLS are secondary**: Summarize what was done in one line each \
+(e.g. 'read file X', 'ran shell command Y, got Z'). Never reproduce full tool output.\n\n\
 ## WHEN TO ANSWER YES vs NO\n\n\
 Answer YES if there are older exchanges that can be compressed without losing information needed \
 to continue. Answer NO only if the transcript is already minimal and nothing can be safely reduced.\n\n\
 ## SUMMARY FORMAT (use when answering YES)\n\n\
-**USER INTENT** (1-2 sentences):\n\
-What did the user ask for overall? What is the goal or objective?\n\n\
+**SESSION CONTEXT** (1 sentence):\n\
+Brief overview of the session — what brought us here. Keep it short.\n\n\
+**CURRENT TASK** (1-2 sentences):\n\
+What is the user working on RIGHT NOW? This is the most recent request — highlight it as the primary focus.\n\n\
 **PROGRESS** (2-4 sentences):\n\
-What was completed? What is currently in progress? Include counts if applicable (e.g., 'Step 2 of 5 done').\n\n\
-**RECENT EXCHANGES** (preserve with high fidelity — these are the most recent [RECENT] messages):\n\
-For each recent user/assistant pair: quote or closely paraphrase the user question and the \
-assistant answer. Do not compress these — they are the current working context.\n\n\
+What was completed for the current task? What is in progress? What was the outcome?\n\n\
+**RECENT EXCHANGES** (preserve with high fidelity — the most recent [RECENT] messages):\n\
+For each recent user/assistant pair: quote or closely paraphrase. Do not compress these.\n\n\
 **KEY ENTITIES** (preserve exactly — copy values verbatim):\n\
-- Files/paths: exact file paths, line numbers, or code locations being worked on\n\
-- Names: specific identifiers, function names, variable names, config keys\n\
-- Issues: any errors, bugs, or problems encountered and their current status\n\
-- Decisions: choices made with the reasoning behind them\n\
-- URLs/references: any links or external references\n\n\
+- Files/paths: exact file paths, line numbers, code locations\n\
+- Names: identifiers, function names, variable names, config keys\n\
+- Errors/issues: problems encountered and their status\n\
+- Decisions: choices made with reasoning\n\n\
 **NEXT STEPS** (1-2 sentences):\n\
-What needs to happen next to continue the work?\n\n\
+What needs to happen next to continue the current task?\n\n\
 ## RESPONSE FORMAT\n\n\
 Start with YES or NO on the first line.\n\
 If YES, follow immediately with the summary using the sections above:\n\n\
 YES\n\
-**USER INTENT**: ...\n\
+**SESSION CONTEXT**: ...\n\
+**CURRENT TASK**: ...\n\
 **PROGRESS**: ...\n\
 **RECENT EXCHANGES**:\n\
 - User: [question] → Assistant: [answer]\n\
-- User: [question] → Assistant: [answer]\n\
 **KEY ENTITIES**:\n\
 - Files/paths: ...\n\
-- Names: ...\n\
-- Issues: ...\n\
+- Errors/issues: ...\n\
 - Decisions: ...\n\
 **NEXT STEPS**: ...\n\n\
 **OPTIONAL — file contexts needed to continue:**\n\
@@ -1037,26 +1010,6 @@ secondary context.\n\n",
 		}
 	}
 
-	// Append semantic chunk hints if available (structural signals for the model)
-	if !context_chunks.is_empty() {
-		user_content.push_str("\n**Key semantic chunks (structural hints):**\n");
-		for chunk in context_chunks {
-			let relation_hint = match chunk.discourse_relation {
-				super::semantic_chunking::DiscourseRelation::Cause => "[REASONING]",
-				super::semantic_chunking::DiscourseRelation::Contrast => "[ALTERNATIVE]",
-				super::semantic_chunking::DiscourseRelation::Sequence => "[STEP]",
-				super::semantic_chunking::DiscourseRelation::Background => "[CONTEXT]",
-				super::semantic_chunking::DiscourseRelation::Elaboration => "[DETAIL]",
-				super::semantic_chunking::DiscourseRelation::None => "",
-			};
-			if relation_hint.is_empty() {
-				user_content.push_str(&format!("- {}\n", chunk.content.trim()));
-			} else {
-				user_content.push_str(&format!("{} {}\n", relation_hint, chunk.content.trim()));
-			}
-		}
-	}
-
 	// Append file references extracted from tool calls
 	// These allow the model to re-read critical files after compression
 	if !file_refs.is_empty() {
@@ -1204,7 +1157,6 @@ async fn apply_compression(
 	session: &mut ChatSession,
 	start_idx: usize,
 	end_idx: usize,
-	preserved_text: &str,
 	context_summary: &str,
 	tokens_before: u64,
 	compression_ratio: f64,
@@ -1231,7 +1183,6 @@ async fn apply_compression(
 		.unwrap_or_else(|| "unknown".to_string());
 
 	let compressed_entry = format_compressed_entry_with_context(
-		preserved_text,
 		context_summary,
 		&file_context_content,
 		compression_id,
@@ -1328,67 +1279,16 @@ async fn apply_compression(
 	Ok(())
 }
 
-/// Format chunks verbatim (no summarization)
-fn format_chunks_verbatim(chunks: &[&super::semantic_chunking::SemanticChunk]) -> String {
-	chunks
-		.iter()
-		.map(|c| c.content.trim())
-		.filter(|s| !s.is_empty())
-		.collect::<Vec<_>>()
-		.join("\n- ")
-}
-
-/// Group chunks by type and format with discourse relation awareness
-/// Returns (critical_text, reference_text, context_chunks_for_ai)
-fn group_chunks_by_type(
-	selected: &[super::semantic_chunking::SemanticChunk],
-) -> (
-	String,
-	String,
-	Vec<&super::semantic_chunking::SemanticChunk>,
-) {
-	// Critical: Always preserve verbatim
-	let critical: Vec<_> = selected
-		.iter()
-		.filter(|c| matches!(c.chunk_type, super::semantic_chunking::ChunkType::Critical))
-		.collect();
-
-	// Reference: Always preserve verbatim
-	let reference: Vec<_> = selected
-		.iter()
-		.filter(|c| matches!(c.chunk_type, super::semantic_chunking::ChunkType::Reference))
-		.collect();
-
-	// Context: Pass to AI with relation markers
-	let context: Vec<_> = selected
-		.iter()
-		.filter(|c| matches!(c.chunk_type, super::semantic_chunking::ChunkType::Context))
-		.collect();
-
-	let critical_text = format_chunks_verbatim(&critical);
-	let reference_text = format_chunks_verbatim(&reference);
-
-	(critical_text, reference_text, context)
-}
-
 /// Format final compressed entry with optional file context
 fn format_compressed_entry_with_context(
-	preserved: &str,
 	context: &str,
 	file_context: &str,
 	compression_id: String,
 ) -> String {
 	let mut sections = Vec::new();
 
-	if !preserved.is_empty() {
-		sections.push(format!(
-			"**CRITICAL** (preserved verbatim):\n- {}",
-			preserved
-		));
-	}
-
 	if !context.is_empty() {
-		sections.push(format!("**CONTEXT**: {}", context));
+		sections.push(context.to_string());
 	}
 
 	// Add file context if provided (automatically expanded from AI's <context> tags)
@@ -1400,15 +1300,9 @@ fn format_compressed_entry_with_context(
 	}
 
 	format!(
-		"## Conversation Summary [COMPRESSED: {}]\n\n{}\n\n\
-		**Compression Info**:\n\
-		- ID: `{}`\n\
-		- Type: Semantic compression with file context\n\
-		---\n\
-		*Compressed using importance-based semantic chunking with automatic file context expansion.*",
+		"## Conversation Summary [COMPRESSED: {}]\n\n{}",
 		compression_id,
 		sections.join("\n\n"),
-		compression_id
 	)
 }
 
