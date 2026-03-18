@@ -124,10 +124,9 @@ impl SessionCancellation {
 
 	/// Get a new operation receiver
 	pub fn new_operation(&mut self) -> watch::Receiver<bool> {
-		// Clone and mark as seen to avoid spurious wakeups from old changes
+		// Clone and mark current value as seen to avoid spurious wakeups from old changes
 		let mut rx = self.cancel_rx.clone();
-		// Mark the current value as seen so we only react to future changes
-		rx.mark_changed();
+		rx.mark_unchanged();
 		rx
 	}
 
@@ -163,16 +162,23 @@ impl SessionCancellation {
 fn handle_interrupt(first_interrupt: &Arc<AtomicBool>, cancel_tx: &watch::Sender<bool>) -> bool {
 	if first_interrupt.load(Ordering::SeqCst) {
 		// Second Ctrl+C - force exit (always visible)
-		println!("\n🛑 Forcing exit...");
+		// Use std::println! directly to avoid with_suspended_spinner which could deadlock
+		// with the animation task's indicatif lock
+		std::println!("\n\u{1f6d1} Forcing exit...");
 		std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
 		std::process::exit(130);
 	} else {
-		// First Ctrl+C - graceful cancellation (silent, only debug shows details)
-		crate::log_debug!("Ctrl+C: Interrupting current operation...");
-
+		// First Ctrl+C — send cancellation signal IMMEDIATELY before any IO.
+		// log_debug!/println! use with_suspended_spinner which acquires the spinner
+		// mutex and then indicatif's internal BarState lock via suspend().  If the
+		// steady-tick thread or animation task holds BarState at that moment, the
+		// signal handler blocks and cancel_tx.send() never fires — making Ctrl+C
+		// appear completely unresponsive.
 		first_interrupt.store(true, Ordering::SeqCst);
-		let _ = cancel_tx.send(true); // Send cancellation signal
+		let _ = cancel_tx.send(true);
 
+		// Now safe to log — even if this blocks briefly, cancellation is already sent
+		crate::log_debug!("Ctrl+C: Interrupting current operation...");
 		crate::log_debug!("Press Ctrl+C again to force exit");
 		std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
 

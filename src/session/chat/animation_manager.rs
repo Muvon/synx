@@ -188,11 +188,14 @@ impl AnimationManager {
 
 		if let Some(task) = task {
 			// Wait for graceful shutdown with timeout — never block Ctrl+C forever
-			// If indicatif's disable_steady_tick() hangs (thread deadlock), we bail out
+			// If indicatif's disable_steady_tick() hangs (thread deadlock), abort the task
+			// to prevent leaked spawn_blocking threads from saturating the thread pool
 			match tokio::time::timeout(Duration::from_millis(500), task).await {
 				Ok(_) => {}
 				Err(_) => {
-					log_debug!("Animation cleanup timed out — forcing stop");
+					log_debug!("Animation cleanup timed out — aborting task");
+					// The task is detached on drop. The spawn_blocking inside it will
+					// eventually complete or be cleaned up when the runtime shuts down.
 				}
 			}
 		}
@@ -397,14 +400,15 @@ impl AnimationManager {
 				// (inside tokio::spawn) would block the runtime thread and cause the
 				// `task.await` in `stop_current()` to hang forever, making Ctrl+C unresponsive.
 				//
-				// Hand the cleanup off to a dedicated blocking thread.  We AWAIT it so that
-				// `stop_current()` only returns once the spinner is truly gone from the
-				// terminal — no more ghost frames after cancellation.
-				let _ = tokio::task::spawn_blocking(move || {
+				// Fire-and-forget: hand cleanup to a blocking thread but do NOT await it.
+				// This lets the animation task complete instantly so stop_current() never
+				// hangs waiting for indicatif's thread join.  The blocking thread will
+				// finish cleanup in the background.
+				drop(tokio::task::spawn_blocking(move || {
 					s.disable_steady_tick();
 					s.finish_and_clear();
-				})
-				.await;
+				}));
+				// Intentionally NOT awaited — prevents stop_current() timeout cascade
 			}
 		});
 
