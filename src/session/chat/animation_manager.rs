@@ -187,8 +187,14 @@ impl AnimationManager {
 		};
 
 		if let Some(task) = task {
-			// Wait for graceful shutdown - cleanup code will run
-			let _ = task.await;
+			// Wait for graceful shutdown with timeout — never block Ctrl+C forever
+			// If indicatif's disable_steady_tick() hangs (thread deadlock), we bail out
+			match tokio::time::timeout(Duration::from_millis(500), task).await {
+				Ok(_) => {}
+				Err(_) => {
+					log_debug!("Animation cleanup timed out — forcing stop");
+				}
+			}
 		}
 	}
 	/// Start new animation (stops any existing animation first)
@@ -391,13 +397,14 @@ impl AnimationManager {
 				// (inside tokio::spawn) would block the runtime thread and cause the
 				// `task.await` in `stop_current()` to hang forever, making Ctrl+C unresponsive.
 				//
-				// Hand the cleanup off to a dedicated blocking thread.  We detach it because
-				// the caller only needs the spinner gone from the screen, not to wait for the
-				// OS thread to finish.  ProgressBar is Send + 'static so this is safe.
-				tokio::task::spawn_blocking(move || {
+				// Hand the cleanup off to a dedicated blocking thread.  We AWAIT it so that
+				// `stop_current()` only returns once the spinner is truly gone from the
+				// terminal — no more ghost frames after cancellation.
+				let _ = tokio::task::spawn_blocking(move || {
 					s.disable_steady_tick();
 					s.finish_and_clear();
-				});
+				})
+				.await;
 			}
 		});
 
