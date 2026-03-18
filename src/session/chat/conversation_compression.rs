@@ -178,13 +178,20 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 
 				if estimated_after_compression >= level.threshold as u64 {
 					log_debug!(
-						"Compression won't bring context below threshold: {} → {} (threshold: {}). Compressible: {} → {}. Skipping compression.",
+						"Compression won't bring context below threshold: {} → {} (threshold: {}). Compressible: {} → {}. Setting cooldown to avoid futile re-check every turn.",
 						current_tokens,
 						estimated_after_compression,
 						level.threshold,
 						compressible_tokens,
 						estimated_compressed_size
 					);
+					// Set a short cooldown so we don't re-check every single turn when compression
+					// can't solve the threshold problem (e.g. context is dominated by non-compressible
+					// recent messages). 5 calls gives the session time to grow more compressible history.
+					session
+						.session
+						.info
+						.next_conversation_compression_at_api_call = session.session.info.total_api_calls + 5;
 					return (false, 2.0);
 				}
 
@@ -751,6 +758,7 @@ pub async fn check_and_compress_conversation(
 		end_idx,
 		&context_summary,
 		tokens_before,
+		current_context_tokens,
 		target_ratio,
 	)
 	.await?;
@@ -874,10 +882,12 @@ If NO, respond with just: NO"
 	// Building a transcript (not raw messages) prevents the model from continuing the
 	// tool-calling loop — it sees text to analyze, not a live conversation to participate in.
 	//
-	// RECENCY MARKER: the last 25% of messages (min 4) are tagged [RECENT] so the AI
-	// knows to preserve them with the highest fidelity.
+	// RECENCY MARKER: the last 8 messages (min 4, max 8) are tagged [RECENT] so the AI
+	// knows to preserve them with the highest fidelity. Capped at 8 to prevent the
+	// RECENT window from growing so large it defeats compression on long sessions.
 	let total_msgs = messages_to_compress.len();
-	let recent_start = total_msgs.saturating_sub((total_msgs / 4).max(4));
+	let recent_count = (total_msgs / 4).clamp(4, 8);
+	let recent_start = total_msgs.saturating_sub(recent_count);
 
 	let mut user_content = String::from(
 		"**Conversation transcript to compress:**\n\
@@ -895,13 +905,21 @@ secondary context.\n\n",
 		match msg.role.as_str() {
 			"system" => {} // skip system — already in our system message
 			"assistant" => {
-				// Include text content; summarize tool calls as one-liners with key arg
-				if !msg.content.trim().is_empty() {
-					user_content.push_str(&format!(
-						"{}[ASSISTANT]: {}\n",
-						recent,
-						msg.content.trim()
-					));
+				// Include text content; summarize tool calls as one-liners with key arg.
+				// CRITICAL: If this is a prior compressed summary, strip the FILE CONTEXT
+				// section before including it — file content will be re-read fresh by the
+				// new compression. Including stale XML bloats the prompt and causes the AI
+				// to re-embed the same file bytes in every subsequent summary.
+				let assistant_text = if msg
+					.content
+					.starts_with("## Conversation Summary [COMPRESSED:")
+				{
+					strip_file_context_from_summary(&msg.content)
+				} else {
+					msg.content.trim().to_string()
+				};
+				if !assistant_text.is_empty() {
+					user_content.push_str(&format!("{}[ASSISTANT]: {}\n", recent, assistant_text));
 				}
 				if let Some(calls) = msg.tool_calls.as_ref().and_then(|v| v.as_array()) {
 					for call in calls {
@@ -983,16 +1001,32 @@ secondary context.\n\n",
 			}
 			"tool" => {
 				let name = msg.name.as_deref().unwrap_or("tool");
-				// Truncate long tool results to avoid bloating the prompt
 				let content = msg.content.trim();
+				// Preserve both the start (tool name/context) and the end (errors/results).
+				// Errors typically appear at the tail — head-only truncation hides them.
 				let truncated = if content.len() > 500 {
-					let boundary = content
+					let head_end = content
 						.char_indices()
 						.map(|(i, _)| i)
-						.take_while(|&i| i <= 500)
+						.take_while(|&i| i <= 200)
 						.last()
 						.unwrap_or(0);
-					format!("{}\u{2026} [truncated]", &content[..boundary])
+					let tail_start = content
+						.char_indices()
+						.rev()
+						.map(|(i, _)| i)
+						.take_while(|&i| content.len() - i <= 300)
+						.last()
+						.unwrap_or(content.len());
+					if head_end < tail_start {
+						format!(
+							"{}\u{2026}[truncated]\u{2026}{}",
+							&content[..head_end],
+							&content[tail_start..]
+						)
+					} else {
+						content[..head_end].to_string()
+					}
 				} else {
 					content.to_string()
 				};
@@ -1159,6 +1193,7 @@ async fn apply_compression(
 	end_idx: usize,
 	context_summary: &str,
 	tokens_before: u64,
+	full_context_tokens: u64,
 	compression_ratio: f64,
 ) -> Result<()> {
 	// Parse file contexts from AI summary (AI may request specific file ranges to re-inject)
@@ -1224,7 +1259,7 @@ async fn apply_compression(
 
 	// Update cooldown: Set next allowed compression point
 	let estimated_future_turns =
-		estimate_future_turns(session, tokens_before as usize, compression_ratio);
+		estimate_future_turns(session, full_context_tokens as usize, compression_ratio);
 	let next_compression_at =
 		session.session.info.total_api_calls + estimated_future_turns as usize;
 	session
@@ -1304,6 +1339,21 @@ fn format_compressed_entry_with_context(
 		compression_id,
 		sections.join("\n\n"),
 	)
+}
+
+/// Strip the FILE CONTEXT section from a prior compressed summary before re-feeding it
+/// to the next compression pass.
+///
+/// When a summary is re-compressed, the embedded file bytes are stale and bloat the
+/// prompt. The AI will re-request any files it still needs via <context> tags.
+/// Returns the summary text with the FILE CONTEXT block removed, trimmed.
+fn strip_file_context_from_summary(summary: &str) -> String {
+	const SENTINEL: &str = "\n\n**FILE CONTEXT** (auto-expanded):";
+	if let Some(pos) = summary.find(SENTINEL) {
+		summary[..pos].trim().to_string()
+	} else {
+		summary.trim().to_string()
+	}
 }
 
 /// Find which messages to compress (keep last 4 turns = 2 exchanges raw)
@@ -1391,7 +1441,7 @@ fn calculate_range_tokens(session: &ChatSession, start_idx: usize, end_idx: usiz
 
 #[cfg(test)]
 mod tests {
-	use super::find_compression_range;
+	use super::{find_compression_range, strip_file_context_from_summary};
 	use crate::session::Message;
 	use serde_json::json;
 
@@ -2528,5 +2578,203 @@ mod tests {
 			anchor_tokens,
 			"Difference must be exactly the anchor message tokens"
 		);
+	}
+
+	// ── Stress tests ──────────────────────────────────────────────────────────
+
+	#[test]
+	fn test_file_context_stripped_from_recompression_input() {
+		// strip_file_context_from_summary must remove everything from the sentinel onward.
+		// This prevents stale file bytes from accumulating in every subsequent summary.
+		let summary_with_context = "## Conversation Summary [COMPRESSED: abc]\n\
+			Some important history here.\n\n\
+			**FILE CONTEXT** (auto-expanded):\n\
+			<content path=\"src/main.rs\">\nfn main() {}\n</content>";
+
+		let stripped = strip_file_context_from_summary(summary_with_context);
+
+		assert!(
+			!stripped.contains("FILE CONTEXT"),
+			"FILE CONTEXT sentinel must be stripped"
+		);
+		assert!(
+			!stripped.contains("fn main()"),
+			"File bytes must not appear in stripped output"
+		);
+		assert!(
+			stripped.contains("Some important history here."),
+			"Summary text before sentinel must be preserved"
+		);
+	}
+
+	#[test]
+	fn test_file_context_stripped_when_no_sentinel() {
+		// When there is no FILE CONTEXT block, the function must return the text unchanged.
+		let plain = "## Conversation Summary [COMPRESSED: abc]\nJust a summary.";
+		let stripped = strip_file_context_from_summary(plain);
+		assert_eq!(stripped, plain.trim());
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn test_multiple_compression_cycles_anchor_never_moves() {
+		// Simulate 3 compression cycles on a growing conversation.
+		// After each cycle the old summary is at start_idx+1 and gets folded into the next.
+		// first_prompt_idx must always equal 1 (the original first user message).
+		//
+		// Layout after each cycle:
+		//   [0] system
+		//   [1] user (anchor = first_prompt_idx)
+		//   [2] assistant (compressed summary, replaces old range)
+		//   [3..] new messages
+
+		let first_prompt_idx = Some(1usize);
+
+		// ── Cycle 1: 12 messages ──────────────────────────────────────────────
+		let mut messages: Vec<Message> = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("user")); // 1 ← anchor
+		for i in 0..10 {
+			messages.push(msg(if i % 2 == 0 { "assistant" } else { "user" }));
+		} // 2-11
+
+		let (s1, e1) = find_compression_range(&messages, first_prompt_idx).unwrap();
+		assert_eq!(s1, 1, "Cycle 1: start must be anchor (1)");
+		assert!(e1 > s1, "Cycle 1: end must be after anchor");
+		assert!(
+			e1 < messages.len(),
+			"Cycle 1: end must leave RECENT messages"
+		);
+
+		// Simulate applying compression: drain s1+1..=e1, insert summary at s1+1
+		let drained: Vec<Message> = messages.drain(s1 + 1..=e1).collect();
+		assert!(!drained.is_empty(), "Cycle 1: must drain something");
+		let mut summary1 = msg("assistant");
+		summary1.content = "## Conversation Summary [COMPRESSED: c1]\nCycle 1 summary.".to_string();
+		messages.insert(s1 + 1, summary1);
+
+		// ── Cycle 2: grow then compress again ────────────────────────────────
+		for i in 0..10 {
+			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
+		}
+
+		let (s2, e2) = find_compression_range(&messages, first_prompt_idx).unwrap();
+		assert_eq!(s2, 1, "Cycle 2: start must still be anchor (1)");
+		assert!(e2 > s2);
+
+		let drained2: Vec<Message> = messages.drain(s2 + 1..=e2).collect();
+		assert!(!drained2.is_empty(), "Cycle 2: must drain something");
+		let mut summary2 = msg("assistant");
+		summary2.content = "## Conversation Summary [COMPRESSED: c2]\nCycle 2 summary.".to_string();
+		messages.insert(s2 + 1, summary2);
+
+		// ── Cycle 3: grow then compress again ────────────────────────────────
+		for i in 0..10 {
+			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
+		}
+
+		let (s3, e3) = find_compression_range(&messages, first_prompt_idx).unwrap();
+		assert_eq!(s3, 1, "Cycle 3: start must still be anchor (1)");
+		assert!(e3 > s3);
+
+		// After 3 cycles the anchor is always at index 1 — never drifts.
+		assert_eq!(s1, s2, "Anchor must not drift between cycles");
+		assert_eq!(s2, s3, "Anchor must not drift between cycles");
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn test_compression_never_removes_last_user_message() {
+		// The RECENT window must always protect the last few messages.
+		// end_idx must be strictly less than messages.len()-1 so the final user
+		// message (the ongoing task) is never included in the drain range.
+		let mut messages: Vec<Message> = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("user")); // 1 ← anchor
+		for i in 0..20 {
+			messages.push(msg(if i % 2 == 0 { "assistant" } else { "user" }));
+		} // 2-21
+	// The very last message is the "ongoing task" user message
+		messages.push(msg("user")); // 22 ← must never be in drain range
+
+		let (_, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+
+		assert!(
+			end_idx < messages.len() - 1,
+			"end_idx ({}) must be < last message index ({}) — last user message must be protected",
+			end_idx,
+			messages.len() - 1
+		);
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn test_recent_window_capped_at_8_for_large_session() {
+		// For a 100-message session, RECENT count must be 8 (not 25).
+		// This mirrors the formula: (total / 4).max(4).min(8)
+		let total_msgs: usize = 100;
+		let recent_count = (total_msgs / 4).clamp(4, 8);
+		assert_eq!(
+			recent_count, 8,
+			"RECENT window must be capped at 8 for large sessions"
+		);
+
+		// For a 12-message session, RECENT count is 3 → clamped to 4
+		let small = 12usize;
+		let recent_small = (small / 4).clamp(4, 8);
+		assert_eq!(recent_small, 4, "RECENT window must be at least 4");
+
+		// For a 32-message session, RECENT count is 8 (exactly at cap)
+		let medium = 32usize;
+		let recent_medium = (medium / 4).clamp(4, 8);
+		assert_eq!(recent_medium, 8, "RECENT window must be 8 at 32 messages");
+	}
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn test_triple_compression_only_one_summary_in_drain() {
+		// After 3 compression cycles, the drain range must always contain exactly
+		// one prior compressed summary (the previous cycle's output), never zero or two.
+		// This verifies that old summaries are folded into new ones, not accumulated.
+		let first_prompt_idx = Some(1usize);
+
+		let mut messages: Vec<Message> = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("user")); // 1 ← anchor
+		for i in 0..10 {
+			messages.push(msg(if i % 2 == 0 { "assistant" } else { "user" }));
+		}
+
+		for cycle in 1..=3usize {
+			// Grow the session
+			for i in 0..8 {
+				messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
+			}
+
+			let (s, e) = find_compression_range(&messages, first_prompt_idx).unwrap();
+
+			// Count compressed summaries in the drain range (s+1..=e)
+			let summaries_in_drain = messages[s + 1..=e]
+				.iter()
+				.filter(|m| {
+					m.content
+						.starts_with("## Conversation Summary [COMPRESSED:")
+				})
+				.count();
+
+			if cycle > 1 {
+				assert_eq!(
+					summaries_in_drain, 1,
+					"Cycle {}: drain range must contain exactly 1 prior summary, found {}",
+					cycle, summaries_in_drain
+				);
+			}
+
+			// Apply compression
+			let _drained: Vec<Message> = messages.drain(s + 1..=e).collect();
+			let mut summary = msg("assistant");
+			summary.content =
+				format!("## Conversation Summary [COMPRESSED: c{cycle}]\nCycle {cycle} summary.");
+			messages.insert(s + 1, summary);
+		}
 	}
 }
