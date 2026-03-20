@@ -959,11 +959,53 @@ impl ChatSession {
 		};
 
 		self.session.messages.insert(index + 1, compressed_msg);
+		let compressed_idx = index + 1;
 
 		crate::log_debug!(
 			"Inserted compressed knowledge at index {} (cached=true)",
-			index + 1
+			compressed_idx
 		);
+
+		// Ensure we always have 2 content markers after compression:
+		// marker #1 = compressed block (just inserted above),
+		// marker #2 = last eligible user/tool message in the preserved zone.
+		// Without this, compression can destroy the second marker leaving only 1,
+		// which means the entire preserved tail is sent uncached on the next API call.
+		let post_markers: Vec<usize> = self
+			.session
+			.messages
+			.iter()
+			.enumerate()
+			.filter(|(_, m)| m.cached && m.role != "system")
+			.map(|(i, _)| i)
+			.collect();
+
+		if post_markers.len() < MAX_CONTENT_MARKERS {
+			// Find the last user or tool message AFTER the compressed block
+			let last_eligible = self
+				.session
+				.messages
+				.iter()
+				.enumerate()
+				.rev()
+				.find(|(i, m)| {
+					*i != compressed_idx
+						&& (m.role == "user" || m.role == "tool")
+						&& m.role != "system"
+				})
+				.map(|(i, _)| i);
+
+			if let Some(target_idx) = last_eligible {
+				if let Some(m) = self.session.messages.get_mut(target_idx) {
+					m.cached = true;
+					crate::log_debug!(
+						"Placed second cache marker at index {} (role={})",
+						target_idx,
+						m.role
+					);
+				}
+			}
+		}
 
 		Ok(())
 	}
@@ -1199,7 +1241,8 @@ mod tests {
 	}
 
 	// ── Case 1: no cache markers anywhere ────────────────────────────────────────
-	// Compressed block must always get cached=true (new stable boundary).
+	// Compressed block gets cached=true (marker #1) and the last eligible user/tool
+	// message in the preserved zone gets marker #2 automatically.
 	#[test]
 	fn case1_no_markers_compressed_block_gets_cached() {
 		// idx: 0=system, 1=user(start), 2=assistant, 3=user, 4=assistant(end), 5..8=preserved
@@ -1222,17 +1265,20 @@ mod tests {
 			.unwrap();
 
 		let markers = content_cache_indices(&cs);
-		// Compressed block is at idx 2 (inserted after start_idx=1)
+		// After drain+insert: [sys(0), user(1), COMP(2), user(3), asst(4), user(5), asst(6)]
+		// Compressed block at idx 2 (marker #1) + last user at idx 5 (marker #2)
 		assert_eq!(
-			markers,
-			vec![2],
-			"compressed block must always be cached=true"
+			markers.len(),
+			2,
+			"must have 2 markers: compressed block + last eligible message"
 		);
+		assert!(markers.contains(&2), "compressed block must be cached");
+		assert_eq!(*markers.last().unwrap(), 5, "marker #2 on last user");
 	}
 
 	// ── Case 2: one marker inside the range ──────────────────────────────────────
-	// Marker is removed with the range. Compressed block should get cached=true.
-	// No second marker needed — preserved zone will get one via normal auto-cache.
+	// Marker destroyed by drain. Compressed block gets marker #1, last eligible
+	// message gets marker #2 — always 2 markers after compression.
 	#[test]
 	fn case2_one_marker_inside_range_compressed_block_gets_cached() {
 		// idx: 0=system, 1=user(start), 2=assistant, 3=user(cached!), 4=assistant(end), 5..8=preserved
@@ -1255,12 +1301,17 @@ mod tests {
 			.unwrap();
 
 		let markers = content_cache_indices(&cs);
-		assert_eq!(markers, vec![2], "compressed block must be cached=true");
+		assert_eq!(
+			markers.len(),
+			2,
+			"must have 2 markers: compressed block + last eligible message"
+		);
+		assert!(markers.contains(&2), "compressed block must be cached");
 	}
 
 	// ── Case 3: two markers both inside the range ─────────────────────────────────
-	// Both removed. Compressed block gets cached=true — only 1 marker needed here;
-	// the second slot will be filled by normal auto-cache as the session progresses.
+	// Both destroyed by drain. Compressed block gets marker #1, last eligible
+	// message gets marker #2 — always 2 markers after compression.
 	#[test]
 	fn case3_two_markers_inside_range_compressed_block_gets_cached() {
 		// idx: 0=system, 1=user(start), 2=user(cached!), 3=assistant, 4=user(cached!), 5=assistant(end), 6..9=preserved
@@ -1284,9 +1335,13 @@ mod tests {
 			.unwrap();
 
 		let markers = content_cache_indices(&cs);
-		// Compressed block at idx 2. Only 1 marker — that's correct.
-		// (The second slot will be filled by normal auto-cache as session progresses.)
-		assert_eq!(markers, vec![2], "compressed block must be cached=true");
+		// After drain+insert: [sys(0), user(1), COMP(2), user(3), asst(4), user(5), asst(6)]
+		assert_eq!(
+			markers.len(),
+			2,
+			"must have 2 markers: compressed block + last eligible message"
+		);
+		assert!(markers.contains(&2), "compressed block must be cached");
 	}
 
 	// ── Case 4: marker at start_idx (kept), one inside range ─────────────────────
@@ -1457,6 +1512,162 @@ mod tests {
 			"must have at most 2 content cache markers after compression, got {}: {:?}",
 			markers.len(),
 			markers
+		);
+	}
+
+	// ── Case 9: THE BUG — markers disappear after compression ────────────────────
+	// Regression test for the core bug: before the fix, when markers existed inside
+	// the compressed range they were destroyed by drain, and insert_compressed_knowledge
+	// only placed marker #1 on the compressed block.  Marker #2 was never restored,
+	// so the entire preserved zone was sent uncached on the next API call.
+	//
+	// This test simulates a realistic session: 2 markers exist (one mid-conversation,
+	// one near the end), compression removes the range containing the first marker.
+	// After compression we MUST have exactly 2 markers:
+	//   - marker #1: the compressed block (stable history boundary)
+	//   - marker #2: the last eligible user/tool message (moving boundary)
+	#[test]
+	fn case9_markers_must_not_disappear_after_compression() {
+		// Realistic session layout:
+		// idx: 0=system, 1=user(start), 2=assistant, 3=user(cached!), 4=assistant,
+		//      5=user, 6=assistant(end),
+		//      7=user, 8=assistant, 9=user, 10=assistant, 11=user(cached!), 12=assistant
+		let messages = vec![
+			msg("system", false),
+			msg("user", false), // start_idx=1 (anchor, kept)
+			msg("assistant", false),
+			msg("user", true), // marker #1 — inside compression range
+			msg("assistant", false),
+			msg("user", false),
+			msg("assistant", false), // end_idx=6
+			// preserved zone:
+			msg("user", false),
+			msg("assistant", false),
+			msg("user", false),
+			msg("assistant", false),
+			msg("user", true), // marker #2 — in preserved zone
+			msg("assistant", false),
+		];
+		let mut cs = make_session(messages);
+
+		// Verify pre-compression state: exactly 2 content markers
+		let markers_before = content_cache_indices(&cs);
+		assert_eq!(
+			markers_before.len(),
+			2,
+			"pre-compression: must have 2 markers, got {:?}",
+			markers_before
+		);
+
+		// Compress: drain indices 2..=6, insert compressed block
+		let (removed, had_cached) = cs.remove_messages_in_range(1, 6).unwrap();
+		assert!(removed > 0);
+		assert!(had_cached, "marker #1 was inside the range");
+		cs.insert_compressed_knowledge(1, "compressed summary".to_string())
+			.unwrap();
+
+		// Post-compression: MUST still have exactly 2 content markers
+		let markers_after = content_cache_indices(&cs);
+		assert_eq!(
+			markers_after.len(),
+			2,
+			"post-compression: must have exactly 2 markers, got {:?}. \
+			 BUG: markers disappeared after compression!",
+			markers_after
+		);
+
+		// Verify marker #1 is the compressed block (always at start_idx+1)
+		let compressed_idx = 2; // inserted after start_idx=1
+		assert!(
+			markers_after.contains(&compressed_idx),
+			"marker #1 must be the compressed block at idx {}",
+			compressed_idx
+		);
+
+		// Verify marker #2 is NOT the compressed block (it's somewhere in preserved zone)
+		let marker2 = markers_after
+			.iter()
+			.find(|&&i| i != compressed_idx)
+			.unwrap();
+		assert!(
+			*marker2 > compressed_idx,
+			"marker #2 must be after the compressed block"
+		);
+
+		// Verify the message at marker #2 is user or tool (eligible for caching)
+		let marker2_msg = &cs.session.messages[*marker2];
+		assert!(
+			marker2_msg.role == "user" || marker2_msg.role == "tool",
+			"marker #2 must be on a user or tool message, got role='{}'",
+			marker2_msg.role
+		);
+	}
+
+	// ── Case 10: no markers before compression — both created fresh ──────────────
+	// When a session has never had any cache markers (e.g. caching was disabled or
+	// the session is very short), compression must still establish the full 2-marker
+	// layout from scratch.
+	#[test]
+	fn case10_no_markers_before_compression_both_created() {
+		let messages = vec![
+			msg("system", false),
+			msg("user", false), // start_idx=1
+			msg("assistant", false),
+			msg("user", false),
+			msg("assistant", false), // end_idx=4
+			msg("user", false),
+			msg("assistant", false),
+			msg("user", false), // last user — should become marker #2
+			msg("assistant", false),
+		];
+		let mut cs = make_session(messages);
+
+		// Pre-compression: zero markers
+		let markers_before = content_cache_indices(&cs);
+		assert_eq!(markers_before.len(), 0, "no markers before compression");
+
+		let (_, _) = cs.remove_messages_in_range(1, 4).unwrap();
+		cs.insert_compressed_knowledge(1, "summary".to_string())
+			.unwrap();
+
+		let markers_after = content_cache_indices(&cs);
+		assert_eq!(
+			markers_after.len(),
+			2,
+			"must create both markers from scratch, got {:?}",
+			markers_after
+		);
+	}
+
+	// ── Case 11: marker #2 on tool message in preserved zone ─────────────────────
+	// Tool messages are also eligible for marker #2.
+	#[test]
+	fn case11_marker2_placed_on_tool_message() {
+		let messages = vec![
+			msg("system", false),
+			msg("user", false), // start_idx=1
+			msg("assistant", false),
+			msg("user", false), // end_idx=3
+			// preserved zone:
+			msg("user", false),
+			msg("assistant", false),
+			msg("tool", false), // last eligible — should become marker #2
+			msg("assistant", false),
+		];
+		let mut cs = make_session(messages);
+
+		let (_, _) = cs.remove_messages_in_range(1, 3).unwrap();
+		cs.insert_compressed_knowledge(1, "summary".to_string())
+			.unwrap();
+
+		let markers = content_cache_indices(&cs);
+		assert_eq!(markers.len(), 2, "must have 2 markers, got {:?}", markers);
+
+		// The second marker should be on the tool message
+		let last_marker_idx = *markers.last().unwrap();
+		assert_eq!(
+			cs.session.messages[last_marker_idx].role, "tool",
+			"marker #2 should be on the tool message"
 		);
 	}
 }
