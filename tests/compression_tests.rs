@@ -266,16 +266,14 @@ mod adaptive_compression_tests {
 	/// Returns (TempDir, Config) - TempDir must be kept alive for config to remain valid
 	fn create_isolated_config() -> (tempfile::TempDir, Config) {
 		let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
-		// Canonicalize to resolve symlinks (critical on macOS where /var -> /private/var)
-		let canonical_path =
-			std::fs::canonicalize(temp_dir.path()).expect("Failed to canonicalize temp dir");
-		let config_path = canonical_path.join("config.toml");
 
-		// Set env var to use isolated config directory
-		std::env::set_var("OCTOMIND_CONFIG_PATH", config_path.to_str().unwrap());
+		// Write default config template into the temp dir
+		let config_path = temp_dir.path().join("config.toml");
+		let default_template = include_str!("../config-templates/default.toml");
+		std::fs::write(&config_path, default_template).expect("Failed to write default config");
 
-		// Load config (will create default in temp dir)
-		let config = Config::load().expect("Failed to load isolated config");
+		// Load config from the temp dir (no env var needed — avoids race conditions)
+		let config = Config::load_from_path(&config_path).expect("Failed to load isolated config");
 
 		(temp_dir, config)
 	}
