@@ -920,21 +920,26 @@ impl ChatSession {
 		// oldest one so the new compressed block can take its slot.  This prevents
 		// exceeding Anthropic's hard limit of 4 cache_control blocks per request
 		// (system + tools + 2 content markers).
+		// Skip cache marker management entirely when the model does not support caching.
 		const MAX_CONTENT_MARKERS: usize = 2;
-		let existing: Vec<usize> = self
-			.session
-			.messages
-			.iter()
-			.enumerate()
-			.filter(|(_, m)| m.cached && m.role != "system")
-			.map(|(i, _)| i)
-			.collect();
+		let supports_caching = crate::session::model_supports_caching(&self.session.info.model);
 
-		if existing.len() >= MAX_CONTENT_MARKERS {
-			// Evict the oldest marker to make room for the compressed block.
-			if let Some(oldest) = existing.first() {
-				if let Some(m) = self.session.messages.get_mut(*oldest) {
-					m.cached = false;
+		if supports_caching {
+			let existing: Vec<usize> = self
+				.session
+				.messages
+				.iter()
+				.enumerate()
+				.filter(|(_, m)| m.cached && m.role != "system")
+				.map(|(i, _)| i)
+				.collect();
+
+			if existing.len() >= MAX_CONTENT_MARKERS {
+				// Evict the oldest marker to make room for the compressed block.
+				if let Some(oldest) = existing.first() {
+					if let Some(m) = self.session.messages.get_mut(*oldest) {
+						m.cached = false;
+					}
 				}
 			}
 		}
@@ -946,9 +951,9 @@ impl ChatSession {
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
 				.as_secs(),
-			// The compressed block is the new stable history boundary — always cached.
-			// After the eviction above, total content markers stays at ≤ 2.
-			cached: true,
+			// The compressed block is the new stable history boundary — cached only
+			// when the model actually supports cache markers.
+			cached: supports_caching,
 			tool_call_id: None,
 			name: Some("plan_compression".to_string()),
 			tool_calls: None,
@@ -962,8 +967,9 @@ impl ChatSession {
 		let compressed_idx = index + 1;
 
 		crate::log_debug!(
-			"Inserted compressed knowledge at index {} (cached=true)",
-			compressed_idx
+			"Inserted compressed knowledge at index {} (cached={})",
+			compressed_idx,
+			supports_caching
 		);
 
 		// Ensure we always have 2 content markers after compression:
@@ -971,6 +977,11 @@ impl ChatSession {
 		// marker #2 = last eligible user/tool message in the preserved zone.
 		// Without this, compression can destroy the second marker leaving only 1,
 		// which means the entire preserved tail is sent uncached on the next API call.
+		// Skip entirely when the model does not support caching.
+		if !supports_caching {
+			return Ok(());
+		}
+
 		let post_markers: Vec<usize> = self
 			.session
 			.messages
@@ -1180,7 +1191,7 @@ mod tests {
 	fn make_session(messages: Vec<Message>) -> ChatSession {
 		let info = SessionInfo {
 			name: "test".to_string(),
-			model: "claude-3-5-sonnet".to_string(),
+			model: "anthropic/claude-3-5-sonnet".to_string(),
 			..Default::default()
 		};
 		ChatSession {
@@ -1190,7 +1201,7 @@ mod tests {
 				session_file: None,
 			},
 			last_response: String::new(),
-			model: "claude-3-5-sonnet".to_string(),
+			model: "anthropic/claude-3-5-sonnet".to_string(),
 			role: "core".to_string(),
 			temperature: 0.7,
 			top_p: 1.0,
