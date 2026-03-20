@@ -242,7 +242,8 @@ async fn calculate_compression_net_benefit(
 	compression_ratio: f64,
 ) -> f64 {
 	let total_tokens = current_tokens as f64;
-	let estimated_future_turns = estimate_future_turns(session, current_tokens, compression_ratio);
+	let headroom = total_tokens - (total_tokens / compression_ratio);
+	let estimated_future_turns = estimate_future_turns(session, headroom);
 	let compressed_tokens = total_tokens / compression_ratio;
 
 	// Get decision model (used for compression) and session model (used for future calls)
@@ -538,7 +539,7 @@ fn calculate_adaptive_compression_ratio(session: &ChatSession, base_ratio: f64) 
 ///    How many calls until context fills up again at the current growth rate.
 ///    This is a hard upper bound: you literally cannot make more calls than this
 ///    before hitting the threshold again.
-///    headroom  = current_tokens - compressed_tokens  (runway bought by compression)
+///    headroom  = actual tokens freed by compression (passed by caller)
 ///    growth_rate = output_tokens / api_calls  (measured new tokens added per call)
 ///
 /// 2. SYMMETRY ESTIMATE — api_calls made so far
@@ -556,11 +557,7 @@ fn calculate_adaptive_compression_ratio(session: &ChatSession, base_ratio: f64) 
 ///
 /// Only one justified constant: min=5 (compression cooldown must cover at least
 /// a few calls or the cost analysis is meaningless).
-fn estimate_future_turns(
-	session: &ChatSession,
-	current_tokens: usize,
-	compression_ratio: f64,
-) -> f64 {
+fn estimate_future_turns(session: &ChatSession, headroom: f64) -> f64 {
 	let info = &session.session.info;
 	let api_calls = info.total_api_calls as f64;
 
@@ -585,9 +582,7 @@ fn estimate_future_turns(
 
 	// Physical ceiling: headroom / growth_rate — exact math, no constants.
 	// Tells us precisely how many more calls fit before the threshold is hit again.
-	// headroom = runway bought by compression (tokens freed up).
-	let compressed_tokens = current_tokens as f64 / compression_ratio;
-	let headroom = (current_tokens as f64 - compressed_tokens).max(0.0);
+	// headroom = actual tokens freed by compression (provided by caller).
 	let physical_ceiling = headroom / growth_rate;
 
 	// Symmetry estimate: calls made so far ≈ calls remaining.
@@ -678,21 +673,11 @@ pub async fn check_and_compress_conversation(
 	operation_rx: tokio::sync::watch::Receiver<bool>,
 	force: bool,
 ) -> Result<bool> {
-	let (should_check, target_ratio) = should_check_compression(session, config).await;
+	let (should_check, _) = should_check_compression(session, config).await;
 
 	if !force && !should_check {
 		return Ok(false);
 	}
-	let target_ratio = if force {
-		config
-			.compression
-			.pressure_levels
-			.iter()
-			.map(|l| l.target_ratio)
-			.fold(2.0_f64, f64::max)
-	} else {
-		target_ratio
-	};
 
 	// Check for cancellation before starting compression (which involves an API call)
 	if *operation_rx.borrow() {
@@ -752,16 +737,7 @@ pub async fn check_and_compress_conversation(
 	log_info!("AI decided to compress older conversation exchanges");
 
 	// Apply compression with the summary we got from AI
-	apply_compression(
-		session,
-		start_idx,
-		end_idx,
-		&context_summary,
-		tokens_before,
-		current_context_tokens,
-		target_ratio,
-	)
-	.await?;
+	apply_compression(session, start_idx, end_idx, &context_summary, tokens_before).await?;
 
 	animation_manager.stop_current().await;
 	Ok(true)
@@ -1193,8 +1169,6 @@ async fn apply_compression(
 	end_idx: usize,
 	context_summary: &str,
 	tokens_before: u64,
-	full_context_tokens: u64,
-	compression_ratio: f64,
 ) -> Result<()> {
 	// Parse file contexts from AI summary (AI may request specific file ranges to re-inject)
 	let file_contexts = super::file_context::parse_file_contexts(context_summary);
@@ -1258,8 +1232,11 @@ async fn apply_compression(
 		.add_conversation_compression(messages_removed, tokens_saved);
 
 	// Update cooldown: Set next allowed compression point
-	let estimated_future_turns =
-		estimate_future_turns(session, full_context_tokens as usize, compression_ratio);
+	// Use ACTUAL tokens saved (not theoretical full-context ratio) for accurate cooldown.
+	// The theoretical ratio assumes the entire context is compressible, but only a subset
+	// of messages (the compressible range) is actually compressed. Using tokens_saved
+	// gives the real headroom bought by this compression.
+	let estimated_future_turns = estimate_future_turns(session, tokens_saved as f64);
 	let next_compression_at =
 		session.session.info.total_api_calls + estimated_future_turns as usize;
 	session
