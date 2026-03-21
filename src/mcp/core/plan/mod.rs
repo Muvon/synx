@@ -32,9 +32,9 @@ pub mod memory_storage;
 pub mod storage;
 
 pub use compression::{
-	has_pending_compression, process_pending_compression, process_pending_phase_compression,
-	process_pending_project_compression, set_pending_compression_range, CompressionMetrics,
-	PhaseCompression, ProjectCompression,
+	has_pending_compression, has_pending_project_compression, process_pending_compression,
+	process_pending_phase_compression, process_pending_project_compression,
+	set_pending_compression_range, CompressionMetrics, PhaseCompression, ProjectCompression,
 };
 pub use core::{
 	clear_plan_data, clear_task_start_index, execute_plan, get_and_clear_start_index,

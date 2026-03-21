@@ -204,82 +204,64 @@ pub async fn process_tool_results(
 		}
 	}
 
-	// Process any pending compression with proper error handling
-	let _task_compression_occurred =
-		match crate::mcp::core::plan::process_pending_compression(chat_session).await {
-			Ok(Some(metrics)) => {
-				chat_session
-					.session
-					.info
-					.compression_stats
-					.add_task_compression(metrics.messages_removed, metrics.tokens_saved);
-				crate::session::chat::cost_tracker::CostTracker::display_compression_result(
-					"Task", &metrics,
-				);
-				true
-			}
-			Ok(None) => {
-				// No pending compression - this is normal
-				false
-			}
-			Err(e) => {
-				// Compression failed - log at INFO level since this is unexpected
-				log_info!(
-					"❌ Task compression failed: {}. Context was not compressed.",
-					e
-				);
-				// Note: Session continues normally - compression is best-effort
-				false
-			}
-		};
+	// Process pending plan compressions (task → phase → project)
+	// OPTIMIZATION: When project compression is pending (plan(done)), defer ALL compression
+	// to after the assistant's final message. This preserves cache for the follow-up API call
+	// that generates the "plan completed" response — compression runs after that response
+	// is displayed, so the next user turn gets the compressed context for free.
+	if crate::mcp::core::plan::has_pending_project_compression() {
+		log_debug!(
+			"Deferring plan compression to after assistant response (project compression pending)"
+		);
+	} else {
+		// plan(next) path: compress immediately so the AI has reduced context for next task
+		let _task_compression_occurred =
+			match crate::mcp::core::plan::process_pending_compression(chat_session).await {
+				Ok(Some(metrics)) => {
+					chat_session
+						.session
+						.info
+						.compression_stats
+						.add_task_compression(metrics.messages_removed, metrics.tokens_saved);
+					crate::session::chat::cost_tracker::CostTracker::display_compression_result(
+						"Task", &metrics,
+					);
+					true
+				}
+				Ok(None) => false,
+				Err(e) => {
+					log_info!(
+						"❌ Task compression failed: {}. Context was not compressed.",
+						e
+					);
+					false
+				}
+			};
 
-	// Process phase compression (automatic)
-	let _phase_compression_occurred =
-		match crate::mcp::core::plan::process_pending_phase_compression(chat_session).await {
-			Ok(Some(metrics)) => {
-				chat_session
-					.session
-					.info
-					.compression_stats
-					.add_phase_compression(metrics.messages_removed, metrics.tokens_saved);
-				crate::session::chat::cost_tracker::CostTracker::display_compression_result(
-					"Phase", &metrics,
-				);
-				true
-			}
-			Ok(None) => false,
-			Err(e) => {
-				log_info!(
-					"❌ Phase compression failed: {}. Context was not compressed.",
-					e
-				);
-				false
-			}
-		};
-
-	// Process project compression (automatic)
-	let _project_compression_occurred =
-		match crate::mcp::core::plan::process_pending_project_compression(chat_session).await {
-			Ok(Some(metrics)) => {
-				chat_session
-					.session
-					.info
-					.compression_stats
-					.add_project_compression(metrics.messages_removed, metrics.tokens_saved);
-				crate::session::chat::cost_tracker::CostTracker::display_compression_result(
-					"Project", &metrics,
-				);
-				true
-			}
-			Ok(None) => false,
-			Err(e) => {
-				log_info!(
-					"❌ Project compression failed: {}. Context was not compressed.",
-					e
-				);
-				false
-			}
-		};
+		// Process phase compression (automatic)
+		let _phase_compression_occurred =
+			match crate::mcp::core::plan::process_pending_phase_compression(chat_session).await {
+				Ok(Some(metrics)) => {
+					chat_session
+						.session
+						.info
+						.compression_stats
+						.add_phase_compression(metrics.messages_removed, metrics.tokens_saved);
+					crate::session::chat::cost_tracker::CostTracker::display_compression_result(
+						"Phase", &metrics,
+					);
+					true
+				}
+				Ok(None) => false,
+				Err(e) => {
+					log_info!(
+						"❌ Phase compression failed: {}. Context was not compressed.",
+						e
+					);
+					false
+				}
+			};
+	}
 
 	// 🗜️ ADAPTIVE CONVERSATION COMPRESSION: Check if context should be compressed
 	if let Err(e) = crate::session::chat::conversation_compression::check_and_compress_conversation(

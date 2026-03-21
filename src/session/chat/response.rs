@@ -648,6 +648,67 @@ pub async fn process_response<S: OutputSink>(
 		params.mode,
 	)?;
 
+	// 🗜️ DEFERRED PLAN COMPRESSION: Process plan(done) compression after assistant message
+	// When plan(done) triggers compression, we defer it to here so the follow-up API call
+	// (which generates the "plan completed" response) benefits from cache hits on the
+	// unmodified conversation. Compression runs now — after the response is displayed —
+	// so the session saves with compressed state for the next user turn.
+	if crate::mcp::core::plan::has_pending_project_compression() {
+		log_debug!("Processing deferred plan(done) compression after assistant response");
+
+		// Task compression (forced for last task)
+		match crate::mcp::core::plan::process_pending_compression(params.chat_session).await {
+			Ok(Some(metrics)) => {
+				params
+					.chat_session
+					.session
+					.info
+					.compression_stats
+					.add_task_compression(metrics.messages_removed, metrics.tokens_saved);
+				CostTracker::display_compression_result("Task", &metrics);
+			}
+			Ok(None) => {}
+			Err(e) => {
+				log_debug!("Deferred task compression failed: {}. Continuing.", e);
+			}
+		}
+
+		// Phase compression
+		match crate::mcp::core::plan::process_pending_phase_compression(params.chat_session).await {
+			Ok(Some(metrics)) => {
+				params
+					.chat_session
+					.session
+					.info
+					.compression_stats
+					.add_phase_compression(metrics.messages_removed, metrics.tokens_saved);
+				CostTracker::display_compression_result("Phase", &metrics);
+			}
+			Ok(None) => {}
+			Err(e) => {
+				log_debug!("Deferred phase compression failed: {}. Continuing.", e);
+			}
+		}
+
+		// Project compression
+		match crate::mcp::core::plan::process_pending_project_compression(params.chat_session).await
+		{
+			Ok(Some(metrics)) => {
+				params
+					.chat_session
+					.session
+					.info
+					.compression_stats
+					.add_project_compression(metrics.messages_removed, metrics.tokens_saved);
+				CostTracker::display_compression_result("Project", &metrics);
+			}
+			Ok(None) => {}
+			Err(e) => {
+				log_debug!("Deferred project compression failed: {}. Continuing.", e);
+			}
+		}
+	}
+
 	// Emit cost message through sink (WebSocket/JSONL)
 	let total_tokens = params.chat_session.session.info.input_tokens
 		+ params.chat_session.session.info.output_tokens
