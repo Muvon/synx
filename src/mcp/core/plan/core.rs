@@ -644,7 +644,18 @@ async fn handle_done_command(call: &McpToolCall) -> Result<McpToolResult> {
 		));
 	}
 
+	// Get last completed task before dropping storage — needed for forced compression
+	let last_task = storage.get_last_completed_task().ok().flatten();
+
 	drop(storage);
+
+	// If start_index is still set, the last task's compression was skipped (e.g. 20% threshold).
+	// Force-compress it now so project compression has material to consolidate.
+	if get_current_task_start_index().is_some() {
+		if let Some(task) = last_task {
+			super::compression::request_forced_compression(task);
+		}
+	}
 
 	// Automatically request project compression
 	super::compression::request_project_compression(

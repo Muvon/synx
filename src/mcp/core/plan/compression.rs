@@ -31,9 +31,18 @@ use std::sync::{Arc, Mutex};
 // This allows the plan tool to signal that compression should happen
 // without needing to pass ChatSession through the MCP execution chain
 lazy_static::lazy_static! {
-	static ref PENDING_COMPRESSION: Arc<Mutex<Option<PlanTask>>> = Arc::new(Mutex::new(None));
+	static ref PENDING_COMPRESSION: Arc<Mutex<Option<PendingTaskCompression>>> = Arc::new(Mutex::new(None));
 	static ref PENDING_PHASE_COMPRESSION: Arc<Mutex<Option<PhaseCompressionRequest>>> = Arc::new(Mutex::new(None));
 	static ref PENDING_PROJECT_COMPRESSION: Arc<Mutex<Option<ProjectCompressionRequest>>> = Arc::new(Mutex::new(None));
+}
+
+/// Wrapper for pending task compression with force flag
+#[derive(Debug, Clone)]
+struct PendingTaskCompression {
+	task: PlanTask,
+	/// When true, bypass the 20% minimum context fraction threshold.
+	/// Used by plan(done) to ensure the final task gets compressed.
+	force: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,11 +83,19 @@ pub struct ProjectCompressionRequest {
 }
 
 /// Request compression for a completed task
-/// This is called by the plan tool when a task is completed
+/// This is called by the plan tool when a task is completed via plan(next)
 pub fn request_compression(task: PlanTask) {
 	crate::log_debug!("Compression requested for task: {}", task.title);
 	let mut pending = PENDING_COMPRESSION.lock().unwrap();
-	*pending = Some(task);
+	*pending = Some(PendingTaskCompression { task, force: false });
+}
+
+/// Request forced compression for a completed task (bypasses 20% threshold)
+/// Called by plan(done) to ensure the final task is compressed before project compression
+pub fn request_forced_compression(task: PlanTask) {
+	crate::log_debug!("Forced compression requested for task: {}", task.title);
+	let mut pending = PENDING_COMPRESSION.lock().unwrap();
+	*pending = Some(PendingTaskCompression { task, force: true });
 }
 
 /// Set message range on the pending compression task
@@ -99,25 +116,29 @@ pub fn request_compression(task: PlanTask) {
 ///
 /// For 93 messages (indices 0-92):
 /// - CORRECT: `set_pending_compression_range(10, 92);` // Compress to last message
-/// - WRONG: `set_pending_compression_range(10, 93);` // Out of bounds!
 pub fn set_pending_compression_range(start_index: usize, end_index: usize) -> Result<()> {
 	let mut pending = PENDING_COMPRESSION.lock().unwrap();
-	if let Some(ref mut task) = *pending {
-		task.message_range = Some(MessageRange {
+	if let Some(ref mut ptc) = *pending {
+		if start_index >= end_index {
+			return Err(anyhow!(
+				"Invalid compression range: start ({}) must be less than end ({})",
+				start_index,
+				end_index
+			));
+		}
+		ptc.task.message_range = Some(MessageRange {
 			start_index,
 			end_index,
 		});
 		crate::log_debug!(
-			"Set message range for pending compression: {}-{} (task: {})",
+			"Compression range set: {} to {} for task '{}'",
 			start_index,
 			end_index,
-			task.title
+			ptc.task.title
 		);
 		Ok(())
 	} else {
-		Err(anyhow::anyhow!(
-            "No pending compression to set range on - compression was not requested or already processed"
-        ))
+		Err(anyhow!("No pending compression to set range for"))
 	}
 }
 
@@ -126,14 +147,18 @@ pub fn set_pending_compression_range(start_index: usize, end_index: usize) -> Re
 pub async fn process_pending_compression(
 	session: &mut ChatSession,
 ) -> Result<Option<CompressionMetrics>> {
-	let task = {
+	let ptc = {
 		let mut pending = PENDING_COMPRESSION.lock().unwrap();
-		pending.take() // Take the task, leaving None
+		pending.take()
 	};
 
-	if let Some(task) = task {
-		crate::log_debug!("Processing pending compression for task: {}", task.title);
-		compress_completed_task(session, &task).await
+	if let Some(ptc) = ptc {
+		crate::log_debug!(
+			"Processing pending compression for task: {} (force: {})",
+			ptc.task.title,
+			ptc.force
+		);
+		compress_completed_task(session, &ptc.task, ptc.force).await
 	} else {
 		Ok(None)
 	}
@@ -250,6 +275,7 @@ impl CompressionMetrics {
 pub async fn compress_completed_task(
 	session: &mut ChatSession,
 	task: &PlanTask,
+	force: bool,
 ) -> Result<Option<CompressionMetrics>> {
 	// Validate task has required data (fail fast with clear error)
 	let summary = task
@@ -309,19 +335,22 @@ pub async fn compress_completed_task(
 	// Skip compression if the range is too small relative to total context.
 	// Compressing <20% of context produces negligible savings and risks losing
 	// important detail for a trivial gain (e.g. 2% reduction is not worth it).
-	const MIN_CONTEXT_FRACTION: f64 = 0.20;
-	let total_session_tokens =
-		crate::session::estimate_session_tokens(&session.session.messages) as f64;
-	if total_session_tokens > 0.0 {
-		let range_fraction = tokens_before as f64 / total_session_tokens;
-		if range_fraction < MIN_CONTEXT_FRACTION {
-			crate::log_info!(
-				"Task compression skipped: range is {:.1}% of context ({} / {} tokens) — below 20% threshold.",
-				range_fraction * 100.0,
-				tokens_before,
-				total_session_tokens as u64
-			);
-			return Ok(None);
+	// Bypassed when force=true (plan done — plan is finished, aggressive compression is appropriate).
+	if !force {
+		const MIN_CONTEXT_FRACTION: f64 = 0.20;
+		let total_session_tokens =
+			crate::session::estimate_session_tokens(&session.session.messages) as f64;
+		if total_session_tokens > 0.0 {
+			let range_fraction = tokens_before as f64 / total_session_tokens;
+			if range_fraction < MIN_CONTEXT_FRACTION {
+				crate::log_info!(
+					"Task compression skipped: range is {:.1}% of context ({} / {} tokens) — below 20% threshold.",
+					range_fraction * 100.0,
+					tokens_before,
+					total_session_tokens as u64
+				);
+				return Ok(None);
+			}
 		}
 	}
 
@@ -634,10 +663,11 @@ async fn compress_project(
 	}
 
 	if compression_indices.len() < 2 {
-		return Err(anyhow!(
-			"Project compression requires at least 2 compressions (found {})",
+		crate::log_info!(
+			"Project compression skipped: need at least 2 task/phase compressions to consolidate (found {})",
 			compression_indices.len()
-		));
+		);
+		return Ok(None);
 	}
 
 	let start_idx = *compression_indices.first().unwrap();
