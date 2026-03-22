@@ -12,23 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Core MCP provider - modular structure
-// Handles core tools: plan, mcp, agent, schedule
+pub mod core;
+pub mod storage;
 
-pub mod dynamic;
-pub mod dynamic_agents;
-pub mod functions;
-pub mod plan;
-pub mod schedule;
-
-#[cfg(test)]
-mod plan_tests;
-
-// Re-export main functionality
-pub use dynamic::execute_mcp_command;
-pub use dynamic_agents::execute_agent_tool_command;
-pub use functions::get_all_functions;
-pub use plan::{clear_plan_data, execute_plan};
-pub use schedule::{
-	execute_schedule_tool, has_pending_schedules, next_schedule_sleep, pop_due_entry,
+pub use core::{
+	execute_schedule_tool, get_schedule_function, has_pending_schedules, next_schedule_sleep,
+	pop_due_entry,
 };

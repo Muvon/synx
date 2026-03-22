@@ -284,6 +284,15 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			// Only inject one at a time; the loop picks up the rest next iteration.
 		}
 
+		// Check for any scheduled entries that are due right now.
+		// Scheduled messages are injected as user messages, same as async job results.
+		if chat_session.pending_prompt.is_none() {
+			if let Some(entry) = crate::mcp::core::pop_due_entry() {
+				log_debug!("Schedule entry [{}] fired: {}", entry.id, entry.description);
+				chat_session.pending_prompt = Some(entry.message);
+			}
+		}
+
 		// Get a new operation token for this iteration
 		let operation_rx = cancellation.new_operation();
 
@@ -352,6 +361,26 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 						let mut stdin_write = unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(0) };
 						let _ = std::io::Write::write_all(&mut stdin_write, b"\n");
 						// Don't close fd 0 — forget the File so it doesn't drop/close stdin
+						std::mem::forget(stdin_write);
+					}
+
+					InputResult::Text(msg)
+				}
+				// Scheduled entry fired while user was at the prompt
+				_ = crate::mcp::core::next_schedule_sleep() => {
+					// Pop the entry that just became due.
+					// If nothing is due yet (race), return empty — top-of-loop check handles it.
+					let msg = crate::mcp::core::pop_due_entry()
+						.map(|e| {
+							log_debug!("Schedule entry [{}] fired at prompt: {}", e.id, e.description);
+							e.message
+						})
+						.unwrap_or_default();
+
+					#[cfg(unix)]
+					if !msg.is_empty() {
+						let mut stdin_write = unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(0) };
+						let _ = std::io::Write::write_all(&mut stdin_write, b"\n");
 						std::mem::forget(stdin_write);
 					}
 
@@ -1074,6 +1103,45 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		}
 	}
 
+	// Keep session alive while there are pending scheduled entries (non-interactive).
+	// Each due entry is injected as a user message and processed through the full pipeline.
+	while crate::mcp::core::has_pending_schedules() {
+		log_debug!("Non-interactive: waiting for scheduled entries...");
+		crate::mcp::core::next_schedule_sleep().await;
+
+		while let Some(entry) = crate::mcp::core::pop_due_entry() {
+			log_debug!(
+				"Schedule entry [{}] fired (non-interactive): {}",
+				entry.id,
+				entry.description
+			);
+
+			chat_session.add_user_message(&entry.message)?;
+			prepare_for_api_call(&mut chat_session, &current_config, operation_rx.clone()).await?;
+
+			let output_mode = if current_config.runtime_output_mode.as_deref() == Some("jsonl") {
+				OutputMode::Jsonl
+			} else {
+				OutputMode::NonInteractive
+			};
+
+			if let Err(e) = execute_api_call_and_process_response(
+				&mut chat_session,
+				&current_config,
+				&role,
+				operation_rx.clone(),
+				output_mode,
+				SilentSink,
+			)
+			.await
+			{
+				log_debug!("Error processing scheduled entry [{}]: {}", entry.id, e);
+			}
+
+			// Refresh operation receiver in case cancellation was triggered
+			operation_rx = cancellation.new_operation();
+		}
+	}
 	// Wait for any async jobs to complete before exiting
 	// This ensures non-interactive sessions don't exit prematurely
 	if let Some(manager) = crate::mcp::agent::functions::get_job_manager() {

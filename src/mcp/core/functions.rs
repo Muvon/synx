@@ -20,6 +20,7 @@ use super::super::McpFunction;
 use super::dynamic::get_mcp_tool_function;
 use super::dynamic_agents::get_agent_tool_function;
 use super::plan::get_plan_function;
+use super::schedule::get_schedule_function;
 
 // Get all available core functions
 pub fn get_all_functions() -> Vec<McpFunction> {
@@ -27,5 +28,6 @@ pub fn get_all_functions() -> Vec<McpFunction> {
 		get_plan_function(),
 		get_mcp_tool_function(),
 		get_agent_tool_function(),
+		get_schedule_function(),
 	]
 }

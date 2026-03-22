@@ -880,6 +880,25 @@ async fn execute_tool_without_cancellation(
 								}
 							}
 						}
+						"schedule" => {
+							crate::log_debug!(
+								"Executing schedule command via core server '{}'",
+								target_server.name()
+							);
+							match core::execute_schedule_tool(call).await {
+								Ok(mut result) => {
+									result.tool_id = call.tool_id.clone();
+									return Ok(result);
+								}
+								Err(e) => {
+									return Ok(McpToolResult::error(
+										call.tool_name.clone(),
+										call.tool_id.clone(),
+										format!("Schedule execution failed: {}", e),
+									));
+								}
+							}
+						}
 						_ => {
 							return Err(anyhow::anyhow!(
 								"Tool '{}' not implemented in core server",
