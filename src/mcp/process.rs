@@ -68,10 +68,22 @@ lazy_static::lazy_static! {
 		Arc::new(RwLock::new(HashMap::new()));
 }
 
+// Type alias for the in-flight JoinHandle slot shared between the global map and call sites.
+type InFlightHandle =
+	Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<anyhow::Result<serde_json::Value>>>>>;
+
 // Global process registry to keep track of running server processes
 lazy_static::lazy_static! {
 	pub static ref SERVER_PROCESSES: Arc<RwLock<HashMap<String, Arc<Mutex<ServerProcess>>>>> =
 	Arc::new(RwLock::new(HashMap::new()));
+
+	// In-flight spawn_blocking handles, keyed by server name.
+	// Stored OUTSIDE ServerProcess so they can be accessed without locking the process mutex.
+	// When tokio::select! cancels a tool call, the blocking thread keeps running while holding
+	// the ServerProcess mutex. The next call reads this map (no mutex needed) to await the
+	// previous handle before trying to lock the process — preventing deadlock.
+	static ref SERVER_IN_FLIGHT: Arc<RwLock<HashMap<String, InFlightHandle>>> =
+		Arc::new(RwLock::new(HashMap::new()));
 }
 
 // Global notification sender — set by the session when WebSocket or JSONL output is active.
@@ -193,13 +205,6 @@ pub enum ServerProcess {
 		writer: BufWriter<std::process::ChildStdin>,
 		next_id: Arc<AtomicU64>,      // Thread-safe ID counter
 		is_shutdown: Arc<AtomicBool>, // Track shutdown state
-		// Tracks the in-flight spawn_blocking JoinHandle from the previous call.
-		// When tokio::select! cancels, the blocking thread keeps running with the
-		// mutex held. We store the handle here so the NEXT call can await it before
-		// trying to lock, preventing a deadlock.
-		in_flight: Arc<
-			std::sync::Mutex<Option<tokio::task::JoinHandle<anyhow::Result<serde_json::Value>>>>,
-		>,
 	},
 }
 
@@ -419,6 +424,10 @@ async fn start_server_once_if_needed(server: &McpServerConfig) -> Result<String>
 		let mut processes = SERVER_PROCESSES.write().unwrap();
 		processes.remove(server_id);
 	}
+	{
+		let mut in_flight_map = SERVER_IN_FLIGHT.write().unwrap();
+		in_flight_map.remove(server_id);
+	}
 
 	// Start the server (this is the ONLY place where we start servers)
 	crate::log_info!("Starting MCP server: {}", server_id);
@@ -595,8 +604,16 @@ async fn start_server_process(server: &McpServerConfig) -> Result<String> {
 				writer,
 				next_id: Arc::new(AtomicU64::new(1)),
 				is_shutdown: Arc::new(AtomicBool::new(false)),
-				in_flight: Arc::new(std::sync::Mutex::new(None)),
 			};
+
+			// Register a fresh in-flight handle slot for this server (outside the process mutex).
+			{
+				let mut in_flight_map = SERVER_IN_FLIGHT.write().unwrap();
+				in_flight_map.insert(
+					server.name().to_string(),
+					Arc::new(std::sync::Mutex::new(None)),
+				);
+			}
 
 			// Add to the registry
 			{
@@ -788,22 +805,16 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 			.ok_or_else(|| anyhow::anyhow!("Server not found: {}", server_name))?
 	};
 
-	// Extract the in_flight handle tracker — must happen before we try to lock the process.
-	// If a previous spawn_blocking was abandoned by tokio::select! cancellation, its OS thread
-	// still holds the std::sync::Mutex. We await it here so the mutex is free before we lock.
+	// Get the in-flight handle tracker directly from the global map — no process mutex needed.
+	// This is the key fix: previously we had to lock server_process to get in_flight, but if
+	// a prior spawn_blocking thread was cancelled mid-I/O it still holds that mutex, causing
+	// a deadlock. Now in_flight lives outside the process mutex entirely.
 	let in_flight_arc = {
-		let guard = server_process
-			.lock()
-			.map_err(|_| anyhow::anyhow!("Failed to acquire lock on server process"))?;
-		match &*guard {
-			ServerProcess::Stdin { in_flight, .. } => in_flight.clone(),
-			_ => {
-				return Err(anyhow::anyhow!(
-					"Server {} is not a stdin-based server",
-					server_name
-				))
-			}
-		}
+		let in_flight_map = SERVER_IN_FLIGHT.read().unwrap();
+		in_flight_map
+			.get(server_name)
+			.cloned()
+			.ok_or_else(|| anyhow::anyhow!("No in-flight slot for server: {}", server_name))?
 	};
 
 	// Await the previous in-flight task if any, so its mutex hold is released before we proceed.
@@ -1249,6 +1260,12 @@ pub fn stop_all_servers() -> Result<()> {
 
 	processes.clear();
 
+	// Clear all in-flight handles
+	{
+		let mut in_flight_map = SERVER_IN_FLIGHT.write().unwrap();
+		in_flight_map.clear();
+	}
+
 	// Clear all function cache when stopping all servers
 	crate::mcp::server::clear_all_function_cache();
 
@@ -1285,6 +1302,12 @@ pub fn cleanup_server_process(server_name: &str) -> Result<()> {
 
 		// Clear function cache for this server
 		crate::mcp::server::clear_function_cache_for_server(server_name);
+
+		// Clean up in-flight handle slot
+		{
+			let mut in_flight_map = SERVER_IN_FLIGHT.write().unwrap();
+			in_flight_map.remove(server_name);
+		}
 
 		// Clean up restart mutex
 		cleanup_server_restart_mutex(server_name);
