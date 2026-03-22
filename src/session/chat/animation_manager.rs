@@ -395,18 +395,17 @@ impl AnimationManager {
 			*spinner_ref.lock().unwrap() = None;
 
 			if let Some(s) = spinner {
-				// `disable_steady_tick()` joins indicatif's internal tick thread — it is a
-				// blocking call and must NOT run on the async executor.  Running it here
-				// (inside tokio::spawn) would block the runtime thread and cause the
-				// `task.await` in `stop_current()` to hang forever, making Ctrl+C unresponsive.
-				//
-				// Fire-and-forget: hand cleanup to a blocking thread but do NOT await it.
-				// This lets the animation task complete instantly so stop_current() never
-				// hangs waiting for indicatif's thread join.  The blocking thread will
-				// finish cleanup in the background.
+				// `finish_and_clear()` is non-blocking — call it immediately so the spinner
+				// line is erased from the terminal BEFORE stop_current() returns and any
+				// subsequent println! output is written.  Without this, the fire-and-forget
+				// spawn_blocking races with the next println! and clears a line of real output.
+				s.finish_and_clear();
+
+				// `disable_steady_tick()` joins indicatif's internal tick thread — it IS a
+				// blocking call and must NOT run on the async executor.  Fire-and-forget it
+				// so the animation task completes instantly and stop_current() never hangs.
 				drop(tokio::task::spawn_blocking(move || {
 					s.disable_steady_tick();
-					s.finish_and_clear();
 				}));
 				// Intentionally NOT awaited — prevents stop_current() timeout cascade
 			}
