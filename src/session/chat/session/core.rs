@@ -542,6 +542,39 @@ impl ChatSession {
 						}
 					}
 
+					// Detect first_prompt_idx from existing messages.
+					// Bootstrap pattern: system[0] → assistant(welcome)[1] → optional user(instructions)[2]
+					// The first real user prompt is the first user message after bootstrap.
+					{
+						let msgs = &chat_session.session.messages;
+						let system_idx = msgs.iter().position(|m| m.role == "system").unwrap_or(0);
+						let mut idx = system_idx + 1;
+						// Skip welcome message (assistant immediately after system, WITHOUT tool_calls)
+						let has_welcome = idx < msgs.len()
+							&& msgs[idx].role == "assistant"
+							&& msgs[idx].tool_calls.is_none();
+						if has_welcome {
+							idx += 1;
+						}
+						// Skip instructions file ONLY if welcome was present.
+						// Bootstrap: system → assistant(welcome) → user(instructions).
+						// Without welcome, the first user message is a real prompt.
+						if has_welcome
+							&& idx < msgs.len() && msgs[idx].role == "user"
+							&& (idx + 1 >= msgs.len() || msgs[idx + 1].role == "assistant")
+						{
+							idx += 1;
+						}
+						// idx now points to the first real user prompt (or past end if none)
+						if idx < msgs.len() {
+							chat_session.first_prompt_idx = Some(idx);
+							crate::log_debug!(
+								"Session resume: Detected first_prompt_idx={} from message history",
+								idx
+							);
+						}
+					}
+
 					Ok(chat_session)
 				}
 				Err(e) => {

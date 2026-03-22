@@ -1365,8 +1365,54 @@ fn find_compression_range(
 	let compress_count = conversation_indices.len() - preserve_count;
 
 	// CRITICAL: Start boundary is first_prompt_idx (INCLUSIVE - never compress this or before)
-	// If not set, fall back to system_idx + 1 (safe default)
-	let start_idx = first_prompt_idx.unwrap_or(system_idx + 1);
+	// If not set (e.g. resumed sessions), detect bootstrap messages and skip past them.
+	// Bootstrap pattern: system[0] → assistant(welcome)[1] → optional user(instructions)[2]
+	// We must NEVER compress the system prompt, welcome message, or instructions file.
+	let mut start_idx = match first_prompt_idx {
+		Some(idx) => idx,
+		None => {
+			let mut idx = system_idx + 1;
+			// Skip welcome message (assistant immediately after system, WITHOUT tool_calls).
+			// A welcome is a simple greeting — if it has tool_calls, it's a working response.
+			let has_welcome = idx < messages.len()
+				&& messages[idx].role == "assistant"
+				&& messages[idx].tool_calls.is_none();
+			if has_welcome {
+				idx += 1;
+			}
+			// Skip instructions file ONLY if welcome was present.
+			// Bootstrap pattern: system → assistant(welcome) → user(instructions).
+			// Without a welcome message, the first user message is a real prompt, not instructions.
+			if has_welcome
+				&& idx < messages.len()
+				&& messages[idx].role == "user"
+				&& (idx + 1 >= messages.len() || messages[idx + 1].role == "assistant")
+			{
+				idx += 1;
+			}
+			idx
+		}
+	};
+
+	// CRITICAL: If the anchor message has tool_calls, its tool results immediately follow it.
+	// remove_messages_in_range drains start_idx+1..=end_idx — if tool results are in that
+	// range they get removed, leaving orphaned tool_use blocks without tool_result.
+	// The API then rejects the sequence with "tool_use ids were found without tool_result".
+	// Fix: advance start_idx past all tool results that belong to the anchor's tool_calls.
+	if let Some(anchor) = messages.get(start_idx) {
+		if anchor.role == "assistant" && anchor.tool_calls.is_some() {
+			// Skip past consecutive tool messages that follow the anchor
+			let mut next = start_idx + 1;
+			while next < messages.len() && messages[next].role == "tool" {
+				next += 1;
+			}
+			// next now points to the first non-tool message after the anchor's tool results.
+			// That becomes the new anchor (the drain will start at new_start_idx+1).
+			if next > start_idx + 1 && next < messages.len() {
+				start_idx = next;
+			}
+		}
+	}
 
 	// CRITICAL FIX: The end_idx must be the last MESSAGE INDEX (not conversation index)
 	// before the first preserved conversation message.
@@ -1596,41 +1642,247 @@ mod tests {
 
 	#[test]
 	#[allow(clippy::vec_init_then_push)]
-	fn start_boundary_must_not_orphan_initial_tool_sequence_duplicate() {
+	fn anchor_with_tool_calls_must_advance_past_tool_results() {
+		// Reproduces the exact bug from the session log:
+		// - Message 1: assistant with 2 tool_calls (view_signatures + view)
+		// - Message 2: tool result for view_signatures
+		// - Message 3: tool result for view (this one got orphaned)
+		// - Compression summary inserted at message 3
+		// - remove_messages_in_range drained start_idx+1..=end_idx
+		// - Result: assistant at index 1 still has tool_calls but tool results are gone
+		// - API error: "tool_use ids were found without tool_result blocks"
 		let mut messages = Vec::new();
 		messages.push(msg("system")); // 0
 
-		// First conversation message is assistant with tool calls.
-		// This can happen in resumed sessions or reconstructed histories.
-		let mut assistant_with_tools = msg("assistant"); // 1
-		assistant_with_tools.tool_calls = Some(json!([
-			{"id": "call_1", "type": "function", "function": {"name": "tool1"}}
+		// Assistant with 2 tool calls (like the real session)
+		let mut assistant = msg("assistant"); // 1
+		assistant.tool_calls = Some(json!([
+			{"id": "call_A", "type": "function", "function": {"name": "view_signatures", "arguments": "{}"}},
+			{"id": "call_B", "type": "function", "function": {"name": "view", "arguments": "{}"}}
 		]));
-		messages.push(assistant_with_tools);
+		messages.push(assistant);
 
-		let mut tool1 = msg("tool"); // 2
-		tool1.tool_call_id = Some("call_1".to_string());
-		messages.push(tool1);
+		let mut tool_a = msg("tool"); // 2
+		tool_a.tool_call_id = Some("call_A".to_string());
+		tool_a.name = Some("view_signatures".to_string());
+		messages.push(tool_a);
 
-		// Add enough conversation messages to trigger compression.
-		messages.push(msg("user")); // 3
+		let mut tool_b = msg("tool"); // 3
+		tool_b.tool_call_id = Some("call_B".to_string());
+		tool_b.name = Some("view".to_string());
+		messages.push(tool_b);
+
+		// Enough conversation to trigger compression (need >4 user+assistant)
+		messages.push(msg("assistant")); // 4 (response after tools)
+		messages.push(msg("user")); // 5
+		messages.push(msg("assistant")); // 6
+		messages.push(msg("user")); // 7
+		messages.push(msg("assistant")); // 8
+		messages.push(msg("user")); // 9
+		messages.push(msg("assistant")); // 10
+
+		// first_prompt_idx=None means start_idx defaults to system_idx+1 = 1
+		// Index 1 is the assistant with tool_calls.
+		// Without the fix: start_idx=1, drain removes indices 2..=end_idx,
+		// orphaning tool_calls at index 1.
+		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+
+		// With the fix: start_idx must advance past the tool results (indices 2, 3)
+		// to index 4 (the next assistant message after tools).
+		assert!(
+			start_idx >= 4,
+			"start_idx must advance past tool results to avoid orphaning tool_calls. Got start_idx={start_idx}"
+		);
+		assert!(
+			end_idx > start_idx,
+			"end_idx must be after start_idx for a valid range. Got start={start_idx}, end={end_idx}"
+		);
+
+		// Verify the drain range (start_idx+1..=end_idx) doesn't include any tool messages
+		// that belong to the assistant at index 1
+		for msg in messages.iter().take(end_idx + 1).skip(start_idx + 1) {
+			if msg.role == "tool" {
+				// Any tool message in the drain range must NOT belong to the anchor's tool_calls
+				if let Some(ref tc_id) = msg.tool_call_id {
+					assert!(
+						tc_id != "call_A" && tc_id != "call_B",
+						"Drain range must not include tool results for anchor's tool_calls. Found {tc_id}"
+					);
+				}
+			}
+		}
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn anchor_with_tool_calls_and_first_prompt_idx() {
+		// When first_prompt_idx points to an assistant with tool_calls,
+		// start_idx must still advance past its tool results.
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("user")); // 1
+
+		// Assistant with tool calls at index 2
+		let mut assistant = msg("assistant"); // 2
+		assistant.tool_calls = Some(json!([
+			{"id": "call_X", "type": "function", "function": {"name": "shell", "arguments": "{}"}}
+		]));
+		messages.push(assistant);
+
+		let mut tool_x = msg("tool"); // 3
+		tool_x.tool_call_id = Some("call_X".to_string());
+		tool_x.name = Some("shell".to_string());
+		messages.push(tool_x);
+
+		// More conversation
 		messages.push(msg("assistant")); // 4
 		messages.push(msg("user")); // 5
 		messages.push(msg("assistant")); // 6
 		messages.push(msg("user")); // 7
 		messages.push(msg("assistant")); // 8
-								   // Test with first_prompt_idx set to index 3 (first real user message)
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
+		messages.push(msg("user")); // 9
+		messages.push(msg("assistant")); // 10
 
-		// Safety requirement: compression starts AFTER first_prompt_idx (INCLUSIVE boundary)
-		// first_prompt_idx=3 means index 3 is PROTECTED, compression starts at 4
-		assert_eq!(
-			start_idx, 3,
-			"start_idx must equal first_prompt_idx (INCLUSIVE boundary)"
+		// first_prompt_idx=Some(2) points to the assistant with tool_calls
+		let (start_idx, _end_idx) = find_compression_range(&messages, Some(2)).unwrap();
+
+		// Must advance past tool result at index 3
+		assert!(
+			start_idx >= 4,
+			"start_idx must advance past tool results even with first_prompt_idx. Got {start_idx}"
+		);
+	}
+
+	// ============================================================================
+	// BOOTSTRAP MESSAGE PRESERVATION TESTS: Verify system prompt, welcome message,
+	// and instructions file are NEVER compressed away
+	// ============================================================================
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn bootstrap_preserved_when_first_prompt_idx_is_none_no_instructions() {
+		// Simulates resumed session without instructions file:
+		// [0] system, [1] assistant(welcome), [2+] conversation
+		// first_prompt_idx=None (resumed session)
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("assistant")); // 1 - welcome message
+		messages.push(msg("user")); // 2 - first real user prompt
+		messages.push(msg("assistant")); // 3
+		messages.push(msg("user")); // 4
+		messages.push(msg("assistant")); // 5
+		messages.push(msg("user")); // 6
+		messages.push(msg("assistant")); // 7
+		messages.push(msg("user")); // 8
+		messages.push(msg("assistant")); // 9
+
+		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+
+		// System[0] and welcome[1] must be protected
+		assert!(
+			start_idx >= 2,
+			"start_idx must be >= 2 to protect system and welcome. Got {start_idx}"
+		);
+		assert!(end_idx > start_idx, "must have valid range");
+
+		// Drain range is start_idx+1..=end_idx — verify system and welcome are outside
+		assert!(
+			start_idx + 1 > 1,
+			"drain range must not include welcome message at index 1"
+		);
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn bootstrap_preserved_when_first_prompt_idx_is_none_with_instructions() {
+		// Simulates resumed session WITH instructions file:
+		// [0] system, [1] assistant(welcome), [2] user(instructions), [3+] conversation
+		// first_prompt_idx=None (resumed session)
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("assistant")); // 1 - welcome message
+		messages.push(msg("user")); // 2 - instructions file
+		messages.push(msg("assistant")); // 3 - AI response to instructions
+		messages.push(msg("user")); // 4 - first real user prompt
+		messages.push(msg("assistant")); // 5
+		messages.push(msg("user")); // 6
+		messages.push(msg("assistant")); // 7
+		messages.push(msg("user")); // 8
+		messages.push(msg("assistant")); // 9
+
+		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+
+		// System[0], welcome[1], and instructions[2] must be protected
+		assert!(
+			start_idx >= 3,
+			"start_idx must be >= 3 to protect system, welcome, and instructions. Got {start_idx}"
+		);
+		assert!(end_idx > start_idx, "must have valid range");
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn bootstrap_preserved_system_message_never_in_range() {
+		// Regardless of first_prompt_idx, system message must never be in compression range
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("assistant")); // 1
+		for _ in 0..10 {
+			messages.push(msg("user"));
+			messages.push(msg("assistant"));
+		}
+
+		// Test with None
+		let (start_none, _end_none) = find_compression_range(&messages, None).unwrap();
+		assert!(start_none > 0, "system message at 0 must not be start_idx");
+		// Drain is start_idx+1..=end_idx, so system at 0 is safe if start_idx > 0
+
+		// Test with Some(1)
+		let (start_some, end_some) = find_compression_range(&messages, Some(1)).unwrap();
+		assert!(start_some >= 1, "start_idx must be >= 1");
+		assert!(end_some > start_some);
+	}
+
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn bootstrap_with_tool_calls_in_welcome_response() {
+		// Edge case: welcome is followed by instructions, then AI responds with tool_calls
+		// [0] system, [1] assistant(welcome), [2] user(instructions),
+		// [3] assistant(tool_calls), [4] tool, [5+] conversation
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("assistant")); // 1 - welcome
+		messages.push(msg("user")); // 2 - instructions
+
+		let mut assistant_tc = msg("assistant"); // 3
+		assistant_tc.tool_calls = Some(serde_json::json!([
+			{"id": "call_1", "type": "function", "function": {"name": "view", "arguments": "{}"}}
+		]));
+		messages.push(assistant_tc);
+
+		let mut tool = msg("tool"); // 4
+		tool.tool_call_id = Some("call_1".to_string());
+		messages.push(tool);
+
+		messages.push(msg("assistant")); // 5
+		messages.push(msg("user")); // 6
+		messages.push(msg("assistant")); // 7
+		messages.push(msg("user")); // 8
+		messages.push(msg("assistant")); // 9
+		messages.push(msg("user")); // 10
+		messages.push(msg("assistant")); // 11
+
+		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+
+		// Must protect: system[0], welcome[1], instructions[2]
+		// start_idx should be >= 3, and if 3 has tool_calls, advance past tool results
+		assert!(
+			start_idx >= 5,
+			"start_idx must advance past bootstrap AND tool results. Got {start_idx}"
 		);
 		assert!(
-			end_idx >= 4,
-			"range should start compressing only after first_prompt_idx"
+			end_idx > start_idx,
+			"must have valid range. Got start={start_idx}, end={end_idx}"
 		);
 	}
 
