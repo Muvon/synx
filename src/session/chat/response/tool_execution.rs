@@ -259,12 +259,10 @@ async fn execute_tools_with_context(
 	// Extract just the tasks for parallel execution
 	let tasks: Vec<_> = tool_tasks.into_iter().map(|(_, task, _, _)| task).collect();
 
-	// CRITICAL: Do NOT restart animation here!
-	// Animation lifecycle is managed by api_executor.rs:
-	// - api_executor starts animation before API call
-	// - process_response stops animation before tool output
-	// - Tool execution should NOT restart animation (output already displaying)
-	// Restarting here causes ghost spinner that continues after output
+	// Animation lifecycle during tool execution:
+	// - response.rs starts animation AFTER tool header is printed (so header is visible)
+	// - This function stops animation BEFORE displaying results (no ghost spinners)
+	// Do NOT start animation here — it's already running from response.rs.
 
 	// Use tokio::select! to run tasks with cancellation support.
 	let all_tasks = futures::future::join_all(tasks);
@@ -283,7 +281,7 @@ async fn execute_tools_with_context(
 				std::future::pending::<()>().await;
 			}
 		} => {
-			// Animation already stopped by process_response - no action needed
+			// Animation is stopped by main_loop.rs when Ctrl+C fires - no action needed here.
 
 			// Cancellation occurred - provide immediate feedback
 			use colored::*;
@@ -308,7 +306,12 @@ async fn execute_tools_with_context(
 		}
 	};
 
-	// Animation already stopped by process_response - no action needed
+	// Stop animation before displaying tool results to prevent ghost spinners.
+	// The animation was started in response.rs after the tool header was printed.
+	if !mode.should_suppress_cli_output() {
+		use crate::session::chat::get_animation_manager;
+		get_animation_manager().stop_current().await;
+	}
 
 	// All tasks completed before cancellation
 	for ((tool_name, tool_id, tool_index), task_result) in task_info.into_iter().zip(task_results) {

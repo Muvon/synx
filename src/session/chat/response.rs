@@ -439,6 +439,14 @@ pub async fn process_response<S: OutputSink>(
 					display_tool_parameters_only(params.config, &current_tool_calls).await;
 				}
 
+				// Start animation during tool execution so the user sees progress feedback.
+				// The animation is stopped inside execute_tools_with_context before any
+				// tool output is printed, preventing ghost spinners.
+				if params.mode.is_interactive() {
+					use crate::session::chat::get_animation_manager;
+					get_animation_manager().start_animation(&params.mode).await;
+				}
+
 				// Clone operation_cancelled to avoid borrow issues
 				let operation_cancelled_clone = params.operation_cancelled.clone();
 

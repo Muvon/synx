@@ -120,8 +120,9 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 	};
 	let api_result = chat_completion_with_validation(validation_params).await;
 
-	// DON'T stop animation here - let it continue through response processing
-	// Animation will be stopped after ALL processing completes (including tool execution)
+	// DON'T stop animation here - process_response stops it before tool output.
+	// After the tool header is printed, response.rs restarts the animation so it
+	// runs during tool execution, giving the user progress feedback.
 
 	// CRITICAL FIX: Check for cancellation after API call completion
 	// This prevents the race condition where Ctrl+C is pressed after API completes

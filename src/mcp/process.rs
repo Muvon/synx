@@ -845,8 +845,10 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 		}
 	}
 
-	// Get the request ID atomically and prepare the message
-	let (final_message, request_id) = {
+	// Get the request ID and child PID atomically — both extracted in one lock to avoid
+	// a second lock acquisition later. The child PID is used to kill the server process
+	// on cancellation, which unblocks the read_line() in the blocking thread.
+	let (final_message, request_id, child_pid) = {
 		let mut process_guard = server_process
 			.lock()
 			.map_err(|_| anyhow::anyhow!("Failed to acquire lock on server process"))?;
@@ -855,6 +857,7 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 			ServerProcess::Stdin {
 				next_id,
 				is_shutdown,
+				child,
 				..
 			} => {
 				// Check if server is shutdown
@@ -878,7 +881,9 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 					}
 				}
 
-				(final_msg, actual_id)
+				// Capture child PID for cancellation kill
+				let pid = child.id();
+				(final_msg, actual_id, pid)
 			}
 			_ => {
 				return Err(anyhow::anyhow!(
@@ -1084,6 +1089,41 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 		_ = cancellation_future => {
 			// Store the still-running handle so the next call awaits it before locking.
 			*in_flight_arc.lock().unwrap() = handle_opt.take();
+
+			// Kill the MCP server child process so the blocking read_line() returns EOF
+			// immediately. Without this, the blocking thread stays stuck until the external
+			// tool (e.g. `cargo test` inside octofs) finishes on its own — which defeats
+			// the purpose of Ctrl+C. The server is in its own process group (set at spawn
+			// time), so killing it also kills any grandchild processes it spawned.
+			// The server will restart automatically on the next tool call.
+			#[cfg(unix)]
+			{
+				// Send SIGKILL to the entire process group of the child.
+				// child_pid is the PID of the MCP server (e.g. octofs). Since we called
+				// process_group(0) at spawn time, its PGID == its PID. Sending SIGKILL to
+				// -PGID kills the server and all grandchildren (e.g. cargo test).
+				let pgid = child_pid as libc::pid_t;
+				// SAFETY: libc::kill is always safe to call with valid arguments.
+				unsafe {
+					libc::kill(-pgid, libc::SIGKILL);
+				}
+				crate::log_debug!(
+					"Sent SIGKILL to process group {} (server '{}') on cancellation",
+					pgid,
+					server_name_for_error
+				);
+			}
+
+			// Mark the server dead so the next call triggers a restart instead of trying
+			// to communicate with the now-killed process.
+			{
+				let mut restart_info_guard = SERVER_RESTART_INFO.write().unwrap();
+				let info = restart_info_guard
+					.entry(server_name_for_error.clone())
+					.or_default();
+				info.health_status = ServerHealth::Dead;
+			}
+
 			Err(anyhow::anyhow!("Operation cancelled while communicating with server: {}", server_name_for_error))
 		}
 	}

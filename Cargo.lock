@@ -1953,6 +1953,7 @@ dependencies = [
  "keyring",
  "landlock",
  "lazy_static",
+ "libc",
  "nu-ansi-term",
  "oauth2",
  "octolib",
