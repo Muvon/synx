@@ -24,9 +24,9 @@ use agent_client_protocol::{
 	AvailableCommand, AvailableCommandInput, AvailableCommandsUpdate, CancelNotification, Client,
 	ContentBlock, ContentChunk, ExtRequest, ExtResponse, Implementation, InitializeRequest,
 	InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpCapabilities, McpServer,
-	NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, ProtocolVersion,
-	SessionNotification, SessionUpdate, StopReason, ToolCall, ToolCallStatus, ToolCallUpdate,
-	ToolCallUpdateFields, UnstructuredCommandInput,
+	NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse,
+	ProtocolVersion, SessionNotification, SessionUpdate, StopReason, ToolCall, ToolCallStatus,
+	ToolCallUpdate, ToolCallUpdateFields, UnstructuredCommandInput,
 };
 
 use crate::config::mcp::McpServerConfig;
@@ -208,6 +208,7 @@ impl agent_client_protocol::Agent for OctomindAgent {
 					// Advertise HTTP MCP transport support so clients offer us HTTP servers.
 					// SSE is not supported — we skip those servers silently in inject_acp_mcp_servers.
 					.mcp_capabilities(McpCapabilities::new().http(true))
+					.prompt_capabilities(PromptCapabilities::default().image(true))
 					.meta(meta),
 			)
 			.agent_info(Implementation::new("octomind", env!("CARGO_PKG_VERSION")));
@@ -277,21 +278,27 @@ impl agent_client_protocol::Agent for OctomindAgent {
 	async fn prompt(&self, args: PromptRequest) -> agent_client_protocol::Result<PromptResponse> {
 		let session_id = args.session_id.to_string();
 
-		// Extract text from prompt content blocks
-		let input: String = args
-			.prompt
-			.iter()
-			.filter_map(|block| {
-				if let ContentBlock::Text(t) = block {
-					Some(t.text.as_str())
-				} else {
-					None
+		// Extract text and images from prompt content blocks
+		let mut text_parts = Vec::new();
+		let mut images = Vec::new();
+		for block in &args.prompt {
+			match block {
+				ContentBlock::Text(t) => text_parts.push(t.text.as_str()),
+				ContentBlock::Image(img) => {
+					images.push(crate::session::image::ImageAttachment {
+						data: crate::session::image::ImageData::Base64(img.data.clone()),
+						media_type: img.mime_type.clone(),
+						source_type: crate::session::image::SourceType::Url, // ACP images are inline data, closest match
+						dimensions: None,
+						size_bytes: None,
+					});
 				}
-			})
-			.collect::<Vec<_>>()
-			.join("\n");
+				_ => {} // Skip audio, resources, etc.
+			}
+		}
+		let input: String = text_parts.join("\n");
 
-		if input.trim().is_empty() {
+		if input.trim().is_empty() && images.is_empty() {
 			return Ok(PromptResponse::new(StopReason::EndTurn));
 		}
 
@@ -418,6 +425,11 @@ impl agent_client_protocol::Agent for OctomindAgent {
 				.borrow_mut()
 				.insert(session_id.clone(), (chat_session, session_cwd.clone()));
 			return Ok(PromptResponse::new(StopReason::Cancelled));
+		}
+
+		// Attach ACP images as pending so add_user_message picks them up
+		if let Some(first_image) = images.into_iter().next() {
+			chat_session.pending_image = Some(first_image);
 		}
 
 		// Add user message if layers didn't modify session
