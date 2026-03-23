@@ -98,6 +98,7 @@ impl SessionCancellation {
 					_ = sigterm.recv() => {
 						println!("\n🛑 Termination signal received - exiting...");
 						std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
+						let _ = crate::mcp::server::cleanup_servers();
 						std::process::exit(130);
 					}
 				}
@@ -166,6 +167,7 @@ fn handle_interrupt(first_interrupt: &Arc<AtomicBool>, cancel_tx: &watch::Sender
 		// with the animation task's indicatif lock
 		std::println!("\n\u{1f6d1} Forcing exit...");
 		std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
+		let _ = crate::mcp::server::cleanup_servers();
 		std::process::exit(130);
 	} else {
 		// First Ctrl+C — send cancellation signal IMMEDIATELY before any IO.
