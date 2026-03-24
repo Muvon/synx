@@ -40,26 +40,29 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 	// This ensures consistency with display and all other systems
 	let current_tokens = session.get_full_context_tokens(config).await;
 
-	// When adaptive compression is disabled, fall back to max_session_tokens_threshold as trigger.
-	// This replaces the old continuation system: if threshold is set and exceeded, compress.
+	// HARD CEILING: max_session_tokens_threshold is the user's explicit safety limit.
+	// When set and exceeded, force compression unconditionally — no cooldown, no cost
+	// analysis, no "won't bring below threshold" checks. This is the last line of defense.
+	if config.max_session_tokens_threshold > 0
+		&& current_tokens >= config.max_session_tokens_threshold
+	{
+		let ratio = config
+			.compression
+			.pressure_levels
+			.iter()
+			.map(|l| l.target_ratio)
+			.fold(2.0_f64, f64::max);
+		log_debug!(
+			"Max session token threshold exceeded ({} >= {}) - FORCE triggering compression with ratio {:.1}x (bypasses all gates)",
+			current_tokens,
+			config.max_session_tokens_threshold,
+			ratio
+		);
+		return (true, ratio);
+	}
+
+	// When adaptive compression is disabled, nothing else to check
 	if !config.compression.adaptive_threshold {
-		if config.max_session_tokens_threshold > 0
-			&& current_tokens >= config.max_session_tokens_threshold
-		{
-			let ratio = config
-				.compression
-				.pressure_levels
-				.iter()
-				.map(|l| l.target_ratio)
-				.fold(2.0_f64, f64::max);
-			log_debug!(
-				"Max session token threshold exceeded ({} >= {}) - triggering compression with ratio {:.1}x",
-				current_tokens,
-				config.max_session_tokens_threshold,
-				ratio
-			);
-			return (true, ratio);
-		}
 		log_debug!("Adaptive compression disabled (adaptive_threshold=false)");
 		return (false, 2.0);
 	}
@@ -678,6 +681,14 @@ pub async fn check_and_compress_conversation(
 	if !force && !should_check {
 		return Ok(false);
 	}
+
+	// When max_session_tokens_threshold is exceeded, force compression — AI cannot refuse.
+	// This is the user's explicit safety ceiling; the decision model has no veto here.
+	let force = force
+		|| (config.max_session_tokens_threshold > 0 && {
+			let current_tokens = session.get_full_context_tokens(config).await;
+			current_tokens >= config.max_session_tokens_threshold
+		});
 
 	// Check for cancellation before starting compression (which involves an API call)
 	if *operation_rx.borrow() {
