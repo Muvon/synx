@@ -405,7 +405,6 @@ mod adaptive_compression_tests {
 		// Create a session with enough messages to exceed lowest pressure level
 		// We'll create a custom threshold for testing
 		let mut test_config = config.clone();
-		test_config.compression.adaptive_threshold = true;
 		test_config.compression.pressure_levels = vec![octomind::config::PressureLevel {
 			threshold: 1000,
 			target_ratio: 2.0,
@@ -462,18 +461,6 @@ mod adaptive_compression_tests {
 			);
 			prev_threshold = level.threshold;
 		}
-	}
-
-	#[test]
-	fn test_adaptive_threshold_flag() {
-		let (_temp_dir, config) = create_isolated_config();
-
-		// Verify adaptive_threshold is configurable
-		// Default should be true (enabled)
-		assert!(
-			config.compression.adaptive_threshold,
-			"Adaptive threshold should be enabled by default"
-		);
 	}
 
 	#[test]

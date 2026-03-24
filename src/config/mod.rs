@@ -151,9 +151,6 @@ pub struct CompressionHintConfig {
 	pub hints_pressure_threshold: f64,
 	/// Minimum tool executions between hints
 	pub hints_min_interval: usize,
-	/// Enable adaptive pressure-based compression (SOTA approach)
-	/// When true, compression triggers based on absolute token count from pressure_levels
-	pub adaptive_threshold: bool,
 	/// Compression aggressiveness levels based on absolute token count
 	/// Each level defines threshold (token count) and target compression ratio
 	/// Compression triggers when context exceeds ANY threshold, using the highest matched ratio

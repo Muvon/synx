@@ -691,7 +691,6 @@ prompt = "Please provide a detailed explanation of the code/concept above, inclu
 hints_enabled = true
 hints_pressure_threshold = 0.7
 hints_min_interval = 5
-adaptive_threshold = true
 
 [[compression.pressure_levels]]
 threshold = 50000

@@ -61,12 +61,6 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 		return (true, ratio);
 	}
 
-	// When adaptive compression is disabled, nothing else to check
-	if !config.compression.adaptive_threshold {
-		log_debug!("Adaptive compression disabled (adaptive_threshold=false)");
-		return (false, 2.0);
-	}
-
 	// Check if we have any pressure levels configured
 	if config.compression.pressure_levels.is_empty() {
 		log_debug!("No pressure levels configured - compression disabled");
