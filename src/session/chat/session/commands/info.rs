@@ -24,7 +24,20 @@ pub fn handle_info(session: &ChatSession) -> Result<CommandResult> {
 	let info = &session.session.info;
 
 	let tokens_used = info.input_tokens + info.output_tokens;
-	let cache_savings = 0.0; // TODO: Calculate cache savings if needed
+	// Estimate cache savings: if we had paid full price for cache_read_tokens at the same
+	// rate as non-cached input tokens, how much would it have cost?
+	let cache_savings =
+		if info.cache_read_tokens > 0 && info.input_tokens > 0 && info.total_cost > 0.0 {
+			let total_weighted = (info.input_tokens as f64) + (info.output_tokens as f64 * 3.0);
+			if total_weighted > 0.0 {
+				let estimated_input_rate = info.total_cost / total_weighted;
+				info.cache_read_tokens as f64 * estimated_input_rate
+			} else {
+				0.0
+			}
+		} else {
+			0.0
+		};
 
 	let compression_stats = if info.compression_stats.total_compressions() > 0 {
 		Some(info.compression_stats.clone())

@@ -52,35 +52,6 @@ pub struct ResponseProcessingParams<'a, S: OutputSink> {
 }
 
 impl<'a, S: OutputSink> ResponseProcessingParams<'a, S> {
-	#[allow(clippy::too_many_arguments)]
-	pub fn new(
-		content: String,
-		exchange: ProviderExchange,
-		tool_calls: Option<Vec<crate::mcp::McpToolCall>>,
-		finish_reason: Option<String>,
-		response_id: Option<String>,
-		chat_session: &'a mut ChatSession,
-		config: &'a Config,
-		role: &'a str,
-		operation_cancelled: tokio::sync::watch::Receiver<bool>,
-		sink: S,
-	) -> Self {
-		Self {
-			content,
-			exchange,
-			tool_calls,
-			thinking: None,
-			finish_reason,
-			response_id,
-			chat_session,
-			config,
-			role,
-			operation_cancelled,
-			sink,
-			mode: OutputMode::Interactive, // Default
-		}
-	}
-
 	/// Set thinking block
 	pub fn with_thinking(mut self, thinking: Option<ThinkingBlock>) -> Self {
 		self.thinking = thinking;
@@ -126,7 +97,6 @@ fn log_response_debug(
 }
 
 // Helper function to handle final response when no tool calls are present
-#[allow(clippy::too_many_arguments)]
 fn handle_final_response(
 	content: &str,
 	thinking: &Option<ThinkingBlock>,
@@ -672,7 +642,11 @@ pub async fn process_response<S: OutputSink>(
 					.session
 					.info
 					.compression_stats
-					.add_task_compression(metrics.messages_removed, metrics.tokens_saved);
+					.add_compression(
+						crate::session::CompressionKind::Task,
+						metrics.messages_removed,
+						metrics.tokens_saved,
+					);
 				CostTracker::display_compression_result("Task", &metrics);
 			}
 			Ok(None) => {}
@@ -689,7 +663,11 @@ pub async fn process_response<S: OutputSink>(
 					.session
 					.info
 					.compression_stats
-					.add_phase_compression(metrics.messages_removed, metrics.tokens_saved);
+					.add_compression(
+						crate::session::CompressionKind::Phase,
+						metrics.messages_removed,
+						metrics.tokens_saved,
+					);
 				CostTracker::display_compression_result("Phase", &metrics);
 			}
 			Ok(None) => {}
@@ -707,7 +685,11 @@ pub async fn process_response<S: OutputSink>(
 					.session
 					.info
 					.compression_stats
-					.add_project_compression(metrics.messages_removed, metrics.tokens_saved);
+					.add_compression(
+						crate::session::CompressionKind::Project,
+						metrics.messages_removed,
+						metrics.tokens_saved,
+					);
 				CostTracker::display_compression_result("Project", &metrics);
 			}
 			Ok(None) => {}

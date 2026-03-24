@@ -18,6 +18,20 @@ use crate::session::{ChatCompletionWithValidationParams, Message, Session};
 use anyhow::Result;
 use async_trait::async_trait;
 
+/// Parameters for recursive tool call processing in layers
+struct RecursiveToolCallParams {
+	initial_output: String,
+	initial_exchange: crate::session::ProviderExchange,
+	initial_tool_calls: Option<Vec<crate::mcp::McpToolCall>>,
+	messages: Vec<Message>,
+	effective_model: String,
+	layer_config: Config,
+	layer_start: std::time::Instant,
+	total_api_time_ms: u64,
+	total_tool_time_ms: u64,
+	operation_cancelled: tokio::sync::watch::Receiver<bool>,
+}
+
 /// Generic layer implementation that can work with any layer configuration
 /// This replaces the need for specific layer type implementations
 pub struct GenericLayer {
@@ -99,21 +113,23 @@ impl GenericLayer {
 
 	/// Process recursive tool calls using the same logic as main sessions
 	/// This ensures layers have full recursive tool call support
-	#[allow(clippy::too_many_arguments)]
 	async fn process_recursive_tool_calls(
 		&self,
-		initial_output: String,
-		initial_exchange: crate::session::ProviderExchange,
-		initial_tool_calls: Option<Vec<crate::mcp::McpToolCall>>,
-		messages: Vec<Message>,
-		effective_model: String,
-		layer_config: Config,
-		layer_start: std::time::Instant,
-		mut total_api_time_ms: u64,
-		mut total_tool_time_ms: u64,
+		params: RecursiveToolCallParams,
 		config: &Config,
-		operation_cancelled: tokio::sync::watch::Receiver<bool>,
 	) -> Result<LayerResult> {
+		let RecursiveToolCallParams {
+			initial_output,
+			initial_exchange,
+			initial_tool_calls,
+			messages,
+			effective_model,
+			layer_config,
+			layer_start,
+			mut total_api_time_ms,
+			mut total_tool_time_ms,
+			operation_cancelled,
+		} = params;
 		// Create a mock chat session for the layer to use the unified response processing
 		let mut layer_chat_session =
 			self.create_layer_chat_session(messages, &effective_model, &layer_config);
@@ -664,17 +680,19 @@ impl Layer for GenericLayer {
 				// This ensures layers have the same recursive tool call support as main sessions
 				return self
 					.process_recursive_tool_calls(
-						output,
-						exchange,
-						direct_tool_calls,
-						messages,
-						effective_model,
-						layer_config,
-						layer_start,
-						total_api_time_ms,
-						total_tool_time_ms,
+						RecursiveToolCallParams {
+							initial_output: output,
+							initial_exchange: exchange,
+							initial_tool_calls: direct_tool_calls,
+							messages,
+							effective_model,
+							layer_config,
+							layer_start,
+							total_api_time_ms,
+							total_tool_time_ms,
+							operation_cancelled: operation_cancelled.clone(),
+						},
 						config,
-						operation_cancelled.clone(),
 					)
 					.await;
 			}

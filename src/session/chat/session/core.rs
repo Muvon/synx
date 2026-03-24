@@ -682,19 +682,12 @@ impl ChatSession {
 		use crate::session::image::ImageProcessor;
 		use std::path::Path;
 
-		// Check if input is a URL
 		if ImageProcessor::is_url(path) {
 			println!("{}", "🌐 Downloading image from URL...".bright_cyan());
-
-			let image_attachment = ImageProcessor::load_from_url(path).await?;
-
-			// Show preview
+			let attachment = ImageProcessor::load_from_url(path).await?;
 			println!("{}", "📸 Image preview:".bright_cyan());
-			ImageProcessor::show_preview(&image_attachment)?;
-
-			// Store for next message
-			self.pending_image = Some(image_attachment);
-
+			ImageProcessor::show_preview(&attachment)?;
+			self.pending_image = Some(attachment);
 			println!(
 				"{}",
 				"✅ Image downloaded and ready to attach!".bright_green()
@@ -702,32 +695,21 @@ impl ChatSession {
 			return Ok(());
 		}
 
-		// Handle as file path
-		let image_path = Path::new(path);
-
-		// Check if file exists
-		if !image_path.exists() {
+		let file_path = Path::new(path);
+		if !file_path.exists() {
 			return Err(anyhow::anyhow!("Image file not found: {}", path));
 		}
-
-		// Check if it's a supported image format
-		if !ImageProcessor::is_supported_image(image_path) {
+		if !ImageProcessor::is_supported_image(file_path) {
 			return Err(anyhow::anyhow!(
 				"Unsupported image format. Supported: {}",
 				ImageProcessor::supported_extensions().join(", ")
 			));
 		}
 
-		// Load and process the image
-		let image_attachment = ImageProcessor::load_from_path(image_path)?;
-
-		// Show preview
+		let attachment = ImageProcessor::load_from_path(file_path)?;
 		println!("{}", "📸 Image preview:".bright_cyan());
-		ImageProcessor::show_preview(&image_attachment)?;
-
-		// Store for next message
-		self.pending_image = Some(image_attachment);
-
+		ImageProcessor::show_preview(&attachment)?;
+		self.pending_image = Some(attachment);
 		Ok(())
 	}
 
@@ -768,19 +750,12 @@ impl ChatSession {
 		use crate::session::video::VideoProcessor;
 		use std::path::Path;
 
-		// Check if input is a URL
 		if VideoProcessor::is_url(path) {
 			println!("{}", "🌐 Downloading video from URL...".bright_cyan());
-
-			let video_attachment = VideoProcessor::load_from_url(path).await?;
-
-			// Show preview
+			let attachment = VideoProcessor::load_from_url(path).await?;
 			println!("{}", "🎬 Video preview:".bright_cyan());
-			VideoProcessor::show_preview(&video_attachment)?;
-
-			// Store for next message
-			self.pending_video = Some(video_attachment);
-
+			VideoProcessor::show_preview(&attachment)?;
+			self.pending_video = Some(attachment);
 			println!(
 				"{}",
 				"✅ Video downloaded and ready to attach!".bright_green()
@@ -788,32 +763,21 @@ impl ChatSession {
 			return Ok(());
 		}
 
-		// Handle as file path
-		let video_path = Path::new(path);
-
-		// Check if file exists
-		if !video_path.exists() {
+		let file_path = Path::new(path);
+		if !file_path.exists() {
 			return Err(anyhow::anyhow!("Video file not found: {}", path));
 		}
-
-		// Check if it's a supported video format
-		if !VideoProcessor::is_supported_video(video_path) {
+		if !VideoProcessor::is_supported_video(file_path) {
 			return Err(anyhow::anyhow!(
 				"Unsupported video format. Supported: {}",
 				VideoProcessor::supported_extensions().join(", ")
 			));
 		}
 
-		// Load and process the video
-		let video_attachment = VideoProcessor::load_from_path(video_path)?;
-
-		// Show preview
+		let attachment = VideoProcessor::load_from_path(file_path)?;
 		println!("{}", "🎬 Video preview:".bright_cyan());
-		VideoProcessor::show_preview(&video_attachment)?;
-
-		// Store for next message
-		self.pending_video = Some(video_attachment);
-
+		VideoProcessor::show_preview(&attachment)?;
+		self.pending_video = Some(attachment);
 		Ok(())
 	}
 

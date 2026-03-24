@@ -761,13 +761,15 @@ pub async fn check_and_compress_conversation(
 /// Ask AI: should we compress AND get summary in ONE call (1-hop optimization)
 /// This combines decision + summarization to reduce latency and cost by 50%.
 /// When `force=true` the AI is only asked to summarize — it has no right to say NO.
-async fn ask_ai_decision_and_summary(
-	session: &mut ChatSession,
-	config: &Config,
+/// Build the system and user prompt for the compression AI call.
+///
+/// Returns `(system_content, user_content)`.
+/// `force=true` produces a direct-summary prompt (no YES/NO gate).
+fn build_compression_prompt(
+	session: &ChatSession,
 	messages_to_compress: &[crate::session::Message],
-	operation_rx: tokio::sync::watch::Receiver<bool>,
 	force: bool,
-) -> Result<(bool, String)> {
+) -> (String, String) {
 	// SYSTEM: role identity + instructions (what the model must do and how to respond).
 	// Kept separate from the data so the model acts as a compressor, not a session participant.
 	//
@@ -879,7 +881,8 @@ write it in a <knowledge> tag. 2-3 sentences MAX. Only include if truly critical
 Your critical insight here (2-3 sentences max).\n\
 </knowledge>\n\n\
 If NO, respond with just: NO"
-	};
+	}
+	.to_string();
 
 	// USER: plain-text transcript of the range being compressed + semantic chunk hints.
 	// Building a transcript (not raw messages) prevents the model from continuing the
@@ -1071,15 +1074,24 @@ secondary context.\n\n",
 		}
 	}
 
-	let now = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.unwrap_or_default()
-		.as_secs();
+	(system_content, user_content)
+}
 
+/// Call the AI compression model and return the raw response content.
+///
+/// Tracks cost against the session unless `ignore_cost` is set in config.
+async fn call_ai_for_decision(
+	session: &mut ChatSession,
+	config: &Config,
+	system_content: String,
+	user_content: String,
+	operation_rx: tokio::sync::watch::Receiver<bool>,
+) -> Result<String> {
+	let now = crate::utils::time::now_secs();
 	let messages = vec![
 		crate::session::Message {
 			role: "system".to_string(),
-			content: system_content.to_string(),
+			content: system_content,
 			timestamp: now,
 			cached: false,
 			tool_call_id: None,
@@ -1105,7 +1117,6 @@ secondary context.\n\n",
 		},
 	];
 
-	// Use decision model configuration from CompressionDecisionConfig
 	let decision_config = &config.compression.decision;
 
 	crate::log_debug!(
@@ -1116,7 +1127,6 @@ secondary context.\n\n",
 		decision_config.ignore_cost
 	);
 
-	// CRITICAL: Pass chat_session for cost tracking
 	let params = crate::session::ChatCompletionWithValidationParams::new(
 		&messages,
 		&decision_config.model,
@@ -1132,32 +1142,34 @@ secondary context.\n\n",
 
 	let response = crate::session::chat_completion_with_validation(params).await?;
 
-	// Extract usage for cost tracking
-	let usage = response.exchange.usage;
-
-	// Track cost based on ignore_cost setting
-	let ignore_cost = decision_config.ignore_cost;
-	if !ignore_cost {
-		if let Some(ref u) = usage {
-			if let Some(cost) = u.cost {
-				session.session.info.total_cost += cost;
-				session.estimated_cost = session.session.info.total_cost;
-				log_debug!(
-					"Compression decision cost: ${:.5} (total: ${:.5})",
-					cost,
-					session.session.info.total_cost
-				);
-			}
+	if !decision_config.ignore_cost {
+		if let Some(cost) = response.exchange.usage.as_ref().and_then(|u| u.cost) {
+			session.session.info.total_cost += cost;
+			session.estimated_cost = session.session.info.total_cost;
+			log_debug!(
+				"Compression decision cost: ${:.5} (total: ${:.5})",
+				cost,
+				session.session.info.total_cost
+			);
 		}
 	} else {
 		log_debug!("Compression decision cost ignored (ignore_cost=true)");
 	}
 
-	// Parse response.
-	// force=true: the AI was told to produce a summary directly (no YES/NO gate) — treat
-	//             the entire response as the summary and always compress.
-	// force=false: normal path — first line must be YES to proceed.
-	let content = response.content.trim();
+	Ok(response.content)
+}
+
+/// Parse the AI response into a compression decision and optional summary text.
+///
+/// `force=true`: entire response is the summary (no YES/NO gate).
+/// `force=false`: first line must be YES to proceed; NO means skip compression.
+fn parse_ai_response(
+	session: &mut ChatSession,
+	config: &Config,
+	content: &str,
+	force: bool,
+) -> Result<(bool, String)> {
+	let content = content.trim();
 	let lines: Vec<&str> = content.lines().collect();
 
 	if lines.is_empty() {
@@ -1184,14 +1196,12 @@ secondary context.\n\n",
 	let decision = first_line.contains("YES");
 
 	if decision {
-		// Extract summary from lines after "YES"
 		let summary = if lines.len() > 1 {
 			let raw = lines[1..].join("\n").trim().to_string();
 			strip_knowledge_tags(&raw)
 		} else {
 			String::new()
 		};
-
 		log_debug!(
 			"AI compression decision: YES with summary ({} chars)",
 			summary.len()
@@ -1201,6 +1211,20 @@ secondary context.\n\n",
 		log_debug!("AI compression decision: NO");
 		Ok((false, String::new()))
 	}
+}
+
+async fn ask_ai_decision_and_summary(
+	session: &mut ChatSession,
+	config: &Config,
+	messages_to_compress: &[crate::session::Message],
+	operation_rx: tokio::sync::watch::Receiver<bool>,
+	force: bool,
+) -> Result<(bool, String)> {
+	let (system_content, user_content) =
+		build_compression_prompt(session, messages_to_compress, force);
+	let response_content =
+		call_ai_for_decision(session, config, system_content, user_content, operation_rx).await?;
+	parse_ai_response(session, config, &response_content, force)
 }
 
 /// Apply compression by replacing message range with compressed summary
@@ -1268,11 +1292,11 @@ async fn apply_compression(
 	);
 
 	// Track stats
-	session
-		.session
-		.info
-		.compression_stats
-		.add_conversation_compression(messages_removed, tokens_saved);
+	session.session.info.compression_stats.add_compression(
+		crate::session::CompressionKind::Conversation,
+		messages_removed,
+		tokens_saved,
+	);
 
 	// Token-based cooldown: record post-compression context size.
 	// Next compression is allowed only after context grows ≥10% above this watermark,
@@ -1591,7 +1615,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn extends_range_to_include_tool_results() {
 		let mut messages = Vec::new();
 		messages.push(msg("system")); // 0
@@ -1628,16 +1651,14 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn extends_when_ending_on_assistant_with_tools() {
 		// THIS is the critical test - tool messages between conversation messages
-		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0
-
-		messages.push(msg("user")); // 1
-		messages.push(msg("assistant")); // 2
-
-		messages.push(msg("user")); // 3
+		let mut messages = vec![
+			msg("system"),    // 0
+			msg("user"),      // 1
+			msg("assistant"), // 2
+			msg("user"),      // 3
+		];
 		let mut assistant_with_tools = msg("assistant"); // 4
 		assistant_with_tools.tool_calls = Some(json!([
 			{"id": "call_1", "type": "function", "function": {"name": "tool1"}}
@@ -1666,7 +1687,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn handles_multiple_assistants_with_tools() {
 		// Test scenario: multiple assistant messages with tool calls in sequence
 		let mut messages = Vec::new();
@@ -1723,7 +1743,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn start_boundary_must_not_orphan_initial_tool_sequence() {
 		let mut messages = Vec::new();
 		messages.push(msg("system")); // 0
@@ -1763,7 +1782,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn anchor_with_tool_calls_must_advance_past_tool_results() {
 		// Reproduces the exact bug from the session log:
 		// - Message 1: assistant with 2 tool_calls (view_signatures + view)
@@ -1836,7 +1854,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn anchor_with_tool_calls_and_first_prompt_idx() {
 		// When first_prompt_idx points to an assistant with tool_calls,
 		// start_idx must still advance past its tool results.
@@ -1881,22 +1898,22 @@ mod tests {
 	// ============================================================================
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn bootstrap_preserved_when_first_prompt_idx_is_none_no_instructions() {
 		// Simulates resumed session without instructions file:
 		// [0] system, [1] assistant(welcome), [2+] conversation
 		// first_prompt_idx=None (resumed session)
-		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0
-		messages.push(msg("assistant")); // 1 - welcome message
-		messages.push(msg("user")); // 2 - first real user prompt
-		messages.push(msg("assistant")); // 3
-		messages.push(msg("user")); // 4
-		messages.push(msg("assistant")); // 5
-		messages.push(msg("user")); // 6
-		messages.push(msg("assistant")); // 7
-		messages.push(msg("user")); // 8
-		messages.push(msg("assistant")); // 9
+		let messages = vec![
+			msg("system"),    // 0
+			msg("assistant"), // 1 - welcome message
+			msg("user"),      // 2 - first real user prompt
+			msg("assistant"), // 3
+			msg("user"),      // 4
+			msg("assistant"), // 5
+			msg("user"),      // 6
+			msg("assistant"), // 7
+			msg("user"),      // 8
+			msg("assistant"), // 9
+		];
 
 		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
 
@@ -1915,22 +1932,22 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn bootstrap_preserved_when_first_prompt_idx_is_none_with_instructions() {
 		// Simulates resumed session WITH instructions file:
 		// [0] system, [1] assistant(welcome), [2] user(instructions), [3+] conversation
 		// first_prompt_idx=None (resumed session)
-		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0
-		messages.push(msg("assistant")); // 1 - welcome message
-		messages.push(msg("user")); // 2 - instructions file
-		messages.push(msg("assistant")); // 3 - AI response to instructions
-		messages.push(msg("user")); // 4 - first real user prompt
-		messages.push(msg("assistant")); // 5
-		messages.push(msg("user")); // 6
-		messages.push(msg("assistant")); // 7
-		messages.push(msg("user")); // 8
-		messages.push(msg("assistant")); // 9
+		let messages = vec![
+			msg("system"),    // 0
+			msg("assistant"), // 1 - welcome message
+			msg("user"),      // 2 - instructions file
+			msg("assistant"), // 3 - AI response to instructions
+			msg("user"),      // 4 - first real user prompt
+			msg("assistant"), // 5
+			msg("user"),      // 6
+			msg("assistant"), // 7
+			msg("user"),      // 8
+			msg("assistant"), // 9
+		];
 
 		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
 
@@ -1943,7 +1960,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn bootstrap_preserved_system_message_never_in_range() {
 		// Regardless of first_prompt_idx, system message must never be in compression range
 		let mut messages = Vec::new();
@@ -1966,7 +1982,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn bootstrap_with_tool_calls_in_welcome_response() {
 		// Edge case: welcome is followed by instructions, then AI responds with tool_calls
 		// [0] system, [1] assistant(welcome), [2] user(instructions),
@@ -2009,8 +2024,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
-	#[allow(clippy::needless_range_loop)]
 	fn calculate_range_tokens_must_match_removal_range() {
 		// CRITICAL TEST: Verify that calculate_range_tokens counts the EXACT same messages
 		// that will be removed by remove_messages_in_range.
@@ -2077,17 +2090,17 @@ mod tests {
 
 		// Count tokens that WILL BE REMOVED (matching remove_messages_in_range logic)
 		// remove_messages_in_range removes [start_idx+1, end_idx]
-		let mut expected_tokens = 0u64;
-		for i in (start_idx + 1)..=end_idx {
-			expected_tokens += estimate_message_tokens(&messages[i]) as u64;
-		}
+		let expected_tokens: u64 = messages[(start_idx + 1)..=end_idx]
+			.iter()
+			.map(|m| estimate_message_tokens(m) as u64)
+			.sum();
 
 		// Count tokens that ARE INCLUDED in semantic chunking
 		// messages_to_compress = [start_idx, end_idx]
-		let mut chunked_tokens = 0u64;
-		for i in start_idx..=end_idx {
-			chunked_tokens += estimate_message_tokens(&messages[i]) as u64;
-		}
+		let chunked_tokens: u64 = messages[start_idx..=end_idx]
+			.iter()
+			.map(|m| estimate_message_tokens(m) as u64)
+			.sum();
 
 		// THE BUG: expected_tokens != chunked_tokens
 		// calculate_range_tokens returns expected_tokens (removal range)
@@ -2110,7 +2123,6 @@ mod tests {
 	// ============================================================================
 
 	#[test]
-	#[allow(clippy::needless_range_loop)]
 	fn bug_proof_token_mismatch_causes_zero_savings() {
 		// BUG SCENARIO: calculate_range_tokens counts [start_idx+1, end_idx]
 		// but semantic chunking uses [start_idx, end_idx], causing token mismatch
@@ -2148,16 +2160,16 @@ mod tests {
 		assert_eq!(end_idx, 4); // Last small message
 
 		// What calculate_range_tokens ACTUALLY counts (CURRENT BUG)
-		let mut tokens_counted_by_function = 0u64;
-		for i in (start_idx + 1)..=end_idx {
-			tokens_counted_by_function += estimate_message_tokens(&messages[i]) as u64;
-		}
+		let tokens_counted_by_function: u64 = messages[(start_idx + 1)..=end_idx]
+			.iter()
+			.map(|m| estimate_message_tokens(m) as u64)
+			.sum();
 
 		// What semantic chunking ACTUALLY includes
-		let mut tokens_in_chunking = 0u64;
-		for i in start_idx..=end_idx {
-			tokens_in_chunking += estimate_message_tokens(&messages[i]) as u64;
-		}
+		let tokens_in_chunking: u64 = messages[start_idx..=end_idx]
+			.iter()
+			.map(|m| estimate_message_tokens(m) as u64)
+			.sum();
 
 		// THE BUG: Massive discrepancy!
 		let large_msg_tokens = estimate_message_tokens(&messages[start_idx]) as u64;
@@ -2632,7 +2644,6 @@ mod tests {
 	// ============================================================================
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn first_prompt_idx_never_changes_after_compression() {
 		// first_prompt_idx must always point to the original first user message.
 		// It is set once in main_loop.rs and never updated by compression.
@@ -2681,7 +2692,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn old_compressed_summary_is_recompressed_on_next_cycle() {
 		// After first compression, the summary sits at index 2 (role=assistant).
 		// On second compression with first_prompt_idx=Some(1), start_idx=1,
@@ -2721,7 +2731,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn triple_compression_always_one_summary() {
 		// After N compressions, there is always exactly ONE compressed summary
 		// between the anchor and the preserved tail — never accumulating orphans.
@@ -2756,21 +2765,21 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn anchor_message_never_included_in_drain_range() {
 		// TEST: Verify that the anchor message at start_idx is NEVER in the drain range.
 		// drain range = start_idx+1..=end_idx (exclusive of start_idx)
 
-		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0
-		messages.push(msg("user")); // 1 - anchor
-		messages.push(msg("assistant")); // 2
-		messages.push(msg("user")); // 3
-		messages.push(msg("assistant")); // 4
-		messages.push(msg("user")); // 5
-		messages.push(msg("assistant")); // 6
-		messages.push(msg("user")); // 7
-		messages.push(msg("assistant")); // 8
+		let messages = vec![
+			msg("system"),    // 0
+			msg("user"),      // 1 - anchor
+			msg("assistant"), // 2
+			msg("user"),      // 3
+			msg("assistant"), // 4
+			msg("user"),      // 5
+			msg("assistant"), // 6
+			msg("user"),      // 7
+			msg("assistant"), // 8
+		];
 
 		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
 
@@ -2800,7 +2809,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn compression_preserves_message_count_consistency() {
 		// TEST: Verify message count after compression is correct.
 		// Before: N messages
@@ -2838,7 +2846,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn messages_to_compress_excludes_anchor_message() {
 		// messages_to_compress must be start_idx+1..=end_idx (exclude anchor).
 		// The anchor at start_idx is KEPT by remove_messages_in_range.
@@ -2878,7 +2885,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn calculate_range_tokens_matches_actual_removal() {
 		// calculate_range_tokens must count exactly the messages removed by
 		// remove_messages_in_range (start_idx+1..=end_idx), not including anchor.
@@ -2958,7 +2964,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn test_multiple_compression_cycles_anchor_never_moves() {
 		// Simulate 3 compression cycles on a growing conversation.
 		// After each cycle the old summary is at start_idx+1 and gets folded into the next.
@@ -3025,7 +3030,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn test_compression_never_removes_last_user_message() {
 		// The RECENT window must always protect the last few messages.
 		// end_idx must be strictly less than messages.len()-1 so the final user
@@ -3050,7 +3054,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn test_recent_window_capped_at_8_for_large_session() {
 		// For a 100-message session, RECENT count must be 8 (not 25).
 		// This mirrors the formula: (total / 4).max(4).min(8)
@@ -3072,7 +3075,6 @@ mod tests {
 		assert_eq!(recent_medium, 8, "RECENT window must be 8 at 32 messages");
 	}
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn first_preserved_must_be_user_not_assistant() {
 		// Reproduces the exact bug from the session log:
 		// After compression, the compressed summary (assistant) is inserted, and the first
@@ -3143,14 +3145,14 @@ mod tests {
 		// With the current layout, conversation_indices[7] = 13 (user). Let me restructure.
 
 		// Actually, let me build a cleaner scenario that definitely triggers it.
-		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0
-		messages.push(msg("user")); // 1 (first_prompt_idx)
-		messages.push(msg("assistant")); // 2
-		messages.push(msg("user")); // 3
-		messages.push(msg("assistant")); // 4
-		messages.push(msg("user")); // 5
-
+		let mut messages = vec![
+			msg("system"),    // 0
+			msg("user"),      // 1 (first_prompt_idx)
+			msg("assistant"), // 2
+			msg("user"),      // 3
+			msg("assistant"), // 4
+			msg("user"),      // 5
+		];
 		// This assistant with tool_calls should be the first preserved conversation message
 		let mut a6 = msg("assistant"); // 6
 		a6.tool_calls = Some(json!([
@@ -3231,7 +3233,6 @@ mod tests {
 	}
 
 	#[test]
-	#[allow(clippy::vec_init_then_push)]
 	fn test_triple_compression_only_one_summary_in_drain() {
 		// After 3 compression cycles, the drain range must always contain exactly
 		// one prior compressed summary (the previous cycle's output), never zero or two.

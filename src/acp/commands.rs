@@ -54,7 +54,6 @@ pub struct CommandResponse {
 	pub error: Option<String>,
 }
 /// Execute an ACP extension command
-#[allow(clippy::await_holding_refcell_ref)]
 pub async fn execute_command(
 	request: &CommandRequest,
 	sessions: &Rc<RefCell<std::collections::HashMap<String, (ChatSession, std::path::PathBuf)>>>,
@@ -99,11 +98,14 @@ pub async fn execute_command(
 		format!("{} {}", request.command, request.args.join(" "))
 	};
 
+	// Clone config before the await point to avoid holding RefCell borrow across await
+	let mut config_clone = config.borrow().clone();
+
 	// Execute the command
 	let result = process_command(
 		&mut chat_session,
 		&full_command,
-		&mut config.borrow_mut(),
+		&mut config_clone,
 		role,
 		operation_rx,
 	)

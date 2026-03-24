@@ -272,12 +272,10 @@ pub fn log_knowledge_entry(session_name: &str, knowledge: &str) -> Result<()> {
 }
 
 pub fn log_raw_exchange(exchange: &crate::session::ProviderExchange) -> Result<()> {
-	// Extract session name if available, otherwise use "default"
-	let session_name = "default"; // TODO: Extract from context
-
-	// Log both request and response separately for easier debugging
-	log_api_request(session_name, &exchange.request)?;
-	log_api_response(session_name, &exchange.response, exchange.usage.as_ref())?;
+	// Log both request and response separately for easier debugging.
+	// Uses "default" as session name since this call site has no session context.
+	log_api_request("default", &exchange.request)?;
+	log_api_response("default", &exchange.response, exchange.usage.as_ref())?;
 	Ok(())
 }
 

@@ -122,7 +122,6 @@ impl OAuthConfig {
 	/// # Returns
 	///
 	/// A new OAuthConfig with default values for optional fields.
-	#[allow(clippy::too_many_arguments)]
 	pub fn new(
 		client_id: String,
 		client_secret: String,

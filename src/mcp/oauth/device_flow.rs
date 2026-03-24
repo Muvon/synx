@@ -9,14 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_urlencoded;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 fn now_secs() -> u64 {
-	SystemTime::now()
-		.duration_since(UNIX_EPOCH)
-		.unwrap_or(Duration::from_secs(0))
-		.as_secs()
+	crate::utils::time::now_secs()
 }
 
 /// Device flow response from Step 1

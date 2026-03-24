@@ -160,22 +160,20 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 			// Process the response with tool calls
 			// CRITICAL FIX: Use operation_cancelled instead of creating a new token
 			// This ensures Ctrl+C cancellation works properly during tool execution
-			let process_result = process_response(
-				ResponseProcessingParams::new(
-					response.content,
-					response.exchange,
-					response.tool_calls,
-					response.finish_reason,
-					response.response_id,
-					chat_session,
-					config,
-					role,
-					operation_rx_for_response.clone(),
-					sink,
-				)
-				.with_thinking(response.thinking)
-				.with_mode(mode),
-			) // Pass through mode, thinking, and sink
+			let process_result = process_response(ResponseProcessingParams {
+				content: response.content,
+				exchange: response.exchange,
+				tool_calls: response.tool_calls,
+				thinking: response.thinking,
+				finish_reason: response.finish_reason,
+				response_id: response.response_id,
+				chat_session,
+				config,
+				role,
+				operation_cancelled: operation_rx_for_response.clone(),
+				sink,
+				mode,
+			})
 			.await;
 
 			if let Err(e) = process_result {

@@ -218,11 +218,11 @@ pub async fn process_tool_results(
 		let _task_compression_occurred =
 			match crate::mcp::core::plan::process_pending_compression(chat_session).await {
 				Ok(Some(metrics)) => {
-					chat_session
-						.session
-						.info
-						.compression_stats
-						.add_task_compression(metrics.messages_removed, metrics.tokens_saved);
+					chat_session.session.info.compression_stats.add_compression(
+						crate::session::CompressionKind::Task,
+						metrics.messages_removed,
+						metrics.tokens_saved,
+					);
 					crate::session::chat::cost_tracker::CostTracker::display_compression_result(
 						"Task", &metrics,
 					);
@@ -242,11 +242,11 @@ pub async fn process_tool_results(
 		let _phase_compression_occurred =
 			match crate::mcp::core::plan::process_pending_phase_compression(chat_session).await {
 				Ok(Some(metrics)) => {
-					chat_session
-						.session
-						.info
-						.compression_stats
-						.add_phase_compression(metrics.messages_removed, metrics.tokens_saved);
+					chat_session.session.info.compression_stats.add_compression(
+						crate::session::CompressionKind::Phase,
+						metrics.messages_removed,
+						metrics.tokens_saved,
+					);
 					crate::session::chat::cost_tracker::CostTracker::display_compression_result(
 						"Phase", &metrics,
 					);

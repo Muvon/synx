@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Shared utilities module
+// Shared time utilities
 
-pub mod file_parser;
-pub mod file_renderer;
-pub mod glob;
-pub mod terminal_output;
-pub mod time;
-pub mod truncation;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Returns the current Unix timestamp in seconds.
+pub fn now_secs() -> u64 {
+	SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.unwrap_or_default()
+		.as_secs()
+}
