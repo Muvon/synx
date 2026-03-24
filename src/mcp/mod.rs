@@ -807,16 +807,7 @@ async fn execute_tool_without_cancellation(
 	cancellation_token: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<McpToolResult> {
 	// STATIC ROUTING: Use pre-built tool map ONLY
-	let tool_server_map = {
-		let mut map = std::collections::HashMap::new();
-		if let Some(server) = tool_map::get_server_for_tool(&call.tool_name) {
-			map.insert(call.tool_name.clone(), server);
-		}
-		map
-	};
-
-	// Find the server that provides this tool
-	if let Some(target_server) = tool_server_map.get(&call.tool_name) {
+	if let Some(target_server) = tool_map::get_server_for_tool(&call.tool_name) {
 		crate::log_debug!(
 			"Routing tool '{}' to server '{}' ({:?})",
 			call.tool_name,
@@ -940,7 +931,7 @@ async fn execute_tool_without_cancellation(
 			}
 			McpConnectionType::Http | McpConnectionType::Stdin => {
 				// Execute on external server
-				match server::execute_tool_call(call, target_server, None).await {
+				match server::execute_tool_call(call, &target_server, None).await {
 					Ok(mut result) => {
 						result.tool_id = call.tool_id.clone();
 						return Ok(result);
