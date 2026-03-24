@@ -120,7 +120,7 @@ impl MessageHandler {
 		exchange: &ProviderExchange,
 	) -> Result<()> {
 		let _ = crate::session::logger::log_assistant_response(session_name, content);
-		let _ = crate::session::logger::log_raw_exchange(exchange);
+		let _ = crate::session::logger::log_raw_exchange(session_name, exchange);
 		Ok(())
 	}
 }

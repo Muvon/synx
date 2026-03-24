@@ -352,7 +352,7 @@ impl ChatSession {
 
 		// Log the raw exchange if available (legacy)
 		if let Some(ex) = &exchange {
-			let _ = crate::session::logger::log_raw_exchange(ex);
+			let _ = crate::session::logger::log_raw_exchange(&self.session.info.name, ex);
 		}
 
 		// Update token counts and estimated costs if we have usage data

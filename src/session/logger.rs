@@ -271,11 +271,12 @@ pub fn log_knowledge_entry(session_name: &str, knowledge: &str) -> Result<()> {
 	Ok(())
 }
 
-pub fn log_raw_exchange(exchange: &crate::session::ProviderExchange) -> Result<()> {
-	// Log both request and response separately for easier debugging.
-	// Uses "default" as session name since this call site has no session context.
-	log_api_request("default", &exchange.request)?;
-	log_api_response("default", &exchange.response, exchange.usage.as_ref())?;
+pub fn log_raw_exchange(
+	session_name: &str,
+	exchange: &crate::session::ProviderExchange,
+) -> Result<()> {
+	log_api_request(session_name, &exchange.request)?;
+	log_api_response(session_name, &exchange.response, exchange.usage.as_ref())?;
 	Ok(())
 }
 

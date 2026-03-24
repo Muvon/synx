@@ -317,7 +317,8 @@ fn add_assistant_message_with_tool_calls(
 		&chat_session.session.info.name,
 		current_content,
 	);
-	let _ = crate::session::logger::log_raw_exchange(current_exchange);
+	let _ =
+		crate::session::logger::log_raw_exchange(&chat_session.session.info.name, current_exchange);
 
 	Ok(())
 }

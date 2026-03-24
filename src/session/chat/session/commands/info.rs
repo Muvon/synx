@@ -24,8 +24,9 @@ pub fn handle_info(session: &ChatSession) -> Result<CommandResult> {
 	let info = &session.session.info;
 
 	let tokens_used = info.input_tokens + info.output_tokens;
-	// Estimate cache savings: if we had paid full price for cache_read_tokens at the same
-	// rate as non-cached input tokens, how much would it have cost?
+	// Estimate cache savings: approximate cost of cache_read_tokens if they had been
+	// charged at the full input rate. The 3x weight for output tokens reflects typical
+	// provider pricing (output tokens cost ~3x input tokens).
 	let cache_savings =
 		if info.cache_read_tokens > 0 && info.input_tokens > 0 && info.total_cost > 0.0 {
 			let total_weighted = (info.input_tokens as f64) + (info.output_tokens as f64 * 3.0);
