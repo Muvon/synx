@@ -810,7 +810,14 @@ If specific file ranges are critical for the next step, include them:\n\
 filepath:startline:endline\n\
 </context>\n\
 Rules: <context> tags required; one entry per line as filepath:N:N (no spaces); \
-paths from project root; line numbers 1–10000; max 5 ranges; only truly critical files."
+paths from project root; line numbers 1–10000; max 5 ranges; only truly critical files.\n\n\
+**OPTIONAL — critical knowledge to retain across compressions:**\n\
+If there is critical knowledge from this conversation that MUST survive future compressions \
+(e.g., a key architectural decision, a non-obvious constraint, a user preference that affects all future work), \
+write it in a <knowledge> tag. 2-3 sentences MAX. Only include if truly critical — not routine progress.\n\
+<knowledge>\n\
+Your critical insight here (2-3 sentences max).\n\
+</knowledge>"
 	} else {
 		"You are a conversation compressor. \
 Your job is to produce a lossless summary of a conversation transcript so the session can continue \
@@ -864,6 +871,13 @@ filepath:startline:endline\n\
 </context>\n\
 Rules: <context> tags required; one entry per line as filepath:N:N (no spaces); \
 paths from project root; line numbers 1–10000; max 5 ranges; only truly critical files.\n\n\
+**OPTIONAL — critical knowledge to retain across compressions:**\n\
+If there is critical knowledge from this conversation that MUST survive future compressions \
+(e.g., a key architectural decision, a non-obvious constraint, a user preference that affects all future work), \
+write it in a <knowledge> tag. 2-3 sentences MAX. Only include if truly critical — not routine progress.\n\
+<knowledge>\n\
+Your critical insight here (2-3 sentences max).\n\
+</knowledge>\n\n\
 If NO, respond with just: NO"
 	};
 
@@ -884,6 +898,16 @@ If NO, respond with just: NO"
 highest fidelity. [USER]/[ASSISTANT] pairs are primary signal; [TOOL CALL]/[TOOL RESULT] are \
 secondary context.\n\n",
 	);
+
+	// Inject accumulated critical knowledge from prior compressions
+	if !session.critical_knowledge.is_empty() {
+		user_content
+			.push_str("**CRITICAL KNOWLEDGE (from prior compressions — MUST be preserved):**\n");
+		for (i, knowledge) in session.critical_knowledge.iter().enumerate() {
+			user_content.push_str(&format!("{}. {}\n", i + 1, knowledge));
+		}
+		user_content.push('\n');
+	}
 
 	// Collect file references from tool calls for context preservation
 	// These can be re-read on demand after compression
@@ -1146,10 +1170,14 @@ secondary context.\n\n",
 		return Ok((false, String::new()));
 	}
 
+	// Extract and store critical knowledge from <knowledge> tags before returning summary
+	extract_and_store_knowledge(session, config, content);
+
 	if force {
 		// Entire response is the summary — no YES/NO prefix expected.
-		log_debug!("AI forced compression summary ({} chars)", content.len());
-		return Ok((true, content.to_string()));
+		let summary = strip_knowledge_tags(content);
+		log_debug!("AI forced compression summary ({} chars)", summary.len());
+		return Ok((true, summary));
 	}
 
 	let first_line = lines[0].trim().to_uppercase();
@@ -1158,7 +1186,8 @@ secondary context.\n\n",
 	if decision {
 		// Extract summary from lines after "YES"
 		let summary = if lines.len() > 1 {
-			lines[1..].join("\n").trim().to_string()
+			let raw = lines[1..].join("\n").trim().to_string();
+			strip_knowledge_tags(&raw)
 		} else {
 			String::new()
 		};
@@ -1330,6 +1359,76 @@ fn strip_file_context_from_summary(summary: &str) -> String {
 	} else {
 		summary.trim().to_string()
 	}
+}
+
+/// Extract <knowledge> tags from AI compression response, store in session, and log.
+/// Trims to the configured knowledge_retention limit (keeps most recent entries).
+fn extract_and_store_knowledge(session: &mut ChatSession, config: &Config, content: &str) {
+	let knowledge_entries = parse_knowledge_tags(content);
+	if knowledge_entries.is_empty() {
+		return;
+	}
+
+	let retention_limit = config.compression.knowledge_retention;
+	for entry in &knowledge_entries {
+		log_debug!("Extracted critical knowledge: {}", entry);
+		session.critical_knowledge.push(entry.clone());
+
+		// Persist to session log
+		let _ = crate::session::logger::log_knowledge_entry(&session.session.info.name, entry);
+	}
+
+	// Trim to retention limit (keep most recent)
+	if retention_limit > 0 && session.critical_knowledge.len() > retention_limit {
+		let drain_count = session.critical_knowledge.len() - retention_limit;
+		session.critical_knowledge.drain(..drain_count);
+		log_debug!(
+			"Trimmed critical knowledge to {} entries (retention limit)",
+			retention_limit
+		);
+	}
+
+	log_info!(
+		"Stored {} new critical knowledge entries ({} total)",
+		knowledge_entries.len(),
+		session.critical_knowledge.len()
+	);
+}
+
+/// Parse all <knowledge>...</knowledge> tags from text.
+/// Returns the trimmed content of each tag.
+fn parse_knowledge_tags(content: &str) -> Vec<String> {
+	let mut entries = Vec::new();
+	let mut search_from = 0;
+	while let Some(start) = content[search_from..].find("<knowledge>") {
+		let abs_start = search_from + start + "<knowledge>".len();
+		if let Some(end) = content[abs_start..].find("</knowledge>") {
+			let abs_end = abs_start + end;
+			let entry = content[abs_start..abs_end].trim().to_string();
+			if !entry.is_empty() {
+				entries.push(entry);
+			}
+			search_from = abs_end + "</knowledge>".len();
+		} else {
+			break;
+		}
+	}
+	entries
+}
+
+/// Strip <knowledge>...</knowledge> tags from summary text.
+/// The knowledge is already extracted and stored separately — no need to keep it in the summary.
+fn strip_knowledge_tags(content: &str) -> String {
+	let mut result = content.to_string();
+	while let Some(start) = result.find("<knowledge>") {
+		if let Some(end) = result[start..].find("</knowledge>") {
+			let abs_end = start + end + "</knowledge>".len();
+			result = format!("{}{}", &result[..start], &result[abs_end..]);
+		} else {
+			break;
+		}
+	}
+	result.trim().to_string()
 }
 
 /// Find which messages to compress (keep last 4 turns = 2 exchanges raw)

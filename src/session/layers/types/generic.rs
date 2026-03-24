@@ -404,6 +404,7 @@ impl GenericLayer {
 				let (_tx, rx) = tokio::sync::mpsc::channel(1);
 				rx
 			},
+			critical_knowledge: Vec::new(), // Layers don't retain knowledge across compressions
 		}
 	}
 

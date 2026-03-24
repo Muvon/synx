@@ -259,6 +259,18 @@ pub fn log_user_request(content: &str) -> Result<()> {
 	log_user_input("default", content)
 }
 
+/// Log a critical knowledge entry extracted during compression
+pub fn log_knowledge_entry(session_name: &str, knowledge: &str) -> Result<()> {
+	let log_file = get_session_log_file(session_name)?;
+	let log_entry = serde_json::json!({
+		"type": "KNOWLEDGE_ENTRY",
+		"timestamp": get_timestamp(),
+		"knowledge": knowledge
+	});
+	append_to_log(&log_file, &serde_json::to_string(&log_entry)?)?;
+	Ok(())
+}
+
 pub fn log_raw_exchange(exchange: &crate::session::ProviderExchange) -> Result<()> {
 	// Extract session name if available, otherwise use "default"
 	let session_name = "default"; // TODO: Extract from context

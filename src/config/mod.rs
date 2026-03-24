@@ -159,6 +159,14 @@ pub struct CompressionHintConfig {
 	/// Decision model configuration for compression decisions and summary generation
 	/// Use a fast, cheap model like Haiku for cost savings (10x cheaper than Sonnet)
 	pub decision: CompressionDecisionConfig,
+	/// Maximum number of critical knowledge entries to retain across compressions.
+	/// Each compression may extract a short knowledge snippet; only the last N are kept.
+	#[serde(default = "default_knowledge_retention")]
+	pub knowledge_retention: usize,
+}
+
+fn default_knowledge_retention() -> usize {
+	10
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

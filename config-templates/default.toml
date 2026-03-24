@@ -671,6 +671,12 @@ target_ratio = 4.0  # Medium: 75% reduction
 threshold = 150000
 target_ratio = 8.0  # Aggressive: 87.5% reduction
 
+# Maximum number of critical knowledge entries retained across compressions.
+# Each compression may extract a short snippet of critical knowledge (decisions,
+# constraints, user preferences). Only the last N entries are kept and injected
+# into every subsequent compression so the AI never loses essential context.
+knowledge_retention = 10
+
 # Decision model configuration for compression decisions and summary generation
 # Use a fast, cheap model like Haiku for cost savings (10x cheaper than Sonnet)
 # Cost comparison: Haiku ~$0.0003 vs Sonnet ~$0.003 per compression decision

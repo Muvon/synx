@@ -185,6 +185,9 @@ pub struct ChatSession {
 	pub schema: Option<serde_json::Value>,
 	/// Receiver for completed background agent jobs — injected into the session loop.
 	pub job_rx: tokio::sync::mpsc::Receiver<crate::session::background_jobs::CompletedJob>,
+	/// Critical knowledge entries extracted from compressions — persisted across cycles.
+	/// Capped at `config.compression.knowledge_retention` entries (FIFO).
+	pub critical_knowledge: Vec<String>,
 }
 
 /// Parameters for creating a new ChatSession
@@ -299,6 +302,7 @@ impl ChatSession {
 			first_prompt_idx: None,             // Initialize first prompt index (set on first user message)
 			schema: None,                       // Schema set later via CLI override
 			job_rx: crate::mcp::agent::functions::init_job_manager(),
+			critical_knowledge: Vec::new(), // Populated from session log on resume
 		}
 	}
 
@@ -495,6 +499,7 @@ impl ChatSession {
 						first_prompt_idx: None,     // Will be detected from existing messages
 						schema: None,               // Schema applied after init via CLI override
 						job_rx: crate::mcp::agent::functions::init_job_manager(),
+						critical_knowledge: Vec::new(), // Will be restored from session log below
 					};
 
 					// Apply runtime state from session log (legacy support)
@@ -515,6 +520,15 @@ impl ChatSession {
 								chat_session.model = role_model;
 							}
 						}
+					}
+
+					// Restore critical knowledge entries from session log
+					if !runtime_state.critical_knowledge.is_empty() {
+						chat_session.critical_knowledge = runtime_state.critical_knowledge;
+						crate::log_debug!(
+							"Session resume: Restored {} critical knowledge entries",
+							chat_session.critical_knowledge.len()
+						);
 					}
 
 					// CRITICAL FIX: Recalculate token tracking from actual messages
@@ -1260,6 +1274,7 @@ mod tests {
 				let (_tx, rx) = tokio::sync::mpsc::channel(1);
 				rx
 			},
+			critical_knowledge: Vec::new(),
 		}
 	}
 

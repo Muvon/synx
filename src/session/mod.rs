@@ -1330,7 +1330,8 @@ pub struct SessionRuntimeState {
 	pub model: Option<String>,
 	pub layers_enabled: Option<bool>,
 	pub cache_next_message: bool,
-	pub role: Option<String>, // Track runtime role changes
+	pub role: Option<String>,            // Track runtime role changes
+	pub critical_knowledge: Vec<String>, // Knowledge entries from compressions
 }
 
 /// Extract runtime state from session log file
@@ -1348,6 +1349,12 @@ pub fn extract_runtime_state_from_log(session_file: &PathBuf) -> Result<SessionR
 					"RESTORATION_POINT" => {
 						// Reset state tracking after restoration point
 						state = SessionRuntimeState::default();
+					}
+					"KNOWLEDGE_ENTRY" => {
+						// Restore critical knowledge entries from compression cycles
+						if let Some(content) = json_value.get("content").and_then(|c| c.as_str()) {
+							state.critical_knowledge.push(content.to_string());
+						}
 					}
 					"COMMAND" => {
 						// Process all commands to get the final state
