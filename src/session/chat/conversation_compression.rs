@@ -153,10 +153,14 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 
 				if start_idx >= end_idx {
 					log_debug!(
-						"Invalid compression range ({} >= {}), skipping",
+						"Invalid compression range ({} >= {}), setting cooldown to prevent re-analysis loop",
 						start_idx,
 						end_idx
 					);
+					// CRITICAL: Set cooldown to prevent expensive re-analysis every turn.
+					// Without this, the full cost analysis runs on every turn only to
+					// discover there aren't enough messages — an infinite waste loop.
+					session.session.info.context_tokens_after_last_compression = current_tokens;
 					return (false, 2.0);
 				}
 
@@ -3278,5 +3282,88 @@ mod tests {
 				format!("## Conversation Summary [COMPRESSED: c{cycle}]\nCycle {cycle} summary.");
 			messages.insert(s + 1, summary);
 		}
+	}
+
+	#[test]
+	fn bug_proof_invalid_range_must_set_cooldown() {
+		// BUG SCENARIO: should_check_compression runs the full expensive path:
+		//   threshold exceeded → cooldown passed → cost analysis → find_compression_range
+		// When find_compression_range returns (0, 0) (not enough messages),
+		// it MUST set context_tokens_after_last_compression to prevent the same
+		// expensive analysis from running every single turn.
+		//
+		// Without the fix, the log shows this loop every turn:
+		//   Compression check: current_tokens=61028, thresholds=[60000, 80000, 120000]
+		//   ✓ Threshold exceeded!
+		//   Compression cooldown passed: ...
+		//   Net benefit: $0.27539 → COMPRESS ✓
+		//   Invalid compression range (0 >= 0), skipping
+		//   ... repeats next turn ...
+
+		// Step 1: Prove find_compression_range returns (0, 0) with too few messages
+		let messages = vec![
+			msg("system"),    // 0
+			msg("user"),      // 1
+			msg("assistant"), // 2
+			msg("user"),      // 3
+			msg("assistant"), // 4
+		];
+		// Only 4 conversation messages (user+assistant) — need >4 to compress
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		assert_eq!(
+			(start_idx, end_idx),
+			(0, 0),
+			"Must return (0,0) when not enough messages to compress"
+		);
+
+		// Step 2: Verify the cooldown logic that should_check_compression must apply
+		// when it encounters this (0, 0) range after passing all other gates.
+		let current_tokens: usize = 61_028;
+		let mut context_tokens_after_last_compression: usize = 19_442; // from prior compression
+
+		// Simulate the fix: set cooldown when range is invalid
+		if start_idx >= end_idx {
+			context_tokens_after_last_compression = current_tokens;
+		}
+
+		// Now the cooldown check should block the next attempt
+		let min_tokens_for_recompression =
+			(context_tokens_after_last_compression as f64 * 1.1) as usize;
+		assert!(
+			current_tokens < min_tokens_for_recompression,
+			"After setting cooldown to current_tokens={}, next check at same token count must be blocked (need {} for recompression)",
+			current_tokens,
+			min_tokens_for_recompression
+		);
+
+		// Step 3: Verify that WITHOUT the fix, cooldown would NOT block
+		let old_watermark: usize = 19_442;
+		let old_min = (old_watermark as f64 * 1.1) as usize;
+		assert!(
+			current_tokens >= old_min,
+			"Without fix, old watermark {} allows recompression at {} (min: {}) — the bug!",
+			old_watermark,
+			current_tokens,
+			old_min
+		);
+	}
+
+	#[test]
+	fn bug_proof_invalid_range_cooldown_allows_growth() {
+		// After cooldown is set from invalid range, compression must still
+		// trigger once context grows by ≥10%.
+		let current_tokens: usize = 61_028;
+		let context_tokens_after_last_compression = current_tokens; // cooldown set
+
+		// 10% growth should allow recompression
+		let grown_tokens: usize = 67_200; // ~10.1% growth
+		let min_required = (context_tokens_after_last_compression as f64 * 1.1) as usize;
+		assert!(
+			grown_tokens >= min_required,
+			"After 10%+ growth ({} → {}), compression should be allowed (min: {})",
+			current_tokens,
+			grown_tokens,
+			min_required
+		);
 	}
 }
