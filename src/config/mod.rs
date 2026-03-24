@@ -525,8 +525,13 @@ impl Config {
 // Logging macros for different log levels
 thread_local! {
 	static CURRENT_CONFIG: RefCell<Option<Config>> = const { RefCell::new(None) };
-	static CURRENT_ROLE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
+
+/// Global current role — uses RwLock instead of thread_local! because tokio's
+/// multi-threaded runtime can migrate async tasks between OS threads across .await
+/// points, which would cause thread_local! values to silently disappear.
+/// Safe as a global: one session per process, reads vastly outnumber writes.
+static CURRENT_ROLE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
 /// Set the current config for the thread (to be used by logging macros)
 pub fn set_thread_config(config: &Config) {
@@ -535,16 +540,14 @@ pub fn set_thread_config(config: &Config) {
 	});
 }
 
-/// Set the current role for the thread (to be used by MCP tools)
+/// Set the current role (to be used by MCP tools like persist)
 pub fn set_thread_role(role: &str) {
-	CURRENT_ROLE.with(|r| {
-		*r.borrow_mut() = Some(role.to_string());
-	});
+	*CURRENT_ROLE.write().unwrap() = Some(role.to_string());
 }
 
-/// Get the current role for the thread
+/// Get the current role
 pub fn get_thread_role() -> Option<String> {
-	CURRENT_ROLE.with(|r| (*r.borrow()).clone())
+	CURRENT_ROLE.read().unwrap().clone()
 }
 
 /// Get the current config for the thread
