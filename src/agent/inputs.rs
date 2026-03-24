@@ -119,13 +119,15 @@ fn prompt_user(key: &str) -> Result<String> {
 /// - If already stored in `~/.local/share/octomind/inputs.toml`, use that value.
 /// - Otherwise prompt the user, then save for future runs.
 pub async fn resolve_inputs(raw: &str) -> Result<String> {
-	let keys = extract_input_keys(raw);
+	// Protect escaped braces BEFORE extracting keys so that
+	// `{{{{INPUT:KEY}}}}` (escaped literal) is not mistaken for `{{INPUT:KEY}}`.
+	let mut result = protect_escaped_braces(raw);
+	let keys = extract_input_keys(&result);
 	if keys.is_empty() {
-		return Ok(raw.to_string());
+		return Ok(restore_escaped_braces(&result));
 	}
 
 	let mut stored = load_inputs()?;
-	let mut result = protect_escaped_braces(raw);
 
 	for key in &keys {
 		let value = if let Some(v) = stored.get(key) {
@@ -203,12 +205,13 @@ fn save_env_to_dotenv(key: &str, value: &str) -> Result<()> {
 ///
 /// Call this **after** `resolve_inputs()` so INPUT prompts come first.
 pub async fn resolve_env_vars(raw: &str) -> Result<String> {
-	let keys = extract_env_keys(raw);
-	if keys.is_empty() {
-		return Ok(raw.to_string());
-	}
-
+	// Protect escaped braces BEFORE extracting keys so that
+	// `{{{{ENV:KEY}}}}` (escaped literal) is not mistaken for `{{ENV:KEY}}`.
 	let mut result = protect_escaped_braces(raw);
+	let keys = extract_env_keys(&result);
+	if keys.is_empty() {
+		return Ok(restore_escaped_braces(&result));
+	}
 
 	for key in &keys {
 		let value = match std::env::var(key) {
@@ -305,5 +308,51 @@ mod tests {
 		)
 		.await;
 		assert_eq!(result, "Real: /tmp, Escaped: {{CWD}}");
+	}
+
+	// --- resolve_inputs / resolve_env_vars must not extract keys from escaped braces ---
+
+	#[test]
+	fn test_extract_input_keys_ignores_escaped() {
+		// After protect_escaped_braces, `{{{{INPUT:KEY}}}}` becomes a sentinel
+		// that does NOT contain `{{INPUT:` — so no keys should be extracted.
+		let raw = "Use {{{{INPUT:KEY}}}} as an example";
+		let protected = protect_escaped_braces(raw);
+		let keys = extract_input_keys(&protected);
+		assert!(
+			keys.is_empty(),
+			"Escaped {{{{INPUT:KEY}}}} must not produce any keys, got: {:?}",
+			keys
+		);
+	}
+
+	#[test]
+	fn test_extract_env_keys_ignores_escaped() {
+		let raw = "Use {{{{ENV:BASE_URL}}}} as an example";
+		let protected = protect_escaped_braces(raw);
+		let keys = extract_env_keys(&protected);
+		assert!(
+			keys.is_empty(),
+			"Escaped {{{{ENV:BASE_URL}}}} must not produce any keys, got: {:?}",
+			keys
+		);
+	}
+
+	#[tokio::test]
+	async fn test_resolve_inputs_no_prompt_for_escaped() {
+		// resolve_inputs on a string with ONLY escaped placeholders must return
+		// the literal `{{INPUT:KEY}}` without prompting the user.
+		let raw = "Example: {{{{INPUT:SECRET}}}}";
+		let result = resolve_inputs(raw).await.unwrap();
+		assert_eq!(result, "Example: {{INPUT:SECRET}}");
+	}
+
+	#[tokio::test]
+	async fn test_resolve_env_vars_no_prompt_for_escaped() {
+		// resolve_env_vars on a string with ONLY escaped placeholders must return
+		// the literal `{{ENV:URL}}` without prompting the user.
+		let raw = "Example: {{{{ENV:URL}}}}";
+		let result = resolve_env_vars(raw).await.unwrap();
+		assert_eq!(result, "Example: {{ENV:URL}}");
 	}
 }
