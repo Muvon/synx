@@ -15,8 +15,8 @@
 // WebSocket server implementation
 
 use super::protocol::{
-	AssistantPayload, ClientMessage, CommandMessage, CostPayload, ServerMessage, SessionMessage,
-	StatusPayload, ToolResultPayload, ToolUsePayload, UserMessage,
+	ClientMessage, CommandMessage, CostPayload, ServerMessage, SessionMessage, StatusPayload,
+	UserMessage,
 };
 use crate::config::Config;
 use crate::session::cancellation::SessionCancellation;
@@ -28,7 +28,6 @@ use crate::session::output::{OutputMode, WebSocketSink};
 use crate::{log_debug, log_error, log_info};
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
-use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -313,6 +312,44 @@ async fn handle_session_message(
 	Ok(())
 }
 
+/// Look up an existing session: memory first, then disk. Never auto-create.
+/// Returns the session or a ServerMessage error suitable for sending to the client.
+async fn lookup_session(
+	session_id: &str,
+	sessions: &Arc<Mutex<HashMap<String, ChatSession>>>,
+	config: &Config,
+	role: &str,
+) -> std::result::Result<ChatSession, ServerMessage> {
+	let existing = sessions.lock().await.remove(session_id);
+	if let Some(session) = existing {
+		log_debug!("Resumed session from memory: {}", session_id);
+		return Ok(session);
+	}
+
+	log_debug!("Loading session from disk: {}", session_id);
+	let mut args = GenericSessionArgs::resume(session_id.to_string(), role.to_string());
+	args.mode = "websocket".to_string();
+	match setup_and_initialize_session(&args, config).await {
+		Ok((mut session, config_for_role, session_role, _)) => {
+			if let Err(e) =
+				setup_system_prompt_and_cache(&mut session, &config_for_role, &session_role, false)
+					.await
+			{
+				return Err(ServerMessage::error(format!(
+					"Failed to setup session {}: {}",
+					session_id, e
+				)));
+			}
+			log_info!("Session loaded from disk: {}", session_id);
+			Ok(session)
+		}
+		Err(_) => Err(ServerMessage::error(format!(
+			"Session not found: {}. Send a \"session\" message first to create or resume a session.",
+			session_id
+		))),
+	}
+}
+
 /// Handle a "command" type message: execute a session command (e.g. /info, /model, /mcp list).
 /// Requires session_id and command. Args are optional.
 /// The command is assembled into the CLI slash-command format and routed through process_command.
@@ -343,38 +380,11 @@ async fn handle_command_message(
 		slash_command
 	);
 
-	// Look up session: memory first, then disk. Never auto-create.
-	let mut chat_session = {
-		let existing = sessions.lock().await.remove(session_id);
-		if let Some(session) = existing {
-			log_debug!("Resumed session from memory: {}", session_id);
-			session
-		} else {
-			log_debug!("Loading session from disk: {}", session_id);
-			let mut args_resume =
-				GenericSessionArgs::resume(session_id.to_string(), role.to_string());
-			args_resume.mode = "websocket".to_string();
-			match setup_and_initialize_session(&args_resume, config).await {
-				Ok((mut session, config_for_role, session_role, _)) => {
-					setup_system_prompt_and_cache(
-						&mut session,
-						&config_for_role,
-						&session_role,
-						false,
-					)
-					.await?;
-					log_info!("Session loaded from disk: {}", session_id);
-					session
-				}
-				Err(_) => {
-					let error = ServerMessage::error(format!(
-						"Session not found: {}. Send a \"session\" message first to create or resume a session.",
-						session_id
-					));
-					send_message(ws_sender, &error).await?;
-					return Ok(());
-				}
-			}
+	let mut chat_session = match lookup_session(session_id, sessions, config, role).await {
+		Ok(s) => s,
+		Err(error) => {
+			send_message(ws_sender, &error).await?;
+			return Ok(());
 		}
 	};
 
@@ -382,6 +392,28 @@ async fn handle_command_message(
 	let config_for_role = config.get_merged_config_for_role(role);
 	let mut cancellation = SessionCancellation::new();
 	let operation_rx = cancellation.new_operation();
+
+	// Handle /done specially — it hits unreachable!() in process_command
+	// because the CLI intercepts it before routing. We handle it here directly.
+	if command_name == "done" {
+		use crate::session::chat::session::commands::handle_done;
+		match handle_done(&mut chat_session, &config_for_role, operation_rx).await {
+			Ok(_) => {
+				let status = ServerMessage::status(
+					"Conversation compressed".to_string(),
+					Some(session_id.clone()),
+				);
+				send_message(ws_sender, &status).await?;
+			}
+			Err(e) => {
+				let error = ServerMessage::error(format!("Compression failed: {}", e));
+				send_message(ws_sender, &error).await?;
+			}
+		}
+		chat_session.save()?;
+		sessions.lock().await.insert(session_id, chat_session);
+		return Ok(());
+	}
 
 	use crate::session::chat::session::commands::CommandResult;
 	let command_result = chat_session
@@ -458,54 +490,41 @@ async fn handle_user_message(
 		input.len()
 	);
 
-	// Look up session: memory first, then disk. Never auto-create.
-	let mut chat_session = {
-		let existing = sessions.lock().await.remove(session_id);
-		if let Some(session) = existing {
-			log_debug!("Resumed session from memory: {}", session_id);
-			session
-		} else {
-			// Try disk
-			log_debug!("Loading session from disk: {}", session_id);
-			let args = GenericSessionArgs {
-				resume: Some(session_id.to_string()),
-				role: role.to_string(),
-				mode: "websocket".into(),
-				..Default::default()
-			};
-			match setup_and_initialize_session(&args, config).await {
-				Ok((mut session, config_for_role, session_role, _)) => {
-					setup_system_prompt_and_cache(
-						&mut session,
-						&config_for_role,
-						&session_role,
-						false,
-					)
-					.await?;
-					log_info!("Session loaded from disk: {}", session_id);
-					session
-				}
-				Err(_) => {
-					let error = ServerMessage::error(format!(
-						"Session not found: {}. Send a \"session\" message first to create or resume a session.",
-						session_id
-					));
-					send_message(ws_sender, &error).await?;
-					return Ok(());
-				}
-			}
+	let mut chat_session = match lookup_session(session_id, sessions, config, role).await {
+		Ok(s) => s,
+		Err(error) => {
+			send_message(ws_sender, &error).await?;
+			return Ok(());
 		}
 	};
 
 	let session_id = session_id.to_string();
 
-	// Get current directory for file operations - use thread-local if set (ACP/WebSocket), otherwise process cwd
+	// Get current directory for file operations
 	let current_dir = crate::mcp::get_thread_working_directory();
-	// Process through layers if enabled (first message)
 	let config_for_role = config.get_merged_config_for_role(role);
 	let mut cancellation = SessionCancellation::new();
 	let operation_rx = cancellation.new_operation();
 
+	// Drain any completed async jobs before processing user input.
+	// Each completed job is injected as a user message so the AI sees it.
+	if let Ok(job) = chat_session.job_rx.try_recv() {
+		let job_msg = if job.output.starts_with("ERROR: ") {
+			format!(
+				"[Async agent '{}' failed]\n\n{}",
+				job.agent_name,
+				job.output.trim_start_matches("ERROR: ")
+			)
+		} else {
+			format!(
+				"[Async agent '{}' completed]\n\n{}",
+				job.agent_name, job.output
+			)
+		};
+		chat_session.add_user_message(&job_msg)?;
+	}
+
+	// Process through layers if enabled (first message)
 	let first_message_processed = !chat_session.session.messages.is_empty();
 	log_debug!(
 		"Processing input through layers: first_message={}",
@@ -521,6 +540,33 @@ async fn handle_user_message(
 		operation_rx.clone(),
 	)
 	.await?;
+
+	// Set first_prompt_idx BEFORE compression so the anchor is always correct.
+	// Compression uses first_prompt_idx as the lower boundary.
+	if !layers_modified_session && chat_session.first_prompt_idx.is_none() {
+		chat_session.first_prompt_idx = Some(chat_session.session.messages.len());
+	}
+
+	// Conversation compression: check if AI should compress older exchanges.
+	// Runs BEFORE user message is added to avoid breaking the new request.
+	let _compression_occurred =
+		match crate::session::chat::conversation_compression::check_and_compress_conversation(
+			&mut chat_session,
+			&config_for_role,
+			operation_rx.clone(),
+			false,
+		)
+		.await
+		{
+			Ok(compressed) => compressed,
+			Err(e) => {
+				log_debug!(
+					"Conversation compression failed: {}. Continuing session.",
+					e
+				);
+				false
+			}
+		};
 
 	// Add user message if layers didn't modify session
 	if !layers_modified_session {
@@ -543,12 +589,7 @@ async fn handle_user_message(
 	// Forward MCP server notifications through the WebSocket channel
 	crate::mcp::process::set_notification_sender(ws_tx);
 
-	// Track message count before API call to identify new messages
-	let messages_before = chat_session.session.messages.len();
-	log_debug!("Executing API call: messages_before={}", messages_before);
-
-	// Execute API call and then flush streamed sink messages.
-	// SplitSink is not cloneable, so we cannot forward from a detached task.
+	// Execute API call — events stream in real-time via WebSocketSink
 	let api_result = execute_api_call_and_process_response(
 		&mut chat_session,
 		&config_for_role,
@@ -559,184 +600,19 @@ async fn handle_user_message(
 	)
 	.await;
 
-	// Drain any remaining queued stream messages after API completion.
+	// Drain any remaining queued stream messages after API completion
 	while let Ok(msg) = ws_rx.try_recv() {
 		send_message(ws_sender, &msg).await?;
 	}
 
 	match api_result {
 		Ok(_) => {
-			let current_message_count = chat_session.session.messages.len();
-			let new_message_count = current_message_count.saturating_sub(messages_before);
-			log_debug!("API call completed: new_messages={}", new_message_count);
-
-			// Success - extract and send all new messages (tools + assistant response)
-			// Only if messages were actually added
-			if current_message_count > messages_before {
-				let new_messages = &chat_session.session.messages[messages_before..];
-
-				for msg in new_messages {
-					match msg.role.as_str() {
-						"tool" => {
-							// Parse tool message content (stored as MCP JSON format)
-							let content = &msg.content;
-
-							// Extract actual text from MCP format
-							let actual_content = if let Ok(mcp_result) =
-								serde_json::from_str::<serde_json::Value>(content)
-							{
-								crate::mcp::extract_mcp_content(&mcp_result)
-							} else {
-								// Fallback to raw content if not valid JSON
-								content.clone()
-							};
-
-							// Extract tool name from the message's name field (most reliable)
-							let tool_name = msg
-								.name
-								.as_ref()
-								.map(|n| n.to_string())
-								.unwrap_or_else(|| "unknown".to_string());
-
-							// Extract tool_call_id from the message
-							let tool_id = msg
-								.tool_call_id
-								.as_ref()
-								.map(|id| id.to_string())
-								.unwrap_or_else(|| "unknown".to_string());
-
-							// Get server name for this tool
-							let server_name =
-								crate::session::chat::response::get_tool_server_name_async(
-									&tool_name, config,
-								)
-								.await;
-
-							// Check if tool execution was successful (no isError: true in MCP format)
-							let success = if let Ok(mcp_result) =
-								serde_json::from_str::<serde_json::Value>(content)
-							{
-								!mcp_result
-									.get("isError")
-									.and_then(|v| v.as_bool())
-									.unwrap_or(false)
-							} else {
-								true // Assume success if not MCP format
-							};
-
-							// Send tool result with clean content
-							// Send tool result with clean content
-							let tool_msg = ServerMessage::ToolResult(ToolResultPayload {
-								tool: tool_name.to_string(),
-								tool_id: tool_id.to_string(),
-								server: server_name,
-								content: actual_content,
-								success,
-								session_id: session_id.clone(),
-							});
-							send_message(ws_sender, &tool_msg).await?;
-						}
-
-						"assistant" => {
-							// Check if this assistant message has tool calls
-							if let Some(tool_calls_value) = &msg.tool_calls {
-								// This is a tool use intent - send tool_use messages
-								if let Some(tool_calls_array) = tool_calls_value.as_array() {
-									for tool_call in tool_calls_array {
-										// Try different formats: OpenAI format, direct format, etc.
-										let tool_name = tool_call
-											.get("function")
-											.and_then(|f| f.get("name"))
-											.and_then(|n| n.as_str())
-											.or_else(|| {
-												tool_call.get("name").and_then(|n| n.as_str())
-											})
-											.or_else(|| {
-												tool_call.get("tool_name").and_then(|n| n.as_str())
-											})
-											.unwrap_or("unknown");
-
-										// Extract tool_id from tool_call
-										let tool_id = tool_call
-											.get("id")
-											.and_then(|id| id.as_str())
-											.unwrap_or("unknown");
-
-										// Get server name for this tool
-										let server_name =
-										crate::session::chat::response::get_tool_server_name_async(
-											tool_name, config,
-										)
-										.await;
-
-										let tool_params = tool_call
-											.get("function")
-											.and_then(|f| f.get("arguments"))
-											.and_then(|a| {
-												// Arguments might be a string or already parsed
-												if let Some(s) = a.as_str() {
-													serde_json::from_str::<serde_json::Value>(s)
-														.ok()
-												} else {
-													Some(a.clone())
-												}
-											})
-											.or_else(|| tool_call.get("arguments").cloned())
-											.or_else(|| tool_call.get("parameters").cloned())
-											.unwrap_or_else(|| json!({}));
-
-										// Send tool_use message
-										// Send tool_use message
-										let tool_use_msg = ServerMessage::ToolUse(ToolUsePayload {
-											tool: tool_name.to_string(),
-											tool_id: tool_id.to_string(),
-											server: server_name,
-											params: tool_params,
-											session_id: session_id.clone(),
-										});
-										send_message(ws_sender, &tool_use_msg).await?;
-									}
-								}
-
-								// Skip sending the empty assistant message
-								continue;
-							}
-
-							// Skip empty assistant messages (happens when AI only makes tool calls)
-							if msg.content.trim().is_empty() {
-								continue;
-							}
-
-							// Send assistant response
-							// Send assistant response
-							let assistant_msg = ServerMessage::Assistant(AssistantPayload {
-								content: msg.content.clone(),
-								session_id: session_id.clone(),
-							});
-							send_message(ws_sender, &assistant_msg).await?;
-						}
-
-						_ => {
-							// Ignore other message types (user, system)
-						}
-					}
-				}
-			} // End of if current_message_count > messages_before
-
-			// Send cost information
-
+			// Cost message (events already emitted via sink — no reconstruction needed)
 			let total_tokens = chat_session.session.info.input_tokens
 				+ chat_session.session.info.output_tokens
 				+ chat_session.session.info.cache_read_tokens
 				+ chat_session.session.info.cache_write_tokens
 				+ chat_session.session.info.reasoning_tokens;
-
-			log_debug!(
-				"Session stats: tokens={}, cost=${:.4}",
-				total_tokens,
-				chat_session.session.info.total_cost
-			);
-
 			let cost_msg = ServerMessage::Cost(CostPayload {
 				session_tokens: total_tokens,
 				session_cost: chat_session.session.info.total_cost,
@@ -747,14 +623,56 @@ async fn handle_user_message(
 				reasoning_tokens: chat_session.session.info.reasoning_tokens,
 				session_id: session_id.clone(),
 			});
-
 			send_message(ws_sender, &cost_msg).await?;
 		}
 		Err(e) => {
 			log_error!("API call failed: {}", e);
-			// Error during processing
 			let error = ServerMessage::error(format!("Error: {}", e));
 			send_message(ws_sender, &error).await?;
+		}
+	}
+
+	// Process pending scheduled entries (same as non-interactive keep-alive in main_loop)
+	while crate::mcp::core::has_pending_schedules() {
+		log_debug!("WebSocket: waiting for scheduled entries...");
+		crate::mcp::core::next_schedule_sleep().await;
+
+		while let Some(entry) = crate::mcp::core::pop_due_entry() {
+			log_debug!(
+				"Schedule entry [{}] fired (websocket): {}",
+				entry.id,
+				entry.description
+			);
+
+			chat_session.add_user_message(&entry.message)?;
+			let sched_operation_rx = cancellation.new_operation();
+			prepare_for_api_call(
+				&mut chat_session,
+				&config_for_role,
+				sched_operation_rx.clone(),
+			)
+			.await?;
+
+			let (sched_tx, mut sched_rx) = tokio::sync::mpsc::unbounded_channel();
+			let sched_sink = WebSocketSink::new(sched_tx);
+
+			let sched_result = execute_api_call_and_process_response(
+				&mut chat_session,
+				&config_for_role,
+				role,
+				sched_operation_rx,
+				OutputMode::WebSocket,
+				sched_sink,
+			)
+			.await;
+
+			while let Ok(msg) = sched_rx.try_recv() {
+				send_message(ws_sender, &msg).await?;
+			}
+
+			if let Err(e) = sched_result {
+				log_debug!("Error processing scheduled entry [{}]: {}", entry.id, e);
+			}
 		}
 	}
 
