@@ -21,12 +21,13 @@ use std::rc::Rc;
 
 use agent_client_protocol::{
 	AgentCapabilities, AgentSideConnection, AuthenticateRequest, AuthenticateResponse,
-	AvailableCommand, AvailableCommandInput, AvailableCommandsUpdate, CancelNotification, Client,
-	ContentBlock, ContentChunk, ExtRequest, ExtResponse, Implementation, InitializeRequest,
-	InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpCapabilities, McpServer,
-	NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse,
-	ProtocolVersion, SessionNotification, SessionUpdate, StopReason, ToolCall, ToolCallStatus,
-	ToolCallUpdate, ToolCallUpdateFields, UnstructuredCommandInput,
+	AvailableCommand, AvailableCommandInput, AvailableCommandsUpdate, BlobResourceContents,
+	CancelNotification, Client, ContentBlock, ContentChunk, EmbeddedResourceResource, ExtRequest,
+	ExtResponse, Implementation, InitializeRequest, InitializeResponse, LoadSessionRequest,
+	LoadSessionResponse, McpCapabilities, McpServer, NewSessionRequest, NewSessionResponse,
+	PromptCapabilities, PromptRequest, PromptResponse, ProtocolVersion, SessionNotification,
+	SessionUpdate, StopReason, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+	UnstructuredCommandInput,
 };
 
 use crate::config::mcp::McpServerConfig;
@@ -208,7 +209,11 @@ impl agent_client_protocol::Agent for OctomindAgent {
 					// Advertise HTTP MCP transport support so clients offer us HTTP servers.
 					// SSE is not supported — we skip those servers silently in inject_acp_mcp_servers.
 					.mcp_capabilities(McpCapabilities::new().http(true))
-					.prompt_capabilities(PromptCapabilities::default().image(true))
+					.prompt_capabilities(
+						PromptCapabilities::default()
+							.image(true)
+							.embedded_context(true),
+					)
 					.meta(meta),
 			)
 			.agent_info(Implementation::new("octomind", env!("CARGO_PKG_VERSION")));
@@ -278,9 +283,10 @@ impl agent_client_protocol::Agent for OctomindAgent {
 	async fn prompt(&self, args: PromptRequest) -> agent_client_protocol::Result<PromptResponse> {
 		let session_id = args.session_id.to_string();
 
-		// Extract text and images from prompt content blocks
+		// Extract text, images, and videos from prompt content blocks
 		let mut text_parts = Vec::new();
 		let mut images = Vec::new();
+		let mut videos = Vec::new();
 		for block in &args.prompt {
 			match block {
 				ContentBlock::Text(t) => text_parts.push(t.text.as_str()),
@@ -293,12 +299,32 @@ impl agent_client_protocol::Agent for OctomindAgent {
 						size_bytes: None,
 					});
 				}
-				_ => {} // Skip audio, resources, etc.
+				ContentBlock::Resource(res) => {
+					// Extract video from embedded blob resources (ACP has no native video block)
+					if let EmbeddedResourceResource::BlobResourceContents(BlobResourceContents {
+						blob,
+						mime_type: Some(mime),
+						..
+					}) = &res.resource
+					{
+						if mime.starts_with("video/") {
+							videos.push(crate::session::video::VideoAttachment {
+								data: crate::session::video::VideoData::Base64(blob.clone()),
+								media_type: mime.clone(),
+								source_type: crate::session::video::SourceType::Url,
+								dimensions: None,
+								size_bytes: None,
+								duration_secs: None,
+							});
+						}
+					}
+				}
+				_ => {} // Skip audio, resource links, etc.
 			}
 		}
 		let input: String = text_parts.join("\n");
 
-		if input.trim().is_empty() && images.is_empty() {
+		if input.trim().is_empty() && images.is_empty() && videos.is_empty() {
 			return Ok(PromptResponse::new(StopReason::EndTurn));
 		}
 
@@ -427,9 +453,12 @@ impl agent_client_protocol::Agent for OctomindAgent {
 			return Ok(PromptResponse::new(StopReason::Cancelled));
 		}
 
-		// Attach ACP images as pending so add_user_message picks them up
+		// Attach ACP images/videos as pending so add_user_message picks them up
 		if let Some(first_image) = images.into_iter().next() {
 			chat_session.pending_image = Some(first_image);
+		}
+		if let Some(first_video) = videos.into_iter().next() {
+			chat_session.pending_video = Some(first_video);
 		}
 
 		// Add user message if layers didn't modify session
