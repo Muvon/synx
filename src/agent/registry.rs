@@ -192,7 +192,7 @@ pub async fn fetch_manifest(tag: &str, registry: &RegistryConfig) -> Result<(Str
 	}
 
 	// No cache — fetch synchronously from taps in order
-	let mut last_err = anyhow::anyhow!("No taps configured");
+	let mut tap_errors: Vec<String> = Vec::new();
 	for tap in &taps {
 		match fetch_from_tap(tap, &category, &variant).await {
 			Ok(content) => {
@@ -201,15 +201,21 @@ pub async fn fetch_manifest(tag: &str, registry: &RegistryConfig) -> Result<(Str
 				return Ok((content, root));
 			}
 			Err(e) => {
-				last_err = e;
+				tap_errors.push(format!("  - {}: {}", tap.name, e));
 			}
 		}
 	}
 
-	Err(last_err).context(format!(
-		"Failed to fetch agent manifest for '{}' from all taps",
-		tag
-	))
+	let detail = if tap_errors.is_empty() {
+		"No taps configured".to_string()
+	} else {
+		tap_errors.join("\n")
+	};
+	anyhow::bail!(
+		"Failed to fetch agent manifest for '{}' from all taps:\n{}",
+		tag,
+		detail
+	)
 }
 
 /// Resolve `capabilities = [...]` declared in an agent manifest.
