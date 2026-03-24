@@ -247,7 +247,7 @@ impl ServerProcess {
 				}
 				// Note: writer will be dropped when the struct is dropped, closing stdin
 
-				// Give process a moment to terminate gracefully
+				// Give process a moment to terminate gracefully after stdin close
 				std::thread::sleep(std::time::Duration::from_millis(100));
 
 				// Check if process terminated gracefully
@@ -257,18 +257,53 @@ impl ServerProcess {
 						return Ok(());
 					}
 					Ok(None) => {
-						// Process still running, need to force kill
-						crate::log_debug!("Process didn't terminate gracefully, force killing");
+						crate::log_debug!(
+							"Process didn't terminate after stdin close, sending SIGTERM"
+						);
 					}
 					Err(e) => {
 						crate::log_debug!("Error checking process status: {}", e);
 					}
 				}
 
-				// Force kill the process
-				child
-					.kill()
-					.map_err(|e| anyhow::anyhow!("Failed to kill stdin process: {}", e))?;
+				// Send SIGTERM to the process group first — gives the server a chance
+				// to clean up child processes (e.g. kill_on_drop on shell children).
+				#[cfg(unix)]
+				{
+					let pid = child.id();
+					let pgid = pid as libc::pid_t;
+					// SAFETY: libc::kill is always safe to call with valid arguments.
+					unsafe {
+						libc::kill(-pgid, libc::SIGTERM);
+					}
+					crate::log_debug!(
+						"Sent SIGTERM to process group {} for graceful shutdown",
+						pgid
+					);
+					std::thread::sleep(std::time::Duration::from_millis(200));
+
+					// Check if SIGTERM was enough
+					match child.try_wait() {
+						Ok(Some(_)) => {
+							crate::log_debug!("Process terminated after SIGTERM");
+							return Ok(());
+						}
+						_ => {
+							crate::log_debug!("Process still alive after SIGTERM, sending SIGKILL");
+						}
+					}
+
+					// SIGKILL the entire process group as final backstop
+					unsafe {
+						libc::kill(-pgid, libc::SIGKILL);
+					}
+				}
+
+				// Fallback for non-unix or if pid was unavailable
+				#[cfg(not(unix))]
+				{
+					let _ = child.kill();
+				}
 
 				// Wait for process termination with timeout
 				let start = std::time::Instant::now();
@@ -1098,12 +1133,22 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 			// The server will restart automatically on the next tool call.
 			#[cfg(unix)]
 			{
-				// Send SIGKILL to the entire process group of the child.
-				// child_pid is the PID of the MCP server (e.g. octofs). Since we called
-				// process_group(0) at spawn time, its PGID == its PID. Sending SIGKILL to
-				// -PGID kills the server and all grandchildren (e.g. cargo test).
 				let pgid = child_pid as libc::pid_t;
+				// First try SIGTERM — gives the server a chance to clean up child
+				// processes gracefully (e.g. octofs's kill_on_drop on shell children).
 				// SAFETY: libc::kill is always safe to call with valid arguments.
+				unsafe {
+					libc::kill(-pgid, libc::SIGTERM);
+				}
+				crate::log_debug!(
+					"Sent SIGTERM to process group {} (server '{}') on cancellation",
+					pgid,
+					server_name_for_error
+				);
+				// Brief grace period for the server to shut down cleanly.
+				std::thread::sleep(std::time::Duration::from_millis(200));
+				// SIGKILL to guarantee termination — the server may have ignored SIGTERM
+				// or still be cleaning up. This is the final backstop.
 				unsafe {
 					libc::kill(-pgid, libc::SIGKILL);
 				}
