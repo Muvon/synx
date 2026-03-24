@@ -1541,19 +1541,26 @@ fn find_compression_range(
 	}
 
 	// CRITICAL: The compressed summary is an assistant message. The first preserved
-	// message after it MUST be a user to maintain the alternating user/assistant
-	// pattern required by the API. If the first preserved conversation message is
-	// an assistant, advance compress_count to include it (and its tool results)
-	// in the compressed zone.
-	while compress_count < conversation_indices.len()
-		&& messages[conversation_indices[compress_count]].role == "assistant"
-	{
-		compress_count += 1;
-	}
-
-	// After advancing past assistants, we need at least 1 preserved message
-	if compress_count >= conversation_indices.len() {
-		return Ok((0, 0));
+	// message after it SHOULD be a user to maintain the alternating user/assistant
+	// pattern preferred by the API. Search forward from compress_count for the
+	// first user in the preserved zone and advance compress_count to it.
+	//
+	// If NO user exists in the preserved zone (tool-loop sessions where the AI
+	// calls tools continuously without user input), keep the original compress_count.
+	// The first preserved assistant will have tool_calls with matching tool results,
+	// which APIs accept after the summary.
+	if messages[conversation_indices[compress_count]].role == "assistant" {
+		let mut found_user = None;
+		for i in compress_count..conversation_indices.len() {
+			if messages[conversation_indices[i]].role == "user" {
+				found_user = Some(i);
+				break;
+			}
+		}
+		if let Some(user_idx) = found_user {
+			compress_count = user_idx;
+		}
+		// No user in preserved zone → keep original compress_count (tool-loop session)
 	}
 
 	// CRITICAL FIX: The end_idx must be the last MESSAGE INDEX (not conversation index)
@@ -3234,6 +3241,78 @@ mod tests {
 				);
 			}
 		}
+	}
+
+	#[test]
+	fn tool_loop_only_one_user_message_still_compresses() {
+		// Reproduces the exact bug from the session log:
+		//   Compression check: current_tokens=61028, api_calls=137
+		//   Invalid compression range (0 >= 0), skipping
+		//
+		// In a tool-loop session, there is only ONE user message (the initial prompt).
+		// All subsequent messages are assistant+tool cycles. The while loop at
+		// lines 1548-1552 tries to find a user in the preserved zone, but ALL
+		// preserved conversation messages are assistants. It advances compress_count
+		// past everything → returns (0, 0) → compression never happens.
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("user")); // 1 (first_prompt_idx) — the ONLY user message
+
+		// Simulate 10 tool cycles: assistant(tool_calls) → tool result
+		// This mirrors a real session where the AI calls tools in a loop
+		for i in 0..10 {
+			let mut asst = msg("assistant");
+			asst.tool_calls = Some(json!([
+				{"id": format!("call_{i}"), "type": "function", "function": {"name": "view", "arguments": "{}"}}
+			]));
+			messages.push(asst);
+			let mut tool = msg("tool");
+			tool.tool_call_id = Some(format!("call_{i}"));
+			messages.push(tool);
+		}
+
+		// Final assistant response (no tool_calls)
+		messages.push(msg("assistant")); // 22
+
+		// Message layout:
+		// [0] system
+		// [1] user          ← first_prompt_idx, ONLY user message
+		// [2] assistant(tc)  [3] tool
+		// [4] assistant(tc)  [5] tool
+		// [6] assistant(tc)  [7] tool
+		// [8] assistant(tc)  [9] tool
+		// [10] assistant(tc) [11] tool
+		// [12] assistant(tc) [13] tool
+		// [14] assistant(tc) [15] tool
+		// [16] assistant(tc) [17] tool
+		// [18] assistant(tc) [19] tool
+		// [20] assistant(tc) [21] tool
+		// [22] assistant (text)
+		//
+		// conversation_indices = [1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22] (12 items)
+		// preserve_count = 4, compress_count = 12 - 4 = 8
+		// Preserved zone: conversation_indices[8..12] = [16, 18, 20, 22] — ALL assistants!
+		//
+		// BUG: while loop advances compress_count from 8→9→10→11→12 (exhausted)
+		//      → returns (0, 0) → compression never happens
+
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+
+		// Must return a valid compression range, NOT (0, 0)
+		assert!(
+			start_idx < end_idx,
+			"Tool-loop session must produce valid compression range, got ({start_idx}, {end_idx}). \
+			 The while loop consumed all preserved messages because no user exists in preserved zone."
+		);
+
+		// start_idx should be the first_prompt_idx anchor
+		assert_eq!(start_idx, 1, "start_idx must be first_prompt_idx");
+
+		// end_idx must be before the preserved zone
+		assert!(
+			end_idx < messages.len() - 1,
+			"end_idx ({end_idx}) must leave some messages preserved"
+		);
 	}
 
 	#[test]
