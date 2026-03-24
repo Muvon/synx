@@ -252,9 +252,9 @@ pub struct SessionInfo {
 	pub compression_hint_count: usize,
 	#[serde(default)]
 	pub last_compression_hint_shown: u64,
-	// Conversation compression cooldown tracking
+	// Conversation compression cooldown tracking (token-based)
 	#[serde(default)]
-	pub next_conversation_compression_at_api_call: usize, // 0 = can compress immediately
+	pub context_tokens_after_last_compression: usize, // 0 = no prior compression, can compress immediately
 	// Self-tuning estimation tracking (for accuracy measurement)
 	#[serde(default)]
 	pub predicted_turns_at_last_compression: f64, // What we predicted at last compression
@@ -378,7 +378,7 @@ impl Session {
 
 				compression_hint_count: 0,
 				last_compression_hint_shown: 0,
-				next_conversation_compression_at_api_call: 0,
+				context_tokens_after_last_compression: 0,
 				predicted_turns_at_last_compression: 0.0,
 				api_calls_at_last_compression: 0,
 				output_tokens_at_last_compression: 0,
@@ -1223,7 +1223,7 @@ pub fn load_session(session_file: &PathBuf) -> Result<Session, anyhow::Error> {
 
 			compression_hint_count: 0,
 			last_compression_hint_shown: 0,
-			next_conversation_compression_at_api_call: 0,
+			context_tokens_after_last_compression: 0,
 			predicted_turns_at_last_compression: 0.0,
 			api_calls_at_last_compression: 0,
 			output_tokens_at_last_compression: 0,

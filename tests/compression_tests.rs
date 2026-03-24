@@ -359,7 +359,7 @@ mod adaptive_compression_tests {
 				spending_threshold_checkpoint: 0.0,
 				compression_hint_count: 0,
 				last_compression_hint_shown: 0,
-				next_conversation_compression_at_api_call: 0,
+				context_tokens_after_last_compression: 0,
 				predicted_turns_at_last_compression: 0.0,
 				api_calls_at_last_compression: 0,
 				output_tokens_at_last_compression: 0,

@@ -102,27 +102,30 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 				level.threshold
 			);
 
-			// COOLDOWN CHECK: Prevent premature re-compression before getting calculated benefit
-			let current_api_calls = session.session.info.total_api_calls;
-			let next_compression_allowed = session
-				.session
-				.info
-				.next_conversation_compression_at_api_call;
+			// TOKEN-BASED COOLDOWN: Require meaningful token growth since last compression
+			// before allowing re-compression. This prevents futile loops while being
+			// responsive to actual context growth regardless of API call patterns.
+			let tokens_after_last = session.session.info.context_tokens_after_last_compression;
 
-			if current_api_calls < next_compression_allowed {
-				log_debug!(
-					"Compression cooldown active: current_api_calls={} < next_allowed={} (must wait {} more calls)",
-					current_api_calls,
-					next_compression_allowed,
-					next_compression_allowed - current_api_calls
-				);
-				return (false, 2.0);
+			if tokens_after_last > 0 {
+				// Require at least 10% token growth since last compression
+				let min_tokens_for_recompression = (tokens_after_last as f64 * 1.1) as usize;
+				if current_tokens < min_tokens_for_recompression {
+					log_debug!(
+						"Compression cooldown active: current_tokens={} < min_required={} (need {}% growth since last compression at {})",
+						current_tokens,
+						min_tokens_for_recompression,
+						((current_tokens as f64 / tokens_after_last as f64 - 1.0) * 100.0) as i32,
+						tokens_after_last
+					);
+					return (false, 2.0);
+				}
 			}
 
 			log_debug!(
-				"Compression cooldown passed: current_api_calls={} >= next_allowed={}",
-				current_api_calls,
-				next_compression_allowed
+				"Compression cooldown passed: current_tokens={}, tokens_after_last_compression={}",
+				current_tokens,
+				tokens_after_last
 			);
 
 			// CACHE-AWARE DECISION: Calculate if compression is profitable
@@ -182,13 +185,10 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 						compressible_tokens,
 						estimated_compressed_size
 					);
-					// Set a short cooldown so we don't re-check every single turn when compression
-					// can't solve the threshold problem (e.g. context is dominated by non-compressible
-					// recent messages). 5 calls gives the session time to grow more compressible history.
-					session
-						.session
-						.info
-						.next_conversation_compression_at_api_call = session.session.info.total_api_calls + 5;
+					// Set token-based cooldown: record current tokens so we don't re-check
+					// every turn when compression can't solve the threshold problem.
+					// Next check requires 10% growth from current level.
+					session.session.info.context_tokens_after_last_compression = current_tokens;
 					return (false, 2.0);
 				}
 
@@ -742,7 +742,15 @@ pub async fn check_and_compress_conversation(
 	log_info!("AI decided to compress older conversation exchanges");
 
 	// Apply compression with the summary we got from AI
-	apply_compression(session, start_idx, end_idx, &context_summary, tokens_before).await?;
+	apply_compression(
+		session,
+		start_idx,
+		end_idx,
+		&context_summary,
+		tokens_before,
+		current_context_tokens,
+	)
+	.await?;
 
 	animation_manager.stop_current().await;
 	Ok(true)
@@ -1174,6 +1182,7 @@ async fn apply_compression(
 	end_idx: usize,
 	context_summary: &str,
 	tokens_before: u64,
+	current_context_tokens: u64,
 ) -> Result<()> {
 	// Parse file contexts from AI summary (AI may request specific file ranges to re-inject)
 	let file_contexts = super::file_context::parse_file_contexts(context_summary);
@@ -1236,39 +1245,24 @@ async fn apply_compression(
 		.compression_stats
 		.add_conversation_compression(messages_removed, tokens_saved);
 
-	// Update cooldown: Set next allowed compression point
-	// Use ACTUAL tokens saved (not theoretical full-context ratio) for accurate cooldown.
-	// The theoretical ratio assumes the entire context is compressible, but only a subset
-	// of messages (the compressible range) is actually compressed. Using tokens_saved
-	// gives the real headroom bought by this compression.
-	let estimated_future_turns = estimate_future_turns(session, tokens_saved as f64);
-	let next_compression_at =
-		session.session.info.total_api_calls + estimated_future_turns as usize;
-	session
-		.session
-		.info
-		.next_conversation_compression_at_api_call = next_compression_at;
+	// Token-based cooldown: record post-compression context size.
+	// Next compression is allowed only after context grows ≥10% above this watermark,
+	// preventing futile back-to-back compressions while reacting to actual growth.
+	let post_compression_tokens = current_context_tokens.saturating_sub(tokens_saved);
+	session.session.info.context_tokens_after_last_compression = post_compression_tokens as usize;
 
-	// SELF-TUNING: Record prediction and checkpoint for incremental growth rate tracking.
+	// SELF-TUNING: Record checkpoint for incremental growth rate tracking.
 	// output_tokens_at_last_compression lets estimate_future_turns measure growth since
 	// this compression only, not the inflated lifetime average.
+	let estimated_future_turns = estimate_future_turns(session, tokens_saved as f64);
 	let api_calls_at_compression = session.session.info.total_api_calls;
 	session.session.info.predicted_turns_at_last_compression = estimated_future_turns;
 	session.session.info.api_calls_at_last_compression = api_calls_at_compression;
 	session.session.info.output_tokens_at_last_compression = session.session.info.output_tokens;
 
 	log_debug!(
-		"Self-tuning: Recorded prediction at compression #{} (API calls={}): predicted={:.1} remaining turns",
-		session.session.info.compression_stats.conversation_compressions,
-		api_calls_at_compression,
-		estimated_future_turns
-	);
-
-	log_debug!(
-		"Compression cooldown set: next_compression_at={} (current={}, estimated_turns={:.1})",
-		next_compression_at,
-		session.session.info.total_api_calls,
-		estimated_future_turns
+		"Compression cooldown set: post_compression_tokens={}, requires ≥10% growth before next compression",
+		post_compression_tokens
 	);
 
 	// CRITICAL: Log compression point to session file
@@ -2155,52 +2149,46 @@ mod tests {
 
 	#[test]
 	fn test_cooldown_prevents_premature_recompression() {
-		// TEST: Cooldown should block compression until estimated benefit window passes
+		// TEST: Token-based cooldown blocks compression until context grows ≥10%
 
-		// Scenario 1: First compression at API call 10, estimated 20 future turns
-		let current_api_calls = 10;
-		let estimated_turns = 20.0;
-		let next_compression_at = current_api_calls + estimated_turns as usize; // = 30
+		// Scenario 1: After compression, context is at 50,000 tokens
+		let tokens_after_compression: usize = 50_000;
 
-		assert_eq!(
-			next_compression_at, 30,
-			"Next compression should be at call 30"
+		// Scenario 2: Context at 52,000 (4% growth) — should block
+		let current_tokens_52k: usize = 52_000;
+		let min_required = (tokens_after_compression as f64 * 1.1) as usize;
+		assert!(
+			current_tokens_52k < min_required,
+			"Cooldown should block at 52k: {} < {} (need 10% growth)",
+			current_tokens_52k,
+			min_required
 		);
 
-		// Scenario 2: At API call 15 (5 turns later), cooldown should block
-		let current_at_15 = 15;
+		// Scenario 3: Context at 54,999 (~10% but not quite) — still blocked
+		let current_tokens_54k: usize = 54_999;
 		assert!(
-			current_at_15 < next_compression_at,
-			"Cooldown should block at call 15: {} < {}",
-			current_at_15,
-			next_compression_at
+			current_tokens_54k < min_required,
+			"Cooldown should still block at 54,999: {} < {}",
+			current_tokens_54k,
+			min_required
 		);
 
-		// Scenario 3: At API call 29 (19 turns later), still blocked
-		let current_at_29 = 29;
+		// Scenario 4: Context at 55,000 (exactly 10% growth) — cooldown passes
+		let current_tokens_55k: usize = 55_000;
 		assert!(
-			current_at_29 < next_compression_at,
-			"Cooldown should still block at call 29: {} < {}",
-			current_at_29,
-			next_compression_at
+			current_tokens_55k >= min_required,
+			"Cooldown should pass at 55k: {} >= {}",
+			current_tokens_55k,
+			min_required
 		);
 
-		// Scenario 4: At API call 30 (20 turns later), cooldown passes
-		let current_at_30 = 30;
+		// Scenario 5: Context at 60,000 (20% growth) — allowed
+		let current_tokens_60k: usize = 60_000;
 		assert!(
-			current_at_30 >= next_compression_at,
-			"Cooldown should pass at call 30: {} >= {}",
-			current_at_30,
-			next_compression_at
-		);
-
-		// Scenario 5: At API call 35 (25 turns later), still allowed
-		let current_at_35 = 35;
-		assert!(
-			current_at_35 >= next_compression_at,
-			"Compression should be allowed at call 35: {} >= {}",
-			current_at_35,
-			next_compression_at
+			current_tokens_60k >= min_required,
+			"Compression should be allowed at 60k: {} >= {}",
+			current_tokens_60k,
+			min_required
 		);
 	}
 
@@ -2208,49 +2196,46 @@ mod tests {
 	fn test_cooldown_default_allows_first_compression() {
 		// TEST: Default value (0) should allow first compression immediately
 
-		let next_compression_at = 0; // Default value
-		let current_api_calls = 1; // First API call
+		let tokens_after_compression: usize = 0; // Default — no prior compression
+		let current_tokens: usize = 60_000;
 
+		// When context_tokens_after_last_compression is 0, cooldown is inactive
+		let cooldown_active = tokens_after_compression > 0
+			&& current_tokens < (tokens_after_compression as f64 * 1.1) as usize;
 		assert!(
-			current_api_calls >= next_compression_at,
-			"First compression should be allowed: {} >= {}",
-			current_api_calls,
-			next_compression_at
-		);
-
-		// Even at call 0 (edge case)
-		let current_at_0 = 0;
-		assert!(
-			current_at_0 >= next_compression_at,
-			"Compression should be allowed even at call 0: {} >= {}",
-			current_at_0,
-			next_compression_at
+			!cooldown_active,
+			"First compression should be allowed when watermark is 0"
 		);
 	}
 
 	#[test]
-	fn test_cooldown_calculation_with_varying_estimates() {
-		// TEST: Cooldown adapts to different estimated turn counts
+	fn test_cooldown_scales_with_post_compression_size() {
+		// TEST: Cooldown threshold scales proportionally with context size
 
-		// Short session: 5 estimated turns
-		let current = 10;
-		let estimated_short = 5.0;
-		let next_short = current + estimated_short as usize;
-		assert_eq!(next_short, 15, "Short estimate: next at 15");
+		// Small context: 20k after compression → need 22k to recompress
+		let small_watermark: usize = 20_000;
+		let small_threshold = (small_watermark as f64 * 1.1) as usize;
+		assert_eq!(small_threshold, 22_000, "Small: need 22k");
 
-		// Medium session: 20 estimated turns
-		let estimated_medium = 20.0;
-		let next_medium = current + estimated_medium as usize;
-		assert_eq!(next_medium, 30, "Medium estimate: next at 30");
+		// Medium context: 80k after compression → need 88k to recompress
+		let medium_watermark: usize = 80_000;
+		let medium_threshold = (medium_watermark as f64 * 1.1) as usize;
+		assert_eq!(medium_threshold, 88_000, "Medium: need 88k");
 
-		// Long session: 50 estimated turns
-		let estimated_long = 50.0;
-		let next_long = current + estimated_long as usize;
-		assert_eq!(next_long, 60, "Long estimate: next at 60");
+		// Large context: 150k after compression → need 165k to recompress
+		let large_watermark: usize = 150_000;
+		let large_threshold = (large_watermark as f64 * 1.1) as usize;
+		assert_eq!(large_threshold, 165_000, "Large: need 165k");
 
-		// Verify cooldown scales with estimate
-		assert!(next_short < next_medium, "Short cooldown < medium cooldown");
-		assert!(next_medium < next_long, "Medium cooldown < long cooldown");
+		// Growth headroom scales with context size
+		let small_headroom = small_threshold - small_watermark;
+		let large_headroom = large_threshold - large_watermark;
+		assert!(
+			large_headroom > small_headroom,
+			"Larger contexts get more headroom: {} > {}",
+			large_headroom,
+			small_headroom
+		);
 	}
 
 	#[test]
