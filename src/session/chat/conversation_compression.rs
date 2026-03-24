@@ -1460,7 +1460,7 @@ fn find_compression_range(
 
 	// Compress everything except last 4 conversation messages
 	let preserve_count = 4;
-	let compress_count = conversation_indices.len() - preserve_count;
+	let mut compress_count = conversation_indices.len() - preserve_count;
 
 	// CRITICAL: Start boundary is first_prompt_idx (INCLUSIVE - never compress this or before)
 	// If not set (e.g. resumed sessions), detect bootstrap messages and skip past them.
@@ -1510,6 +1510,22 @@ fn find_compression_range(
 				start_idx = next;
 			}
 		}
+	}
+
+	// CRITICAL: The compressed summary is an assistant message. The first preserved
+	// message after it MUST be a user to maintain the alternating user/assistant
+	// pattern required by the API. If the first preserved conversation message is
+	// an assistant, advance compress_count to include it (and its tool results)
+	// in the compressed zone.
+	while compress_count < conversation_indices.len()
+		&& messages[conversation_indices[compress_count]].role == "assistant"
+	{
+		compress_count += 1;
+	}
+
+	// After advancing past assistants, we need at least 1 preserved message
+	if compress_count >= conversation_indices.len() {
+		return Ok((0, 0));
 	}
 
 	// CRITICAL FIX: The end_idx must be the last MESSAGE INDEX (not conversation index)
@@ -1687,14 +1703,22 @@ mod tests {
 
 		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
 
-		// conversation_indices = [1, 2, 4, 6, 7, 8, 9, 10] (8 messages)
-		// Keep last 4: [7, 8, 9, 10]
-		// First preserved conversation message: conversation_indices[4] = 7
-		// end_idx = 7 - 1 = 6 (includes all tool messages at 3, 5)
+		// conversation_indices = [1, 2, 4, 6, 7, 8, 9, 10] (8 items)
+		// Initial last 4: [7, 8, 9, 10] → first preserved = 7 (assistant)
+		// But compressed summary is assistant, so first preserved must be user.
+		// Advance past assistant at 7 → first preserved = 8 (user)
+		// end_idx = 8 - 1 = 7 (includes assistant at 7 and all tool messages)
 		assert_eq!(start_idx, 1);
 		assert_eq!(
-			end_idx, 6,
-			"Must include all messages including tool results before first preserved"
+			end_idx, 7,
+			"Must advance past leading assistant in preserved zone to ensure first preserved is user"
+		);
+
+		// Verify first preserved message is a user
+		assert_eq!(
+			messages[end_idx + 1].role,
+			"user",
+			"First preserved message must be user, not assistant"
 		);
 	}
 
@@ -3047,6 +3071,165 @@ mod tests {
 		let recent_medium = (medium / 4).clamp(4, 8);
 		assert_eq!(recent_medium, 8, "RECENT window must be 8 at 32 messages");
 	}
+	#[test]
+	#[allow(clippy::vec_init_then_push)]
+	fn first_preserved_must_be_user_not_assistant() {
+		// Reproduces the exact bug from the session log:
+		// After compression, the compressed summary (assistant) is inserted, and the first
+		// preserved conversation message is also an assistant — creating two consecutive
+		// assistant messages. Anthropic rejects this with:
+		// "tool_use ids were found without tool_result blocks immediately after"
+		//
+		// The fix: find_compression_range must advance compress_count past any leading
+		// assistant messages in the preserved zone so the first preserved is always a user.
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("user")); // 1 (first_prompt_idx)
+
+		// First tool cycle
+		let mut a2 = msg("assistant"); // 2
+		a2.tool_calls = Some(json!([
+			{"id": "call_1", "type": "function", "function": {"name": "view", "arguments": "{}"}}
+		]));
+		messages.push(a2);
+		let mut t3 = msg("tool"); // 3
+		t3.tool_call_id = Some("call_1".to_string());
+		messages.push(t3);
+
+		// Second tool cycle (no user between — AI continuation)
+		let mut a4 = msg("assistant"); // 4
+		a4.tool_calls = Some(json!([
+			{"id": "call_2", "type": "function", "function": {"name": "shell", "arguments": "{}"}}
+		]));
+		messages.push(a4);
+		let mut t5 = msg("tool"); // 5
+		t5.tool_call_id = Some("call_2".to_string());
+		messages.push(t5);
+
+		messages.push(msg("assistant")); // 6 (text response)
+		messages.push(msg("user")); // 7
+
+		// Third tool cycle — this assistant will be first preserved if bug exists
+		let mut a8 = msg("assistant"); // 8
+		a8.tool_calls = Some(json!([
+			{"id": "call_3a", "type": "function", "function": {"name": "view", "arguments": "{}"}},
+			{"id": "call_3b", "type": "function", "function": {"name": "shell", "arguments": "{}"}},
+			{"id": "call_3c", "type": "function", "function": {"name": "ast_grep", "arguments": "{}"}}
+		]));
+		messages.push(a8);
+		let mut t9 = msg("tool"); // 9
+		t9.tool_call_id = Some("call_3a".to_string());
+		messages.push(t9);
+		let mut t10 = msg("tool"); // 10
+		t10.tool_call_id = Some("call_3b".to_string());
+		messages.push(t10);
+		let mut t11 = msg("tool"); // 11
+		t11.tool_call_id = Some("call_3c".to_string());
+		messages.push(t11);
+
+		messages.push(msg("assistant")); // 12 (continuation)
+		messages.push(msg("user")); // 13
+		messages.push(msg("assistant")); // 14
+		messages.push(msg("user")); // 15
+		messages.push(msg("assistant")); // 16
+
+		// conversation_indices = [1, 2, 4, 6, 7, 8, 12, 13, 14, 15, 16] (11 items)
+		// preserve_count = 4
+		// compress_count = 11 - 4 = 7
+		// Last 4 preserved: conversation_indices[7..11] = [13, 14, 15, 16]
+		// BUT conversation_indices[7] = 13 is a user — that's fine.
+		//
+		// Let's adjust to trigger the bug: we need the first preserved to be an assistant.
+		// With the current layout, conversation_indices[7] = 13 (user). Let me restructure.
+
+		// Actually, let me build a cleaner scenario that definitely triggers it.
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("user")); // 1 (first_prompt_idx)
+		messages.push(msg("assistant")); // 2
+		messages.push(msg("user")); // 3
+		messages.push(msg("assistant")); // 4
+		messages.push(msg("user")); // 5
+
+		// This assistant with tool_calls should be the first preserved conversation message
+		let mut a6 = msg("assistant"); // 6
+		a6.tool_calls = Some(json!([
+			{"id": "call_A", "type": "function", "function": {"name": "view", "arguments": "{}"}},
+			{"id": "call_B", "type": "function", "function": {"name": "shell", "arguments": "{}"}},
+			{"id": "call_C", "type": "function", "function": {"name": "ast_grep", "arguments": "{}"}}
+		]));
+		messages.push(a6);
+		let mut t7 = msg("tool"); // 7
+		t7.tool_call_id = Some("call_A".to_string());
+		messages.push(t7);
+		let mut t8 = msg("tool"); // 8
+		t8.tool_call_id = Some("call_B".to_string());
+		messages.push(t8);
+		let mut t9 = msg("tool"); // 9
+		t9.tool_call_id = Some("call_C".to_string());
+		messages.push(t9);
+
+		messages.push(msg("assistant")); // 10 (continuation after tools)
+		messages.push(msg("user")); // 11
+		messages.push(msg("assistant")); // 12
+
+		// conversation_indices = [1, 2, 3, 4, 5, 6, 10, 11, 12] (9 items)
+		// preserve_count = 4
+		// compress_count = 9 - 4 = 5
+		// Last 4 preserved: conversation_indices[5..9] = [6, 10, 11, 12]
+		// First preserved: conversation_indices[5] = 6 (assistant with tool_calls!)
+		// end_idx = 6 - 1 = 5
+
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+
+		// The first preserved message must be a user, not an assistant.
+		// If the first preserved conversation message is an assistant, the compressed
+		// summary (also assistant) creates consecutive assistants — API rejection.
+		let first_preserved_idx = end_idx + 1;
+		assert_eq!(
+			messages[first_preserved_idx].role, "user",
+			"First preserved message after compression must be 'user', not '{}' at index {}. \
+			 Consecutive assistants (compressed summary + preserved assistant) break the API.",
+			messages[first_preserved_idx].role, first_preserved_idx
+		);
+
+		// Simulate compression: drain start_idx+1..=end_idx, insert summary
+		let mut after = messages.clone();
+		after.drain(start_idx + 1..=end_idx);
+		let mut summary = msg("assistant");
+		summary.content = "## Conversation Summary [COMPRESSED: test]".to_string();
+		after.insert(start_idx + 1, summary);
+
+		// Validate: no consecutive assistant messages
+		for i in 1..after.len() {
+			if after[i].role == "assistant" && after[i - 1].role == "assistant" {
+				panic!(
+					"Consecutive assistants at indices {} and {}: \
+					 prev={:?} (tool_calls={:?}), curr={:?} (tool_calls={:?})",
+					i - 1,
+					i,
+					after[i - 1].role,
+					after[i - 1].tool_calls.is_some(),
+					after[i].role,
+					after[i].tool_calls.is_some(),
+				);
+			}
+		}
+
+		// Validate: every assistant with tool_calls has tool results immediately after
+		for i in 0..after.len() {
+			if after[i].role == "assistant" && after[i].tool_calls.is_some() {
+				assert!(
+					i + 1 < after.len() && after[i + 1].role == "tool",
+					"Assistant with tool_calls at index {} must be followed by tool result, \
+					 but next is {:?}",
+					i,
+					after.get(i + 1).map(|m| &m.role)
+				);
+			}
+		}
+	}
+
 	#[test]
 	#[allow(clippy::vec_init_then_push)]
 	fn test_triple_compression_only_one_summary_in_drain() {
