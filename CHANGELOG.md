@@ -1,5 +1,167 @@
 # Changelog
 
+## [0.22.0] - 2026-03-25
+
+### 📋 Release Summary
+
+This release introduces dynamic agent management and multi-session concurrency, allowing AI assistants to run specialized tools and maintain separate contexts across simultaneous sessions. Enhanced MCP server integration brings runtime enable/disable controls, role-based auto-binding, and persistent server management for seamless tool orchestration. Multiple compression and memory improvements deliver more reliable conversation handling, while expanded multimodal support now processes images and videos within prompts.
+
+
+### ✨ New Features & Enhancements
+
+- **websocket**: process inbox messages as full AI turns before user input `ac36350e`
+- **skill**: queue skill content for injection as user message `1d29e795`
+- **skill**: add resource catalog builder and comprehensive tests `fed0096d`
+- **mcp**: add skill management and discovery system `a0e5f5ae`
+- **mcp**: add session-aware dynamic server persistence `fed63cca`
+- **session**: add session-scoped context for multi-session concurrency `b2e3fe4a`
+- **compression**: add critical knowledge retention configuration `9dad3be1`
+- **acp**: add video support to prompt handling `4b132a68`
+- **acp**: add image support to prompt handling `fd1abe9a`
+- **agent**: add capability resolution for manifests `0b14b4d4`
+- **schedule**: inject scheduled messages for all sessions `248457c0`
+- **plan**: add forced compression for final task on plan completion `350e570f`
+- **mcp**: enhance list command to show configured and dynamic servers `1d8a1817`
+- **mcp**: add role-based auto_bind for servers `568e6134`
+- **mcp**: add persist/unpersist commands for dynamic servers `10a5dd8c`
+- **session**: add HOME placeholder to template system `e4f15409`
+- **config**: add default empty roles array to template `69138e5d`
+- **website**: reposition as plug-and-play specialist AI agents `dc38ba20`
+- **chat**: add force compression option to bypass AI decision `7c9a8bb3`
+- **agent**: resolve dependencies before startup `aa5a3661`
+- **inputs**: add {{ENV:KEY}} placeholder support with .env fallback `f92589c3`
+- **tap**: add local_path argument and auto-inject role names `b201ccc4`
+- **dynamic_agents**: allow agents to reference config-defined servers `eceedb60`
+- **mcp**: add detailed progress tracking for server initialization `aecc9eea`
+- **mcp**: add runtime agent and server enable/disable `f403443c`
+- **fs**: return diff output from batch_edit instead of summary `78bb3b24`
+- **mcp**: add runtime agent management `e913c4aa`
+- **mcp**: add dynamic server tool name resolution `d2029968`
+- **mcp**: add runtime server manager `391e1e76`
+- **registry**: add tap management for agent manifests `91730e04`
+- **run**: add session management options to run command `3200736b`
+- **roles**: add optional model override per role `8545b124`
+- **prompts**: add {{KEY}} placeholder syntax and agent system `d9bb8a7e`
+
+### 🔧 Improvements & Optimizations
+
+- **commands**: consolidate cache into info and box outputs `e9673067`
+- **session**: replace job channels with unified inbox system `a61b93df`
+- **session**: move session context setup into session functions `a633c43d`
+- **skill**: avoid git pull during skill discovery `1b0f887d`
+- **report**: rename human_time to task_time and improve calculation `71f56655`
+- **websocket**: extract session lookup and add async job handling `4227fd52`
+- **session**: modularize and enhance session management `eb10b1a8`
+- **mcp**: split mod.rs and add thread-local workdir support `5aaccb10`
+- **mcp**: simplify tool routing logic `5c4c00b0`
+- **compression**: switch to token-based recompression threshold `bf360bff`
+- **compression**: remove adaptive_threshold flag and enable by default `f0479a4a`
+- **config**: reorder capabilities section in default.toml `6a815696`
+- **chat**: defer plan compression until project completion `3c192d14`
+- **compression**: use actual tokens saved for cooldown calculation `d0ed4300`
+- **chat**: remove semantic chunking from compression `612195b9`
+- **mcp**: replace builtin filesystem with octofs stdio server `6f77c093`
+- **website**: redesign landing page for domain specialists `f33500f2`
+- **cli**: consolidate startup flow into single function `4ca27a6e`
+- **config**: simplify role configuration `8e9093aa`
+- **chat**: improve conversation compression prompt and transcript format `ab5770e1`
+- **mcp**: show pending servers instead of completed count `db7b26d9`
+- **commands**: improve MCP initialization spinner messages `0b2f7ad5`
+- **commands**: unify config and MCP initialization `3a2d425d`
+- **tool**: remove ask tool integration `872b84d4`
+- **config**: standardize template syntax to {{var}} `9d09d797`
+- **cli**: merge session and agent commands into unified run `737c4c77`
+
+### 🐛 Bug Fixes & Stability
+
+- **commands**: remove deprecated /cache command `b789c219`
+- **compression**: correct start boundary to preserve first_prompt_idx `e118be2d`
+- **input**: handle terminal errors gracefully `c1f4437a`
+- **chat**: prevent orphaned summaries and align logger field naming `13f04273`
+- **session**: resolve skill injection session context mismatch `ed6c397c`
+- **skill**: prevent duplicate skills from being loaded `0d9463ae`
+- **tool_execution**: propagate session ID to spawned tool tasks `b79ca36d`
+- **run**: enable session-scoped state in CLI mode `5a41f344`
+- **compression**: adjust thresholds and update config docs `9ed0db2f`
+- **websocket**: make connection handling concurrent and thread-safe `6858f842`
+- **compression**: allow tool-loop sessions to compress when no user in preserved zone `c84cb82f`
+- **compression**: prevent infinite re-analysis loop on invalid range `9540ed89`
+- **logger**: pass session name to log_raw_exchange `2d7d0eef`
+- **chat**: ensure first preserved message after compression is user `befb37a7`
+- **compression**: enforce hard token ceiling bypassing adaptive logic `ed0693b3`
+- **registry**: improve error reporting for failed manifest fetches `2ef8d6c9`
+- **config**: replace thread_local role storage with global RwLock `f984e498`
+- **inputs**: protect escaped braces before extracting keys `16cf422e`
+- **config**: correct octomind acp command syntax `fcf8ae0d`
+- **cancellation**: cleanup MCP servers on exit signals `ece81986`
+- **animation**: prevent race between spinner cleanup and output `038331e6`
+- **mcp**: kill server process group on cancellation `3927b8df`
+- **mcp**: prevent deadlock by moving in-flight handles outside process mutex `116d7e5e`
+- **chat**: preserve tool results during compression `8480b9b5`
+- **chat**: skip cache marker management for non-caching models `0bc24611`
+- **chat**: ensure two cache markers after compression `4b3f6c13`
+- **chat**: prevent compression of initial user message `0d0a12fd`
+- **cancellation**: prevent Ctrl+C deadlock during spinner cleanup `aa844bd6`
+- **animation**: prevent Ctrl+C hang on spinner cleanup `e52a3858`
+- **config**: deduplicate TOML array tables by name field `590bcc4d`
+- **compression**: keep first_prompt_idx anchored to original user message `07934295`
+- **compression**: prevent progressive context loss by updating first_prompt_idx `c674873d`
+- **animation**: resolve output mode for proper animation display `f3be2ed0`
+- **dynamic_agents**: prevent deadlock in clear_all by releasing lock `ad07a662`
+- **config**: correct role count assertion in loading test `f62ec767`
+- **config**: enable default assistant role configuration `c573b8e3`
+- **config**: remove octocode mcp server from default template `2110713a`
+- **chat**: handle cancellation as soft signal `78168a13`
+- **taps**: add Windows symlink support for tap installation `65ed6940`
+- **inputs**: preserve escaped {{{{...}}}} placeholders during substitution `ec4bd8f2`
+- **mcp**: correct diff output format and duplicate line detection `bd8b98dc`
+- **mcp**: rename stdin to stdio for consistency `9a978a8a`
+- **roles**: use full tag as role name instead of suffix `88c165ff`
+- **session**: validate provider credentials early `a09b391c`
+- **text_editing**: remove has_meaningful_content and use exact line matching `ffdd67a3`
+- **mcp**: prefix agent layer names with agent_ `926aad6c`
+- **registry**: resolve local agent manifest path lookup `e6bb83f4`
+
+### 📚 Documentation & Examples
+
+- update provider and builtin server documentation `3c3bb2a2`
+- add skill tool documentation to core server `7fdbb8db`
+- **mcp**: add auto-bind configuration and schedule tool documentation `be003f85`
+- **config**: migrate filesystem server to external octofs `e6a31054`
+- **readme**: remove asciinema demo and update tap guide link `cb7933c6`
+- **readme**: rewrite for specialist agent runtime positioning `5a7a6733`
+- update configuration format and add runtime management tools `19b28efa`
+- update CLI commands and model configuration `3316dde7`
+- update command references from session to run `ac1f17e0`
+
+### 🔄 Other Changes
+
+- **deps**: bump octolib to 0.13.0 and update dependencies `2f53fb98`
+- **deps**: bump octolib to 0.12.2 and rand to 0.10 `b3fcd9d8`
+- **deps**: bump octolib from 0.12.0 to 0.12.1 `9178a24d`
+- **deps**: bump octolib to 0.12.0 and windows-sys to 0.60.2 `dbb7e86b`
+- update dependencies `890c7b29`
+- **deps**: bump aws-lc-rs and rustls-webpki versions `addc9813`
+- **compression**: isolate config loading in tests `04c38b51`
+- **docker**: consolidate multi-line docker commands into single lines `6071961b`
+- upgrade Rust toolchain to 1.94.0 across workflows `03da8fcc`
+- **deps**: bump octolib to 0.10.6 `7be1f87a`
+- **deps**: bump octolib to 0.10.5 `750cee71`
+- update dependencies `059876ef`
+- **dynamic_agents**: serialize tests with mutex to prevent race conditions `989ea301`
+- **config**: add developer and assistant test roles `9b9962fe`
+- **gitignore**: replace octolib with .marketing directory `5bbcfaa0`
+
+### 📊 Release Summary
+
+**Total commits**: 130 across 5 categories
+
+✨ **33** new features - *Enhanced functionality*
+🔧 **26** improvements - *Better performance & code quality*
+🐛 **47** bug fixes - *Improved stability*
+📚 **9** documentation updates - *Better developer experience*
+🔄 **15** other changes - *Maintenance & tooling*
+
 ## [0.21.0] - 2026-03-15
 
 ### 📋 Release Summary
