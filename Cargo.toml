@@ -30,7 +30,7 @@ panic = "abort"  # Abort on panic for smaller binary size
 strip = true      # Strip symbols from binary
 
 [dependencies]
-octolib = { version = "0.12.0", default-features = false }
+octolib = { version = "0.12.2", default-features = false }
 # octolib = { path = "../octolib", default-features = false }
 
 tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "time", "process", "fs", "sync", "signal", "io-std"] }
@@ -77,7 +77,7 @@ futures-util = "0.3"
 oauth2 = { version = "5.0", features = ["reqwest", "rustls-tls"] }
 keyring = { version = "3" }
 sha2 = "0.10"
-rand = { version = "0.9", features = ["std_rng"] }
+rand = { version = "0.10", features = ["std_rng"] }
 serde_urlencoded = "0.7"
 thiserror = "2.0"
 open = "5"
