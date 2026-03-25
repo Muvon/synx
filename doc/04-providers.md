@@ -320,10 +320,14 @@ Caching is automatically enabled for supported models. You can configure the com
 
 ```toml
 [compression]
-adaptive_threshold = true
-pressure_levels = [
-    { threshold = 60000, target_ratio = 2.5 }
-]
+hints_enabled = true
+
+[[compression.pressure_levels]]
+threshold = 60000
+target_ratio = 2.5
+
+# Maximum critical knowledge retained across compressions
+knowledge_retention = 10
 ```
 
 ### Benefits

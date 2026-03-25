@@ -70,28 +70,32 @@ welcome = "Hello! Octomind ready to serve you. Working dir: {{CWD}} (Role: {{ROL
 [roles.mcp]
 server_refs = ["core", "filesystem", "agent"]
 allowed_tools = ["core:*", "filesystem:*", "agent:*"]
-```
 
 # Server definitions in main MCP section
 [mcp]
 allowed_tools = []
 
+# Built-in MCP servers (always available)
 [[mcp.servers]]
 name = "core"
 type = "builtin"
 timeout_seconds = 30
+tools = []
 
 [[mcp.servers]]
 name = "agent"
 type = "builtin"
 timeout_seconds = 30
+tools = []
 
+# External filesystem server (octofs)
 [[mcp.servers]]
 name = "filesystem"
 type = "stdio"
 command = "octofs"
 args = []
 timeout_seconds = 30
+tools = []
 ```
 
 ## Assistant Role
@@ -850,8 +854,8 @@ When your session approaches configured token thresholds:
 
 ```toml
 [compression]
-# Enable adaptive compression (default: true)
-adaptive_threshold = true
+# Enable compression hints
+hints_enabled = true
 
 # Pressure levels - compress when threshold exceeded
 [[compression.pressure_levels]]
@@ -868,6 +872,9 @@ target_ratio = 4.0
 threshold = 150000
 name = "heavy"
 target_ratio = 8.0
+
+# Maximum critical knowledge retained across compressions
+knowledge_retention = 10
 
 # Fallback: compress when this limit is reached (0 = disabled)
 max_session_tokens_threshold = 50000
@@ -1025,17 +1032,11 @@ Compression Statistics:
     After: 24,625 tokens (4.0x compression)
     Cost saved: $0.0225
 ```
-
-#### Configuration
-
 ```toml
 [compression]
 # Enable compression hints
 hints_enabled = true
 hints_pressure_threshold = 0.7
-
-# Enable adaptive token-based compression
-adaptive_threshold = true
 
 # Compression triggers at these token thresholds
 [[compression.pressure_levels]]
@@ -1046,8 +1047,16 @@ target_ratio = 2.0
 threshold = 100000
 target_ratio = 4.0
 
+[[compression.pressure_levels]]
+threshold = 150000
+target_ratio = 8.0
+
+# Maximum critical knowledge retained across compressions
+knowledge_retention = 10
+
 # Optional: Use cheaper model for compression decisions
-# decision_model = "openrouter:anthropic/claude-haiku"
+# Recommended: "anthropic:claude-haiku-4-5" (10x cheaper)
+# decision_model = "anthropic:claude-haiku-4-5"
 ```
 
 #### Best Practices

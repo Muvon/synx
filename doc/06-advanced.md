@@ -482,21 +482,29 @@ The MCP system uses a centralized server configuration in the main `[mcp]` secti
 [mcp]
 allowed_tools = []
 
-# Built-in server definitions
+# Built-in server definitions (always available)
 [[mcp.servers]]
 name = "core"
 type = "builtin"
 timeout_seconds = 30
+tools = []
 
 [[mcp.servers]]
 name = "agent"
 type = "builtin"
 timeout_seconds = 30
+tools = []
 
+# External filesystem server (octofs stdio)
+# Provides: view, text_editor, batch_edit, extract_lines, shell, workdir, ast_grep
 [[mcp.servers]]
 name = "filesystem"
-type = "builtin"
+type = "stdio"
+command = "octofs"
+args = []
 timeout_seconds = 30
+tools = []
+
 # External HTTP server example
 [[mcp.servers]]
 name = "external_tools"
@@ -527,24 +535,28 @@ name = "developer"
 [roles.mcp]
 server_refs = ["core", "filesystem", "agent"]
 allowed_tools = ["core:*", "filesystem:*", "agent:*"]
-
-# Assistant role with limited access
-[[roles]]
-name = "assistant"
-[roles.mcp]
-server_refs = ["filesystem"]
-allowed_tools = ["filesystem:view"]
-```
 ### Server Types
 
-- **developer**: Built-in development tools
-  - `shell`: Terminal command execution with foreground/background support
-  - `ast_grep`: AST-based code search and refactoring using ast-grep (sg)
-  - `agent`: Task routing to specialized AI layers
-- **filesystem**: Built-in file operations
+- **core**: Built-in core tools
+  - `plan`: Structured task management with progress tracking
+  - `mcp`: Dynamic MCP server management
+  - `agent`: Dynamic agent tool management
+  - `schedule`: Schedule messages for future injection
+  - `knowledge_search`: Search indexed web knowledge
+  - `tavily_*`: Web search and extraction tools
+  - `remember`, `memorize`, `forget`, `relate`, `auto_link`, `memory_graph`: Memory management
+- **agent**: Built-in agent delegation
+  - `agent_*`: Delegate tasks to configured ACP sub-agents
+- **filesystem**: External filesystem server (octofs stdio)
   - `view`: Read files, view directories, and search file content
   - `text_editor`: Comprehensive file editing with batch operations
-- **external**: External MCP servers (HTTP or command-based)
+  - `batch_edit`: Atomic multi-line editing
+  - `extract_lines`: Extract and move code blocks
+  - `shell`: Terminal command execution
+  - `workdir`: Working directory management
+  - `ast_grep`: AST-based code search and refactoring
+- **external**: External MCP servers (HTTP or stdio)
+  - Custom tools from third-party servers
 
 
 ### External MCP Servers
@@ -725,12 +737,10 @@ The compression system is located in:
 4. **Cache-Aware**: Calculates net benefit considering cache invalidation costs
 5. **Compression**: Older exchanges are summarized using plan compression infrastructure
 
-#### Configuration
-
 ```toml
 [compression]
-# Enable adaptive compression (default: true)
-adaptive_threshold = true
+# Enable compression hints
+hints_enabled = true
 
 # Pressure levels - compress when threshold exceeded
 [[compression.pressure_levels]]
@@ -747,6 +757,9 @@ target_ratio = 4.0
 threshold = 150000
 name = "heavy"
 target_ratio = 8.0
+
+# Maximum critical knowledge retained across compressions
+knowledge_retention = 10
 
 # Fallback: compress when this limit is reached (0 = disabled)
 max_session_tokens_threshold = 50000
@@ -920,9 +933,6 @@ hints_enabled = true
 hints_pressure_threshold = 0.7
 hints_min_interval = 5
 
-# Enable adaptive token-based compression
-adaptive_threshold = true
-
 # Compression triggers at these token thresholds
 [[compression.pressure_levels]]
 threshold = 50000
@@ -936,9 +946,12 @@ target_ratio = 4.0  # Medium: 75% reduction
 threshold = 150000
 target_ratio = 8.0  # Aggressive: 87.5% reduction
 
+# Maximum critical knowledge retained across compressions
+knowledge_retention = 10
+
 # Optional: Use cheaper model for compression decisions
-# Recommended: "openrouter:anthropic/claude-haiku" (10x cheaper)
-# decision_model = "openrouter:anthropic/claude-haiku"
+# Recommended: "anthropic:claude-haiku-4-5" (10x cheaper)
+# decision_model = "anthropic:claude-haiku-4-5"
 ```
 
 ### Compression in Action
@@ -1031,10 +1044,9 @@ Session Cost Report:
 5. **Combine with caching**: Use `/cache` alongside compression for maximum savings
 
 ### Troubleshooting Compression
-
 **Compression not triggering:**
-- Verify `adaptive_threshold = true`
-- Check `pressure_levels` array is not empty
+- Verify `pressure_levels` array is not empty
+- Check that `hints_enabled = true` (default)
 - Use `/info` to see current token count vs. thresholds
 
 **Compression too aggressive:**

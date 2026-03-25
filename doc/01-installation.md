@@ -346,7 +346,6 @@ Octomind includes intelligent context compression to manage long sessions. When 
 [compression]
 hints_enabled = true                    # Show compression hints
 hints_pressure_threshold = 0.7          # Context pressure threshold for hints
-adaptive_threshold = true               # Enable token-based compression
 
 [[compression.pressure_levels]]
 threshold = 50000
@@ -360,6 +359,9 @@ target_ratio = 4.0  # Compress to 25% at 100k tokens
 threshold = 150000
 target_ratio = 8.0  # Compress to 12.5% at 150k tokens
 
+# Maximum critical knowledge retained across compressions
+knowledge_retention = 10
+
 [compression.decision]
 model = "anthropic:claude-haiku-4-5"    # Model for compression decisions
 max_tokens = 16000
@@ -369,6 +371,7 @@ top_k = 0
 max_retries = 1
 retry_timeout = 30
 ignore_cost = false
+```
 
 Compression preserves architectural information, file references, and key technical details while reducing token usage. See [Advanced Configuration](./06-advanced.md) for details.
 

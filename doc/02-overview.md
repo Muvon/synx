@@ -61,6 +61,7 @@ graph TB
 - `plan(command="start|step|next|list|done|reset", ...)` - Structured task management with progress tracking
 - `mcp(action="list|add|enable|disable|remove", ...)` - Dynamic MCP server management
 - `agent(action="list|add|enable|disable|remove", ...)` - Dynamic agent tool management
+- `schedule(...)` - Schedule messages for future injection
 
 **External Filesystem Server** (octofs stdio):
 Filesystem tools are provided by the external `octofs` MCP server, which must be configured in your MCP servers list:
@@ -71,7 +72,6 @@ Filesystem tools are provided by the external `octofs` MCP server, which must be
 - `shell(command="...", background=false)` - Execute shell commands with output capture, foreground/background execution
 - `workdir(path="...", reset=false)` - Get or set working directory for parallel execution isolation
 - `ast_grep(pattern="...", language="...", rewrite="...", ...)` - Search and refactor code using AST patterns
-
 **Agent Server** (`src/mcp/agent/`):
 - `agent_*()` tools - Delegate tasks to configured ACP sub-agents (each spawns an ACP subprocess or executes in-process for dynamic agents)
 ### 3. Multi-Provider AI Support

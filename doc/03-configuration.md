@@ -85,6 +85,7 @@ octomind vars --expand
 - **Environment Override**: Any setting can be overridden with `OCTOMIND_*` variables
 - **Role-Based**: Developer (full tools), Assistant (chat-only), and custom roles
 - **Security First**: API keys are ONLY set via environment variables
+- **Capabilities**: Provider overrides for tap agent capabilities (e.g., codesearch)
 
 ### Role Configuration
 
@@ -101,31 +102,34 @@ Octomind uses role-based configuration with built-in roles and custom role suppo
 ### Layer Configuration
 
 Layers are chained AI sub-agents that run after each response. When a layer is used as an agent tool, its name is automatically prefixed with `agent_` (e.g., a layer named `researcher` becomes the tool `agent_researcher`).
-## Configuration System
 
-### Template-Based Configuration
+### Capabilities Configuration
 
-Octomind uses a template-based configuration system where all defaults are defined in `config-templates/default.toml`. This ensures:
+Capability provider overrides allow tap agents to use alternative providers for specific capabilities:
 
-- **No Hardcoded Values**: All settings are configurable
-- **Consistent Defaults**: Same defaults across all installations
-- **Easy Customization**: Override any setting via environment variables
-- **Version Control**: Template changes are tracked and documented
+```toml
+[capabilities]
+# Override codesearch capability to use octocode provider
+codesearch = "octocode"
 
-### Environment Variable Overrides
-
-API keys and other sensitive information are read from environment variables:
-
-```bash
-# API Keys
-export OPENROUTER_API_KEY="your_key"
-export OPENAI_API_KEY="your_key"
-export ANTHROPIC_API_KEY="your_key"
-
-# Configuration Path
-export OCTOMIND_CONFIG_PATH="/path/to/your/config.toml"
+# Multiple capability overrides
+memory = "octomem"
+knowledge = "octoknowledge"
 ```
 
+Each capability maps to a provider configuration in the tap's `capabilities/` directory.
+
+### Configuration Path Override
+
+Use a custom configuration file or directory:
+
+```bash
+# Use specific config file
+export OCTOMIND_CONFIG_PATH="/path/to/your/config.toml"
+
+# Use config directory (loads all .toml files)
+export OCTOMIND_CONFIG_PATH="/path/to/config-directory"
+```
 ### Configuration Management
 
 ```bash
@@ -209,16 +213,18 @@ allowed_tools = ["core:*", "agent:*"]
 [mcp]
 allowed_tools = []
 
-# Built-in MCP servers
+# Built-in MCP servers (always available)
 [[mcp.servers]]
 name = "core"
 type = "builtin"
 timeout_seconds = 30
+tools = []
 
 [[mcp.servers]]
 name = "agent"
 type = "builtin"
 timeout_seconds = 30
+tools = []
 
 # External filesystem server (octofs)
 # Provides: view, text_editor, batch_edit, extract_lines, shell, workdir, ast_grep
@@ -229,6 +235,7 @@ command = "octofs"
 args = []
 timeout_seconds = 30
 tools = []
+
 # Example external MCP server configuration:
 # [[mcp.servers]]
 # name = "external_tools"
@@ -242,7 +249,7 @@ tools = []
 - **API Keys**: Set via environment variables only (e.g., `OPENROUTER_API_KEY`)
 - **Server References**: Roles use `server_refs` to reference servers by name
 - **Builtin Servers**: Core and agent are always available
-- **Filesystem Server**: The `filesystem` server is now external (octofs stdio) and must be configured in the MCP servers list
+- **Filesystem Server**: The `filesystem` server is external (octofs stdio) and must be configured in the MCP servers list
 ### Custom Instructions and Constraints
 
 Octomind supports automatic loading of custom instructions and constraints:
@@ -284,15 +291,13 @@ Date: {{DATE}}
 - Focus on the specific task requested
 ```
 
-### Template Variables Available
-
 All standard template variables are supported in custom instructions:
 - `{{ROLE}}` - Current role (developer, assistant, etc.)
 - `{{CWD}}` - Current working directory
+- `{{HOME}}` - User home directory
 - `{{DATE}}` - Current date and time
 - `{{SYSTEM}}` - System information
 - `{{CONTEXT}}` - Additional context if available
-
 ### Best Practices
 
 1. **Project-Specific**: Include information specific to your project's architecture and conventions
@@ -655,11 +660,11 @@ tools = []  # Empty means all tools enabled
 
 [[mcp.servers]]
 name = "filesystem"
-type = "builtin"
-timeout_seconds = 30
+type = "stdio"
+command = "octofs"
 args = []
+timeout_seconds = 30
 tools = []  # Empty means all tools enabled
-
 # External HTTP server
 [[mcp.servers]]
 name = "external_tools"
@@ -830,74 +835,12 @@ When your session approaches token thresholds, the system:
 
 ```toml
 [compression]
-# Enable adaptive compression (default: true)
-adaptive_threshold = true
-
-# Pressure levels - compress when threshold exceeded
-[[compression.pressure_levels]]
-threshold = 50000
-name = "light"
-target_ratio = 2.0
-
-[[compression.pressure_levels]]
-threshold = 100000
-name = "medium"
-target_ratio = 4.0
-
-[[compression.pressure_levels]]
-threshold = 150000
-name = "heavy"
-target_ratio = 8.0
-```
-
-#### Features
-
-- **AI-Driven Decision**: AI decides when compression is beneficial
-- **Cache-Aware Economics**: Only compresses when profitable (considers cache invalidation costs)
-- **Context Preservation**: Last 4 turns always remain uncompressed
-- **Visual Feedback**: Clear indication when compression occurs
-- **Zero Configuration**: Works automatically with sensible defaults
-
-#### Fallback Mode
-
-When adaptive compression is disabled (`adaptive_threshold = false`), the system uses `max_session_tokens_threshold` as a simple trigger:
-
-When adaptive compression is disabled (`adaptive_threshold = false`), the system uses `max_session_tokens_threshold` as a simple trigger (0 = disabled):
-max_session_tokens_threshold = 0
-
-### Manual Token Management
-
-Use session commands to manage tokens:
-- `/cache` - Mark cache checkpoint
-- `/info` - Show token usage breakdown
-- `/done` - Optimize context
-## Smart Adaptive Compression
-
-Octomind features an intelligent compression system that automatically reduces conversation context when token usage grows, while maintaining cost-effectiveness through cache-aware decision making.
-
-**For detailed technical information about compression, see [Advanced Features - Smart Adaptive Compression System](./06-advanced.md#smart-adaptive-compression-system).**
-
-### How Compression Works
-
-The compression system operates on three principles:
-
-1. **Token-Based Triggers**: Compression activates when absolute token count exceeds configured thresholds (not pressure ratios)
-2. **Cache-Aware Economics**: Before compressing, the system calculates if compression saves money considering cache invalidation costs
-3. **Semantic Preservation**: Uses discourse-aware semantic chunking to preserve important information while reducing size
-
-### Configuration
-
-```toml
-[compression]
 # Enable compression hints (shows suggestions when context grows)
 hints_enabled = true
 # Show hints when context reaches this pressure level (0.0-1.0)
 hints_pressure_threshold = 0.7
 # Minimum tool executions between hints to avoid spamming
 hints_min_interval = 5
-
-# Enable adaptive token-based compression (RECOMMENDED)
-adaptive_threshold = true
 
 # Compression triggers at these token thresholds with corresponding compression ratios
 # Each level defines: threshold (absolute token count) and target_ratio (compression strength)
@@ -915,16 +858,47 @@ target_ratio = 4.0  # Medium: 75% reduction (compress to 1/4 size)
 threshold = 150000
 target_ratio = 8.0  # Aggressive: 87.5% reduction (compress to 1/8 size)
 
-# Optional: Use a cheaper model for compression decisions
-# Recommended: "openrouter:anthropic/claude-haiku" (10x cheaper, 3x faster)
-# If not set, uses the session's main model (more expensive)
-# decision_model = "openrouter:anthropic/claude-haiku"
+# Maximum number of critical knowledge entries retained across compressions
+# Each compression may extract a short snippet of critical knowledge (decisions,
+# constraints, user preferences). Only the last N entries are kept.
+knowledge_retention = 10
 
-# Ignore compression decision API cost in session tracking
-# Useful when using subscription models with different pricing
-# When true, the compression decision call is treated as free
-# ignore_cost = false
+# Decision model configuration for compression decisions and summary generation
+# Use a fast, cheap model like Haiku for cost savings (10x cheaper than Sonnet)
+[compression.decision]
+model = "anthropic:claude-haiku-4-5"
+max_tokens = 16000
+temperature = 0.3
+top_p = 1.0
+top_k = 0
+max_retries = 1
+retry_timeout = 30
+ignore_cost = false  # When true, compression decision API cost is not tracked
 ```
+
+#### Features
+
+- **AI-Driven Decision**: AI decides when compression is beneficial
+- **Cache-Aware Economics**: Only compresses when profitable (considers cache invalidation costs)
+- **Context Preservation**: Last 4 turns always remain uncompressed
+- **Visual Feedback**: Clear indication when compression occurs
+- **Zero Configuration**: Works automatically with sensible defaults
+- **Knowledge Retention**: Critical knowledge (decisions, constraints, preferences) preserved across compressions
+
+#### Fallback Mode
+
+When compression is disabled, the system uses `max_session_tokens_threshold` as a simple trigger (0 = disabled):
+
+```toml
+max_session_tokens_threshold = 0
+```
+
+### Manual Token Management
+
+Use session commands to manage tokens:
+- `/cache` - Mark cache checkpoint
+- `/info` - Show token usage breakdown
+- `/done` - Optimize context
 
 ### Understanding Compression Ratios
 
@@ -946,13 +920,9 @@ Compression considers the cost of cache invalidation:
 The system only compresses if the net benefit (future savings minus cache invalidation cost) is positive.
 
 ### Environment Variable Overrides
-
 Override compression settings via environment variables:
 
 ```bash
-# Enable/disable compression
-export OCTOMIND_COMPRESSION__ADAPTIVE_THRESHOLD=true
-
 # Adjust pressure levels
 export OCTOMIND_COMPRESSION__PRESSURE_LEVELS__0__THRESHOLD=60000
 export OCTOMIND_COMPRESSION__PRESSURE_LEVELS__0__TARGET_RATIO=2.5
@@ -963,8 +933,10 @@ export OCTOMIND_COMPRESSION__DECISION_MODEL="openrouter:anthropic/claude-haiku"
 # Adjust hints
 export OCTOMIND_COMPRESSION__HINTS_ENABLED=false
 export OCTOMIND_COMPRESSION__HINTS_PRESSURE_THRESHOLD=0.8
-```
 
+# Adjust knowledge retention
+export OCTOMIND_COMPRESSION__KNOWLEDGE_RETENTION=15
+```
 ### Monitoring Compression
 
 Use the `/info` command to see compression statistics:
@@ -983,15 +955,14 @@ Compression Statistics:
 2. **Monitor Costs**: Use `/info` to track compression effectiveness
 3. **Use Decision Model**: Set `decision_model` to a cheaper model for significant cost savings
 4. **Preserve Context**: Compression preserves last 4 turns uncompressed for continuity
-5. **Disable if Needed**: Set `adaptive_threshold = false` to disable compression entirely
+5. **Disable if Needed**: Set `max_session_tokens_threshold = 0` to disable compression fallback
 
 ### Troubleshooting Compression
 
 **Compression not triggering:**
-- Check `adaptive_threshold = true` is set
 - Verify `pressure_levels` array is not empty
 - Use `/info` to see current token count vs. thresholds
-
+- Check that `hints_enabled = true` (default)
 **Compression too aggressive:**
 - Lower the `target_ratio` values (e.g., 2.0 instead of 4.0)
 - Increase the `threshold` values (e.g., 75000 instead of 50000)
