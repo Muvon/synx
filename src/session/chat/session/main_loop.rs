@@ -730,7 +730,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			// don't interfere with the readline prompt on stdout.
 			let (notif_tx, mut notif_rx) =
 				tokio::sync::mpsc::unbounded_channel::<crate::websocket::ServerMessage>();
-			crate::mcp::process::set_notification_sender(notif_tx);
+			crate::mcp::process::set_notification_sender(None, notif_tx);
 
 			// Drain notifications to stderr in a background task
 			let notif_drain = tokio::spawn(async move {
@@ -776,13 +776,13 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					use crate::session::chat::get_animation_manager;
 					get_animation_manager().stop_current().await;
 					log_debug!("API call cancelled by user - returning to prompt");
-					crate::mcp::process::clear_notification_sender();
+					crate::mcp::process::clear_notification_sender(None);
 					notif_drain.abort();
 					continue;
 				}
 			}; // end tokio::select!
 
-			crate::mcp::process::clear_notification_sender();
+			crate::mcp::process::clear_notification_sender(None);
 			let _ = notif_drain.await;
 
 			result
@@ -1010,7 +1010,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		// are forwarded as structured JSON lines alongside the regular output.
 		let (notif_tx, mut notif_rx) =
 			tokio::sync::mpsc::unbounded_channel::<crate::websocket::ServerMessage>();
-		crate::mcp::process::set_notification_sender(notif_tx);
+		crate::mcp::process::set_notification_sender(None, notif_tx);
 
 		// Drain notifications to stdout in a background task
 		let drain_handle = tokio::spawn(async move {
@@ -1032,7 +1032,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		.await;
 
 		// Stop forwarding notifications and wait for drain to finish
-		crate::mcp::process::clear_notification_sender();
+		crate::mcp::process::clear_notification_sender(None);
 		let _ = drain_handle.await;
 
 		result
@@ -1040,7 +1040,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		// Non-interactive run mode: set up notification sender so warnings print to stderr
 		let (notif_tx, mut notif_rx) =
 			tokio::sync::mpsc::unbounded_channel::<crate::websocket::ServerMessage>();
-		crate::mcp::process::set_notification_sender(notif_tx);
+		crate::mcp::process::set_notification_sender(None, notif_tx);
 
 		let notif_drain = tokio::spawn(async move {
 			while let Some(msg) = notif_rx.recv().await {
@@ -1072,7 +1072,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		)
 		.await;
 
-		crate::mcp::process::clear_notification_sender();
+		crate::mcp::process::clear_notification_sender(None);
 		let _ = notif_drain.await;
 
 		result

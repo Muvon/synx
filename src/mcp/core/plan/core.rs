@@ -36,60 +36,90 @@ use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
 lazy_static::lazy_static! {
-	static ref PLAN_STORAGE: Arc<Mutex<MemoryPlanStorage>> = Arc::new(Mutex::new(MemoryPlanStorage::new()));
-	// Track when the current task started (message index)
-	// This is set by the session before plan tool execution
-	static ref CURRENT_TASK_START_INDEX: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
+	// CLI-only global storage (fallback when not in session context)
+	static ref CLI_PLAN_STORAGE: Arc<Mutex<MemoryPlanStorage>> = Arc::new(Mutex::new(MemoryPlanStorage::new()));
+	// CLI-only global task start index (fallback when not in session context)
+	static ref CLI_TASK_START_INDEX: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
+}
+
+/// Get plan storage for the current context.
+/// Returns session-scoped storage if in a session, otherwise CLI global.
+fn get_storage() -> Arc<Mutex<MemoryPlanStorage>> {
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::get_plan_storage(&session_id)
+	} else {
+		CLI_PLAN_STORAGE.clone()
+	}
 }
 
 /// Set the start index for the current task (called by session before plan tool execution)
 pub fn set_current_task_start_index(index: usize) {
-	let mut start_index = CURRENT_TASK_START_INDEX.lock().unwrap();
-	*start_index = Some(index);
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::set_task_start_index(&session_id, index);
+	} else {
+		let mut start_index = CLI_TASK_START_INDEX.lock().unwrap();
+		*start_index = Some(index);
+	}
 	crate::log_debug!("Plan task start index set to: {}", index);
 }
 
 /// Get the current task start index without clearing (called when setting message range)
 pub fn get_current_task_start_index() -> Option<usize> {
-	let start_index = CURRENT_TASK_START_INDEX.lock().unwrap();
-	*start_index
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::get_task_start_index(&session_id)
+	} else {
+		let start_index = CLI_TASK_START_INDEX.lock().unwrap();
+		*start_index
+	}
 }
 
 /// Get and clear the current task start index (called when setting message range)
 pub fn get_and_clear_start_index() -> Option<usize> {
-	let mut start_index = CURRENT_TASK_START_INDEX.lock().unwrap();
-	start_index.take()
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::take_task_start_index(&session_id)
+	} else {
+		let mut start_index = CLI_TASK_START_INDEX.lock().unwrap();
+		start_index.take()
+	}
 }
 
 /// Clear the current task start index (called after successful compression)
 /// This allows the next task to set a new start_index
 pub fn clear_task_start_index() {
-	let mut start_index = CURRENT_TASK_START_INDEX.lock().unwrap();
-	*start_index = None;
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::clear_task_start_index(&session_id);
+	} else {
+		let mut start_index = CLI_TASK_START_INDEX.lock().unwrap();
+		*start_index = None;
+	}
 	crate::log_debug!("Cleared task start_index after successful compression");
 }
 
 /// Check if there's an active plan (for compression hints)
 pub fn has_active_plan() -> bool {
-	let storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let storage = storage.lock().unwrap();
 	storage.has_active_plan().unwrap_or(false)
 }
 
 /// Set message range for the last completed task (called from session after plan(next))
 pub fn set_last_task_message_range(start_index: usize, end_index: usize) -> Result<()> {
-	let mut storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let mut storage = storage.lock().unwrap();
 	storage.set_current_task_message_range(start_index, end_index)
 }
 
 /// Get the last completed task for compression (called from session)
 pub fn get_last_completed_task_for_compression() -> Option<super::storage::PlanTask> {
-	let storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let storage = storage.lock().unwrap();
 	storage.get_last_completed_task().ok().flatten()
 }
 
 /// Get current plan context for compression (plan title, progress, current task)
 pub fn get_plan_context() -> Option<(String, usize, usize, String)> {
-	let storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let storage = storage.lock().unwrap();
 	if !storage.has_active_plan().unwrap_or(false) {
 		return None;
 	}
@@ -278,7 +308,8 @@ async fn handle_start_command(call: &McpToolCall) -> Result<McpToolResult> {
 	};
 
 	// Create plan - but first check if one already exists
-	let mut storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let mut storage = storage.lock().unwrap();
 
 	// Safety check: prevent accidental overwrite of existing plan
 	if storage.has_active_plan().unwrap_or(false) {
@@ -324,7 +355,8 @@ async fn handle_start_command(call: &McpToolCall) -> Result<McpToolResult> {
 
 /// Handle step command - add details or get current details
 async fn handle_step_command(call: &McpToolCall) -> Result<McpToolResult> {
-	let storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let storage = storage.lock().unwrap();
 
 	// Check if plan exists
 	if !storage.has_active_plan().unwrap_or(false) {
@@ -348,7 +380,8 @@ async fn handle_step_command(call: &McpToolCall) -> Result<McpToolResult> {
 
 			// Add step details
 			drop(storage);
-			let mut storage = PLAN_STORAGE.lock().unwrap();
+			let storage = get_storage();
+			let mut storage = storage.lock().unwrap();
 			if let Err(e) = storage.add_step_details(content.clone()) {
 				return Ok(McpToolResult::error(
 					call.tool_name.clone(),
@@ -428,7 +461,8 @@ async fn handle_next_command(call: &McpToolCall) -> Result<McpToolResult> {
 		}
 	};
 
-	let mut storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let mut storage = storage.lock().unwrap();
 
 	// Check if plan exists
 	if !storage.has_active_plan().unwrap_or(false) {
@@ -523,7 +557,8 @@ async fn handle_next_command(call: &McpToolCall) -> Result<McpToolResult> {
 
 /// Handle list command - show task list with progress
 async fn handle_list_command(call: &McpToolCall) -> Result<McpToolResult> {
-	let storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let storage = storage.lock().unwrap();
 
 	// Check if plan exists
 	if !storage.has_active_plan().unwrap_or(false) {
@@ -618,7 +653,8 @@ async fn handle_done_command(call: &McpToolCall) -> Result<McpToolResult> {
 		}
 	};
 
-	let mut storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let mut storage = storage.lock().unwrap();
 
 	// Check if plan exists
 	if !storage.has_active_plan().unwrap_or(false) {
@@ -682,7 +718,8 @@ async fn handle_done_command(call: &McpToolCall) -> Result<McpToolResult> {
 
 /// Handle reset command - clear all plan data
 async fn handle_reset_command(call: &McpToolCall) -> Result<McpToolResult> {
-	let mut storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let mut storage = storage.lock().unwrap();
 
 	if let Err(e) = storage.clear_plan() {
 		return Ok(McpToolResult::error(
@@ -701,19 +738,22 @@ async fn handle_reset_command(call: &McpToolCall) -> Result<McpToolResult> {
 
 /// Clear plan data (called from session done command)
 pub async fn clear_plan_data() -> Result<()> {
-	let mut storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let mut storage = storage.lock().unwrap();
 	storage.clear_plan()
 }
 
 /// Get completed task count for compression hints
 pub fn get_completed_task_count() -> Result<usize> {
-	let storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let storage = storage.lock().unwrap();
 	storage.get_completed_task_count()
 }
 
 /// Get current plan display for session commands
 pub async fn get_current_plan_display() -> Result<String> {
-	let storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let storage = storage.lock().unwrap();
 
 	// Check if plan exists
 	if !storage.has_active_plan().unwrap_or(false) {
@@ -772,7 +812,8 @@ pub async fn get_current_plan_display() -> Result<String> {
 
 /// Get current plan as JSON for session commands
 pub async fn get_current_plan_json() -> Result<serde_json::Value> {
-	let storage = PLAN_STORAGE.lock().unwrap();
+	let storage = get_storage();
+	let storage = storage.lock().unwrap();
 
 	// Check if plan exists
 	if !storage.has_active_plan().unwrap_or(false) {

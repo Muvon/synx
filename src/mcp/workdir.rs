@@ -12,14 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Thread-local working directory management for parallel tool execution.
+//! Working directory management for multi-session concurrency.
 //!
-//! Each thread (parallel tool call) gets its own isolated working directory.
-//! `session` is the anchor set at session start (used by workdir reset).
-//! `current` tracks mid-session changes via the workdir tool.
+//! Each session gets its own isolated working directory state.
+//! For WebSocket sessions, state is stored in session-keyed registries.
+//! For CLI mode, thread-local storage is used as fallback.
+//!
+//! # Architecture
+//!
+//! Before: Thread-local WORKDIR (single session per process)
+//! After: Session-keyed registry + task-local session ID propagation
+//!
+//! ```ignore
+//! // Session-scoped (WebSocket mode):
+//! fn get_workdir() -> Option<PathBuf> {
+//!     current_session_id()
+//!         .and_then(|id| get_session_workdir(&id))
+//!         .or_else(|| thread_local_fallback())
+//! }
+//! ```
 
 use std::path::PathBuf;
 
+/// Thread-local storage for CLI mode (single session).
 struct WorkDir {
 	session: PathBuf,
 	current: PathBuf,
@@ -31,7 +46,16 @@ thread_local! {
 
 /// Set the session working directory. Call at every session boundary.
 /// Resets both the active directory and the reset anchor to `path`.
+///
+/// For WebSocket sessions, stores in session-scoped registry.
+/// For CLI mode, stores in thread-local storage.
 pub fn set_session_working_directory(path: PathBuf) {
+	// Try session-scoped first (WebSocket mode)
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::set_session_workdir(&session_id, path);
+		return;
+	}
+	// Fall back to thread-local (CLI mode)
 	WORKDIR.with(|w| {
 		*w.borrow_mut() = Some(WorkDir {
 			session: path.clone(),
@@ -41,7 +65,16 @@ pub fn set_session_working_directory(path: PathBuf) {
 }
 
 /// Override the active directory mid-session (workdir tool). Does not move the reset anchor.
+///
+/// For WebSocket sessions, updates session-scoped registry.
+/// For CLI mode, updates thread-local storage.
 pub fn set_thread_working_directory(path: PathBuf) {
+	// Try session-scoped first (WebSocket mode)
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::set_current_workdir(&session_id, path);
+		return;
+	}
+	// Fall back to thread-local (CLI mode)
 	WORKDIR.with(|w| {
 		let mut w = w.borrow_mut();
 		if let Some(ref mut wd) = *w {
@@ -50,8 +83,19 @@ pub fn set_thread_working_directory(path: PathBuf) {
 	});
 }
 
-/// Active working directory for the current thread.
+/// Active working directory for the current session/thread.
+///
+/// For WebSocket sessions, returns from session-scoped registry.
+/// For CLI mode, returns from thread-local storage.
+/// Falls back to current_dir() if neither is set.
 pub fn get_thread_working_directory() -> PathBuf {
+	// Try session-scoped first (WebSocket mode)
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		if let Some(path) = crate::session::context::get_current_workdir(&session_id) {
+			return path;
+		}
+	}
+	// Fall back to thread-local (CLI mode)
 	WORKDIR.with(|w| {
 		w.borrow()
 			.as_ref()
@@ -61,7 +105,18 @@ pub fn get_thread_working_directory() -> PathBuf {
 }
 
 /// Session anchor — the directory to return to on workdir reset.
+///
+/// For WebSocket sessions, returns from session-scoped registry.
+/// For CLI mode, returns from thread-local storage.
+/// Falls back to current_dir() if neither is set.
 pub fn get_thread_original_working_directory() -> PathBuf {
+	// Try session-scoped first (WebSocket mode)
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		if let Some(path) = crate::session::context::get_session_workdir_anchor(&session_id) {
+			return path;
+		}
+	}
+	// Fall back to thread-local (CLI mode)
 	WORKDIR.with(|w| {
 		w.borrow()
 			.as_ref()

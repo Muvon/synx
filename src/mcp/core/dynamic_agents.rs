@@ -90,6 +90,9 @@ fn get_agent_manager() -> &'static Arc<RwLock<DynamicAgentManagerState>> {
 ///
 /// Stores the config in the registry with enabled=false.
 /// Use `enable_agent` to activate it.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn register_agent(agent: DynamicAgentConfig) -> Result<()> {
 	let agent_name = agent.name.clone();
 
@@ -101,6 +104,13 @@ pub fn register_agent(agent: DynamicAgentConfig) -> Result<()> {
 		anyhow::bail!("Agent system prompt is required");
 	}
 
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::register_dynamic_agent_for_session(&session_id, agent);
+		return Ok(());
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_agent_manager();
 	let mut state = manager.write().unwrap();
 	if state.agents.contains_key(&agent_name) {
@@ -118,7 +128,21 @@ pub fn register_agent(agent: DynamicAgentConfig) -> Result<()> {
 ///
 /// Marks the agent as enabled, making it available for execution.
 /// Also registers the tool in the global tool map.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn enable_agent(name: &str) -> Result<()> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		if crate::session::context::enable_dynamic_agent_for_session(&session_id, name) {
+			// Register the tool in the global tool map
+			crate::mcp::tool_map::register_dynamic_agent_tool(name);
+			return Ok(());
+		}
+		anyhow::bail!("Agent '{}' not registered. Use 'add' first.", name);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_agent_manager();
 	let mut state = manager.write().unwrap();
 	if !state.agents.contains_key(name) {
@@ -136,7 +160,21 @@ pub fn enable_agent(name: &str) -> Result<()> {
 ///
 /// Marks the agent as disabled. The config stays registered.
 /// Also unregisters the tool from the global tool map.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn disable_agent(name: &str) -> Result<()> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		if crate::session::context::disable_dynamic_agent_for_session(&session_id, name) {
+			// Unregister the tool from the global tool map
+			crate::mcp::tool_map::unregister_dynamic_agent_tool(name);
+			return Ok(());
+		}
+		anyhow::bail!("Agent '{}' not found", name);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_agent_manager();
 	let mut state = manager.write().unwrap();
 	if !state.agents.contains_key(name) {
@@ -154,7 +192,21 @@ pub fn disable_agent(name: &str) -> Result<()> {
 ///
 /// Returns the removed agent config if it existed, or None if not found.
 /// Also unregisters the tool from the global tool map.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn remove_agent(name: &str) -> Option<DynamicAgentConfig> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		let removed = crate::session::context::remove_dynamic_agent_for_session(&session_id, name);
+		if removed.is_some() {
+			// Unregister from tool map
+			crate::mcp::tool_map::unregister_dynamic_agent_tool(name);
+		}
+		return removed;
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_agent_manager();
 	let mut state = manager.write().unwrap();
 	state.enabled.remove(name);
@@ -169,7 +221,19 @@ pub fn remove_agent(name: &str) -> Option<DynamicAgentConfig> {
 }
 
 /// List all registered agents with their enabled status.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn list_agents() -> Vec<(DynamicAgentConfig, bool)> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::get_dynamic_agents_for_session(&session_id)
+			.into_iter()
+			.map(|(_, config, is_enabled)| (config, is_enabled))
+			.collect();
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_agent_manager();
 	let state = manager.read().unwrap();
 	state
@@ -183,7 +247,20 @@ pub fn list_agents() -> Vec<(DynamicAgentConfig, bool)> {
 }
 
 /// Get all enabled agent configs (for tool execution).
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn get_all_configs() -> Vec<DynamicAgentConfig> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::get_dynamic_agents_for_session(&session_id)
+			.into_iter()
+			.filter(|(_, _, is_enabled)| *is_enabled)
+			.map(|(_, config, _)| config)
+			.collect();
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_agent_manager();
 	let state = manager.read().unwrap();
 	state
@@ -195,7 +272,22 @@ pub fn get_all_configs() -> Vec<DynamicAgentConfig> {
 }
 
 /// Get a specific enabled agent by name.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn get_enabled_agent(name: &str) -> Option<DynamicAgentConfig> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		if crate::session::context::is_dynamic_agent_enabled(&session_id, name) {
+			return crate::session::context::get_dynamic_agents_for_session(&session_id)
+				.into_iter()
+				.find(|(n, _, _)| n == name)
+				.map(|(_, config, _)| config);
+		}
+		return None;
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_agent_manager();
 	let state = manager.read().unwrap();
 	if !state.enabled.get(name).unwrap_or(&false) {
@@ -205,20 +297,41 @@ pub fn get_enabled_agent(name: &str) -> Option<DynamicAgentConfig> {
 }
 
 /// Check if an agent name is dynamically managed (registered, regardless of enabled).
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn is_dynamic(name: &str) -> bool {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::has_dynamic_agent(&session_id, name);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_agent_manager();
 	let state = manager.read().unwrap();
 	state.agents.contains_key(name)
 }
 
 /// Check if an agent name is enabled.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn is_enabled(name: &str) -> bool {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::is_dynamic_agent_enabled(&session_id, name);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_agent_manager();
 	let state = manager.read().unwrap();
 	state.enabled.get(name).copied().unwrap_or(false) && state.agents.contains_key(name)
 }
 
 /// Check if a tool name belongs to any dynamic agent.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn is_dynamic_by_tool(tool_name: &str) -> bool {
 	let prefix = "agent_";
 	if let Some(name) = tool_name.strip_prefix(prefix) {
@@ -229,9 +342,21 @@ pub fn is_dynamic_by_tool(tool_name: &str) -> bool {
 }
 
 /// Get the dynamic agent name for a specific tool.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn get_dynamic_agent_name_by_tool(tool_name: &str) -> Option<String> {
 	let prefix = "agent_";
 	if let Some(name) = tool_name.strip_prefix(prefix) {
+		// Check if we're in a session context
+		if let Some(session_id) = crate::session::context::current_session_id() {
+			if crate::session::context::has_dynamic_agent(&session_id, name) {
+				return Some(name.to_string());
+			}
+			return None;
+		}
+
+		// Fall back to global singleton for CLI mode
 		let manager = get_agent_manager();
 		let state = manager.read().unwrap();
 		if state.agents.contains_key(name) {

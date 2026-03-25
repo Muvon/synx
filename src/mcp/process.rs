@@ -85,28 +85,32 @@ lazy_static::lazy_static! {
 	static ref SERVER_IN_FLIGHT: Arc<RwLock<HashMap<String, InFlightHandle>>> =
 		Arc::new(RwLock::new(HashMap::new()));
 }
-
 // Global notification sender — set by the session when WebSocket or JSONL output is active.
 // When set, MCP server notifications are forwarded as structured ServerMessage::McpNotification.
 // When not set, notifications are buffered and flushed when a sender is registered.
+//
+// NOTE: These are process-global for CLI mode. For multi-session WebSocket mode,
+// use the session-keyed registries in crate::session::context instead.
 lazy_static::lazy_static! {
-	static ref NOTIFICATION_SENDER: RwLock<Option<tokio::sync::mpsc::UnboundedSender<crate::websocket::ServerMessage>>> =
+	// CLI-mode notification sender (single session)
+	static ref CLI_NOTIFICATION_SENDER: RwLock<Option<tokio::sync::mpsc::UnboundedSender<crate::websocket::ServerMessage>>> =
 		RwLock::new(None);
 
-	// Notifications that arrived before any sender was registered (e.g. during MCP server init).
-	// Flushed to the sender as soon as one is registered via set_notification_sender().
-	static ref PENDING_NOTIFICATIONS: RwLock<Vec<crate::websocket::ServerMessage>> =
+	// CLI-mode pending notifications (buffered before sender is registered)
+	static ref CLI_PENDING_NOTIFICATIONS: RwLock<Vec<crate::websocket::ServerMessage>> =
 		RwLock::new(Vec::new());
 }
 
 // Session context (role + project) sent to MCP servers during initialization.
+// NOTE: This is process-global for CLI mode. For multi-session WebSocket mode,
+// use the session-keyed context in crate::session::context.
 lazy_static::lazy_static! {
-	static ref SESSION_CONTEXT: RwLock<(String, String)> = RwLock::new((String::new(), String::new()));
+	static ref CLI_SESSION_CONTEXT: RwLock<(String, String)> = RwLock::new((String::new(), String::new()));
 }
 
 /// Derive a stable project identifier: SHA-256 of the git remote origin URL if available,
 /// otherwise SHA-256 of the absolute working directory path.
-fn derive_project_id() -> String {
+pub fn derive_project_id() -> String {
 	use sha2::{Digest, Sha256};
 	let source = std::process::Command::new("git")
 		.args(["remote", "get-url", "origin"])
@@ -126,13 +130,52 @@ fn derive_project_id() -> String {
 	format!("{:x}", hash)[..16].to_string()
 }
 
+/// Derive project ID from a specific path (for session-scoped context).
+pub fn derive_project_id_from_path(path: &std::path::Path) -> String {
+	use sha2::{Digest, Sha256};
+	let source = std::process::Command::new("git")
+		.args(["remote", "get-url", "origin"])
+		.current_dir(path)
+		.output()
+		.ok()
+		.filter(|o| o.status.success())
+		.and_then(|o| String::from_utf8(o.stdout).ok())
+		.map(|s| s.trim().to_string())
+		.filter(|s| !s.is_empty())
+		.unwrap_or_else(|| path.to_string_lossy().into_owned());
+	let hash = Sha256::digest(source.as_bytes());
+	format!("{:x}", hash)[..16].to_string()
+}
 /// Set the session context (role + project) that will be sent to MCP servers on initialization.
 /// Call this before starting MCP servers for a session.
+///
+/// For multi-session WebSocket mode, this sets the CLI global. Use
+/// `session::context::SessionContext` for session-scoped context.
 pub fn set_session_context(role: &str, project: &str) {
-	*SESSION_CONTEXT.write().unwrap() = (role.to_string(), project.to_string());
+	// Check for session-scoped context first (WebSocket mode)
+	if let Some(_session_id) = crate::session::context::current_session_id() {
+		// In session mode, context is stored per-session in context.rs
+		// This CLI global is not used, but we set it for backward compatibility
+	}
+	// Always set CLI global for backward compatibility
+	*CLI_SESSION_CONTEXT.write().unwrap() = (role.to_string(), project.to_string());
 }
+
+/// Get the session context (role + project).
+/// Returns session-scoped context if in a session, otherwise CLI global.
 pub fn get_session_context() -> (String, String) {
-	SESSION_CONTEXT.read().unwrap().clone()
+	// Check for session-scoped context first (WebSocket mode)
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		if let Some(role) = crate::session::context::get_session_role(&session_id) {
+			// Get project from session context
+			let project = crate::session::context::get_session_workdir_anchor(&session_id)
+				.map(|p| crate::mcp::process::derive_project_id_from_path(&p))
+				.unwrap_or_default();
+			return (role, project);
+		}
+	}
+	// Fall back to CLI global (CLI mode)
+	CLI_SESSION_CONTEXT.read().unwrap().clone()
 }
 
 /// Derive and set the project id from the current git remote / cwd, then store role.
@@ -144,30 +187,58 @@ pub fn init_session_context(role: &str) {
 /// Register a channel sender so MCP notifications are forwarded as structured messages.
 /// Flushes any notifications that arrived before this call (e.g. during server initialization).
 /// Call this when starting a WebSocket or JSONL session.
+///
+/// For multi-session WebSocket mode, pass session_id to register in session-scoped registry.
+/// For CLI mode, pass None to use process-global storage.
 pub fn set_notification_sender(
+	session_id: Option<String>,
 	tx: tokio::sync::mpsc::UnboundedSender<crate::websocket::ServerMessage>,
 ) {
-	// Flush buffered notifications first, then register the sender
-	let pending = {
-		let mut guard = PENDING_NOTIFICATIONS.write().unwrap();
-		std::mem::take(&mut *guard)
-	};
-	for msg in pending {
-		let _ = tx.send(msg);
+	match session_id {
+		Some(sid) => {
+			// Session-scoped (WebSocket mode)
+			crate::session::context::register_notification_sender(sid, tx);
+		}
+		None => {
+			// CLI mode - flush buffered notifications first, then register
+			let pending = {
+				let mut guard = CLI_PENDING_NOTIFICATIONS.write().unwrap();
+				std::mem::take(&mut *guard)
+			};
+			for msg in pending {
+				let _ = tx.send(msg);
+			}
+			let mut guard = CLI_NOTIFICATION_SENDER.write().unwrap();
+			*guard = Some(tx);
+		}
 	}
-	let mut guard = NOTIFICATION_SENDER.write().unwrap();
-	*guard = Some(tx);
 }
 
 /// Remove the notification sender (e.g. when a session ends).
-pub fn clear_notification_sender() {
-	let mut guard = NOTIFICATION_SENDER.write().unwrap();
-	*guard = None;
+pub fn clear_notification_sender(session_id: Option<String>) {
+	match session_id {
+		Some(sid) => {
+			crate::session::context::unregister_notification_sender(sid);
+		}
+		None => {
+			let mut guard = CLI_NOTIFICATION_SENDER.write().unwrap();
+			*guard = None;
+		}
+	}
 }
 
 /// Send any ServerMessage directly through the notification channel.
+/// Uses session-scoped sender if in a session context, otherwise CLI global.
 pub fn send_notification_message(msg: crate::websocket::ServerMessage) {
-	let sender = NOTIFICATION_SENDER.read().unwrap();
+	// Try session-scoped sender first
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		if let Some(sender) = crate::session::context::get_notification_sender_by_id(&session_id) {
+			let _ = sender.send(msg);
+			return;
+		}
+	}
+	// Fall back to CLI global
+	let sender = CLI_NOTIFICATION_SENDER.read().unwrap();
 	if let Some(tx) = sender.as_ref() {
 		let _ = tx.send(msg);
 	}
@@ -184,7 +255,17 @@ fn emit_notification(server_name: &str, method: &str, params: &serde_json::Value
 			params: params.clone(),
 		},
 	);
-	let sender = NOTIFICATION_SENDER.read().unwrap();
+
+	// Try session-scoped sender first
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		if let Some(sender) = crate::session::context::get_notification_sender_by_id(&session_id) {
+			let _ = sender.send(msg);
+			return;
+		}
+	}
+
+	// Fall back to CLI global
+	let sender = CLI_NOTIFICATION_SENDER.read().unwrap();
 	if let Some(tx) = sender.as_ref() {
 		// Sender active — forward immediately
 		let _ = tx.send(msg);
@@ -192,7 +273,7 @@ fn emit_notification(server_name: &str, method: &str, params: &serde_json::Value
 		// No sender yet (e.g. notification arrived during server init before session started).
 		// Buffer it so it gets flushed when set_notification_sender() is called.
 		drop(sender); // release read lock before taking write lock on PENDING
-		PENDING_NOTIFICATIONS.write().unwrap().push(msg);
+		CLI_PENDING_NOTIFICATIONS.write().unwrap().push(msg);
 	}
 }
 
@@ -711,7 +792,7 @@ async fn start_server_process(server: &McpServerConfig) -> Result<String> {
 
 // Initialize a stdin-based server following the MCP protocol
 async fn initialize_stdin_server(server_name: &str) -> Result<()> {
-	let (role, project) = SESSION_CONTEXT.read().unwrap().clone();
+	let (role, project) = get_session_context();
 	// Construct an initialize message according to the MCP protocol
 	let init_message = json!({
 		"jsonrpc": "2.0",

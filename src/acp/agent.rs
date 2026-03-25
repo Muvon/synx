@@ -493,7 +493,7 @@ impl agent_client_protocol::Agent for OctomindAgent {
 		// Forward MCP server notifications through the same channel.
 		// Safe: prompt() holds exclusive access to the session (removed from map above),
 		// so no two prompts for the same session can race on this global sender.
-		crate::mcp::process::set_notification_sender(ws_tx);
+		crate::mcp::process::set_notification_sender(Some(session_id.clone()), ws_tx);
 
 		// Spawn a local task to stream notifications to the client in real-time
 		// while the API call runs concurrently. The channel closes when ws_sink drops.
@@ -558,7 +558,7 @@ impl agent_client_protocol::Agent for OctomindAgent {
 		// Clear the global notification sender so the channel can close.
 		// Without this, forward_task.await hangs forever because NOTIFICATION_SENDER
 		// holds a clone of ws_tx, preventing the channel from closing.
-		crate::mcp::process::clear_notification_sender();
+		crate::mcp::process::clear_notification_sender(Some(session_id.clone()));
 
 		// Wait for the forwarding task to drain any remaining messages
 		let _ = forward_task.await;

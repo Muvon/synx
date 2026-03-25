@@ -587,7 +587,7 @@ async fn handle_user_message(
 	let ws_sink = WebSocketSink::new(ws_tx.clone());
 
 	// Forward MCP server notifications through the WebSocket channel
-	crate::mcp::process::set_notification_sender(ws_tx);
+	crate::mcp::process::set_notification_sender(Some(session_id.clone()), ws_tx);
 
 	// Execute API call — events stream in real-time via WebSocketSink
 	let api_result = execute_api_call_and_process_response(
@@ -681,7 +681,7 @@ async fn handle_user_message(
 	chat_session.save()?;
 
 	// Clear the notification sender now that this request is done
-	crate::mcp::process::clear_notification_sender();
+	crate::mcp::process::clear_notification_sender(Some(session_id.clone()));
 
 	// Store session back
 	sessions

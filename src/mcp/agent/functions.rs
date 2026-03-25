@@ -25,6 +25,7 @@ use tokio::process::Command;
 use tokio::sync::watch;
 
 /// Global singleton — created once when the first async agent call arrives.
+/// Used as fallback for CLI mode when not in a session context.
 static JOB_MANAGER: OnceLock<Arc<BackgroundJobManager>> = OnceLock::new();
 
 /// Get reasonable max concurrent jobs based on CPU cores (minimum 4)
@@ -35,9 +36,16 @@ fn get_max_concurrent_jobs() -> usize {
 }
 
 /// Initialize the job manager at session start. Returns the receiver for completed jobs.
-/// Idempotent: if already initialized (e.g. multiple ACP sessions), returns a closed receiver
-/// since the global singleton is already running.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn init_job_manager() -> tokio::sync::mpsc::Receiver<CompletedJob> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::init_job_manager_for_session(&session_id);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let (manager, rx) = BackgroundJobManager::new(get_max_concurrent_jobs());
 	if JOB_MANAGER.set(Arc::new(manager)).is_err() {
 		// Already initialized — return a closed receiver; the existing manager handles jobs.
@@ -47,7 +55,17 @@ pub fn init_job_manager() -> tokio::sync::mpsc::Receiver<CompletedJob> {
 	rx
 }
 
+/// Get the job manager for the current session or global fallback.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn get_job_manager() -> Option<Arc<BackgroundJobManager>> {
+	// Check if we're in a session context
+	if let Some(manager) = crate::session::context::get_job_manager_for_session() {
+		return Some(manager);
+	}
+
+	// Fall back to global singleton for CLI mode
 	JOB_MANAGER.get().cloned()
 }
 

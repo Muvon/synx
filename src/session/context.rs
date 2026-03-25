@@ -1,0 +1,844 @@
+// Copyright 2025 Muvon Un Limited
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Session-scoped context for multi-session concurrency support.
+//!
+//! This module provides session isolation for global state that was previously
+//! process-global. Each WebSocket session gets its own isolated context that
+//! propagates through async task boundaries via `tokio::task_local!`.
+//!
+//! # Architecture
+//!
+//! Before: Process-global singletons (NOTIFICATION_SENDER, PLAN_STORAGE, etc.)
+//! After: Session-keyed registries + task-local propagation
+//!
+//! ```ignore
+//! use std::sync::RwLock;
+//! use std::collections::HashMap;
+//! type SessionId = String;
+//! type State = String;
+//!
+//! // Session-keyed registry pattern:
+//! static REGISTRY: RwLock<HashMap<SessionId, State>> = RwLock::new(HashMap::new());
+//!
+//! // Task-local propagation:
+//! tokio::task_local! {
+//!     static CURRENT_SESSION: SessionId;
+//! }
+//!
+//! // Access pattern:
+//! fn get_state() -> Option<State> {
+//!     CURRENT_SESSION.try_with(|id| id.clone()).ok()
+//! }
+//! ```
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, RwLock};
+
+/// Unique identifier for a session.
+pub type SessionId = String;
+
+/// Session-scoped state that travels through async boundaries.
+///
+/// This struct contains all the state that was previously process-global.
+/// Each session gets its own instance, and it's propagated via task_local!
+#[derive(Debug, Clone)]
+pub struct SessionContext {
+	/// Unique session identifier
+	pub session_id: SessionId,
+	/// Role name for this session
+	pub role: String,
+	/// Project identifier (derived from git remote or cwd)
+	pub project_id: String,
+	/// Session working directory anchor
+	pub workdir: PathBuf,
+}
+
+impl SessionContext {
+	/// Create a new session context.
+	pub fn new(session_id: SessionId, role: String, project_id: String, workdir: PathBuf) -> Self {
+		Self {
+			session_id,
+			role,
+			project_id,
+			workdir,
+		}
+	}
+
+	/// Create a context for the current session with defaults.
+	pub fn for_session(session_id: &str, role: &str) -> Self {
+		let project_id = crate::mcp::process::derive_project_id();
+		let workdir = std::env::current_dir().unwrap_or_default();
+		Self::new(
+			session_id.to_string(),
+			role.to_string(),
+			project_id,
+			workdir,
+		)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task-local session ID propagation
+// ---------------------------------------------------------------------------
+
+tokio::task_local! {
+	/// The current session ID, propagated through async task boundaries.
+	/// Use `with_session_id()` to run code within a session context.
+	pub static CURRENT_SESSION_ID: Arc<SessionId>;
+}
+
+/// Run a future within a session context.
+///
+/// This sets up the task-local session ID so that session-scoped state
+/// can be accessed from anywhere in the async call stack.
+pub async fn with_session_id<F, T>(session_id: SessionId, f: F) -> T
+where
+	F: std::future::Future<Output = T>,
+{
+	let id = Arc::new(session_id);
+	CURRENT_SESSION_ID.scope(id, f).await
+}
+
+/// Get the current session ID from task-local storage.
+///
+/// Returns None if called outside of a session context.
+pub fn current_session_id() -> Option<SessionId> {
+	CURRENT_SESSION_ID.try_with(|id| (**id).clone()).ok()
+}
+
+/// Get the current session ID, panicking if not in a session context.
+///
+/// Use this only when you're certain you're in a session context.
+pub fn expect_session_id() -> SessionId {
+	current_session_id().expect("not in a session context - call with_session_id first")
+}
+
+// ---------------------------------------------------------------------------
+// Session-keyed registries for global state
+// ---------------------------------------------------------------------------
+
+/// Notification sender for WebSocket/JSONL output.
+pub type NotificationSender = tokio::sync::mpsc::UnboundedSender<crate::websocket::ServerMessage>;
+
+/// Registry for notification senders, keyed by session ID.
+/// Each session gets its own channel for MCP notifications.
+static NOTIFICATION_SENDERS: RwLock<Option<HashMap<SessionId, NotificationSender>>> =
+	RwLock::new(None);
+
+/// Initialize the notification registry (call once at startup).
+pub fn init_notification_registry() {
+	let mut guard = NOTIFICATION_SENDERS.write().unwrap();
+	if guard.is_none() {
+		*guard = Some(HashMap::new());
+	}
+}
+
+/// Register a notification sender for a session.
+pub fn set_notification_sender_for_session(session_id: &SessionId, tx: NotificationSender) {
+	let mut guard = NOTIFICATION_SENDERS.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	registry.insert(session_id.clone(), tx);
+}
+
+/// Remove a notification sender when a session ends.
+pub fn clear_notification_sender_for_session(session_id: &SessionId) {
+	if let Ok(mut guard) = NOTIFICATION_SENDERS.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
+/// Get the notification sender for the current session (from task-local).
+pub fn get_notification_sender() -> Option<NotificationSender> {
+	let session_id = current_session_id()?;
+	let guard = NOTIFICATION_SENDERS.read().ok()?;
+	let registry = guard.as_ref()?;
+	registry.get(&session_id).cloned()
+}
+
+/// Send a notification through the current session's channel.
+pub fn send_notification(msg: crate::websocket::ServerMessage) {
+	if let Some(tx) = get_notification_sender() {
+		let _ = tx.send(msg);
+	}
+}
+/// Register a notification sender for a session (alias for set_notification_sender_for_session).
+pub fn register_notification_sender(session_id: SessionId, tx: NotificationSender) {
+	set_notification_sender_for_session(&session_id, tx);
+}
+
+/// Remove a notification sender when a session ends (alias for clear_notification_sender_for_session).
+pub fn unregister_notification_sender(session_id: SessionId) {
+	clear_notification_sender_for_session(&session_id);
+}
+
+/// Get notification sender by session ID (for use from process.rs).
+pub fn get_notification_sender_by_id(session_id: &SessionId) -> Option<NotificationSender> {
+	let guard = NOTIFICATION_SENDERS.read().ok()?;
+	let registry = guard.as_ref()?;
+	registry.get(session_id).cloned()
+}
+
+// ---------------------------------------------------------------------------
+// Session-keyed working directory
+// ---------------------------------------------------------------------------
+
+/// Registry for session working directories.
+/// Replaces the thread_local WORKDIR in mcp/workdir.rs for async contexts.
+static SESSION_WORKDIRS: RwLock<Option<HashMap<SessionId, (PathBuf, PathBuf)>>> = RwLock::new(None); // (session_anchor, current)
+
+/// Set the session working directory anchor.
+pub fn set_session_workdir(session_id: &SessionId, path: PathBuf) {
+	let mut guard = SESSION_WORKDIRS.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	registry.insert(session_id.clone(), (path.clone(), path));
+}
+
+/// Override the active directory mid-session (workdir tool).
+pub fn set_current_workdir(session_id: &SessionId, path: PathBuf) {
+	if let Ok(mut guard) = SESSION_WORKDIRS.write() {
+		if let Some(registry) = guard.as_mut() {
+			if let Some((session, _)) = registry.get(session_id) {
+				registry.insert(session_id.clone(), (session.clone(), path));
+			}
+		}
+	}
+}
+
+/// Get the current working directory for a session.
+pub fn get_current_workdir(session_id: &SessionId) -> Option<PathBuf> {
+	let guard = SESSION_WORKDIRS.read().ok()?;
+	let registry = guard.as_ref()?;
+	registry.get(session_id).map(|(_, current)| current.clone())
+}
+
+/// Get the session anchor directory (for workdir reset).
+pub fn get_session_workdir_anchor(session_id: &SessionId) -> Option<PathBuf> {
+	let guard = SESSION_WORKDIRS.read().ok()?;
+	let registry = guard.as_ref()?;
+	registry.get(session_id).map(|(session, _)| session.clone())
+}
+
+/// Remove working directory state when a session ends.
+pub fn clear_session_workdir(session_id: &SessionId) {
+	if let Ok(mut guard) = SESSION_WORKDIRS.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session-keyed role storage
+// ---------------------------------------------------------------------------
+
+/// Registry for session roles.
+/// Each session has its own role that can be queried by MCP tools.
+static SESSION_ROLES: RwLock<Option<HashMap<SessionId, String>>> = RwLock::new(None);
+
+/// Registry for session configs.
+/// Each session has its own config for logging macros.
+use crate::config::Config;
+static SESSION_CONFIGS: RwLock<Option<HashMap<SessionId, Config>>> = RwLock::new(None);
+
+/// Set the role for a session.
+pub fn set_session_role(session_id: &SessionId, role: &str) {
+	let mut guard = SESSION_ROLES.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	registry.insert(session_id.clone(), role.to_string());
+}
+
+/// Get the role for a session.
+pub fn get_session_role(session_id: &SessionId) -> Option<String> {
+	let guard = SESSION_ROLES.read().ok()?;
+	let registry = guard.as_ref()?;
+	registry.get(session_id).cloned()
+}
+
+/// Remove role when a session ends.
+pub fn clear_session_role(session_id: &SessionId) {
+	if let Ok(mut guard) = SESSION_ROLES.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
+/// Set the config for a session.
+pub fn set_session_config(session_id: &SessionId, config: &Config) {
+	let mut guard = SESSION_CONFIGS.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	registry.insert(session_id.clone(), config.clone());
+}
+
+/// Get the config for a session.
+pub fn get_session_config(session_id: &SessionId) -> Option<Config> {
+	let guard = SESSION_CONFIGS.read().ok()?;
+	let registry = guard.as_ref()?;
+	registry.get(session_id).cloned()
+}
+
+/// Remove config when a session ends.
+pub fn clear_session_config(session_id: &SessionId) {
+	if let Ok(mut guard) = SESSION_CONFIGS.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session-keyed plan storage
+// ---------------------------------------------------------------------------
+
+use crate::mcp::core::plan::memory_storage::MemoryPlanStorage;
+
+/// Registry for plan storage, keyed by session ID.
+/// Each session has its own plan state.
+static PLAN_REGISTRIES: RwLock<Option<HashMap<SessionId, Arc<Mutex<MemoryPlanStorage>>>>> =
+	RwLock::new(None);
+
+/// Get or create plan storage for a session.
+pub fn get_plan_storage(session_id: &SessionId) -> Arc<Mutex<MemoryPlanStorage>> {
+	{
+		let guard = PLAN_REGISTRIES.read().unwrap();
+		if let Some(registry) = guard.as_ref() {
+			if let Some(storage) = registry.get(session_id) {
+				return storage.clone();
+			}
+		}
+	}
+
+	// Create new storage
+	let mut guard = PLAN_REGISTRIES.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	let storage = Arc::new(Mutex::new(MemoryPlanStorage::new()));
+	registry.insert(session_id.clone(), storage.clone());
+	storage
+}
+
+/// Remove plan storage when a session ends.
+pub fn clear_plan_storage(session_id: &SessionId) {
+	if let Ok(mut guard) = PLAN_REGISTRIES.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session-keyed task start index (for plan compression)
+// ---------------------------------------------------------------------------
+
+/// Registry for task start indices, keyed by session ID.
+static TASK_START_INDICES: RwLock<Option<HashMap<SessionId, usize>>> = RwLock::new(None);
+
+/// Set the task start index for a session.
+pub fn set_task_start_index(session_id: &SessionId, index: usize) {
+	let mut guard = TASK_START_INDICES.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	registry.insert(session_id.clone(), index);
+	crate::log_debug!(
+		"Plan task start index set to: {} for session: {}",
+		index,
+		session_id
+	);
+}
+
+/// Get the task start index for a session.
+pub fn get_task_start_index(session_id: &SessionId) -> Option<usize> {
+	let guard = TASK_START_INDICES.read().ok()?;
+	let registry = guard.as_ref()?;
+	registry.get(session_id).copied()
+}
+
+/// Get and clear the task start index for a session.
+pub fn take_task_start_index(session_id: &SessionId) -> Option<usize> {
+	let mut guard = TASK_START_INDICES.write().ok()?;
+	let registry = guard.as_mut()?;
+	registry.remove(session_id)
+}
+
+/// Clear the task start index for a session.
+pub fn clear_task_start_index(session_id: &SessionId) {
+	if let Ok(mut guard) = TASK_START_INDICES.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session-keyed schedule storage
+// ---------------------------------------------------------------------------
+
+use crate::mcp::core::schedule::storage::ScheduleStore;
+
+/// Registry for schedule storage, keyed by session ID.
+static SCHEDULE_REGISTRIES: RwLock<Option<HashMap<SessionId, Arc<Mutex<ScheduleStore>>>>> =
+	RwLock::new(None);
+
+/// Get or create schedule storage for a session.
+pub fn get_schedule_storage(session_id: &SessionId) -> Arc<Mutex<ScheduleStore>> {
+	{
+		let guard = SCHEDULE_REGISTRIES.read().unwrap();
+		if let Some(registry) = guard.as_ref() {
+			if let Some(storage) = registry.get(session_id) {
+				return storage.clone();
+			}
+		}
+	}
+
+	// Create new storage
+	let mut guard = SCHEDULE_REGISTRIES.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	let storage = Arc::new(Mutex::new(ScheduleStore::new()));
+	registry.insert(session_id.clone(), storage.clone());
+	storage
+}
+
+/// Remove schedule storage when a session ends.
+pub fn clear_schedule_storage(session_id: &SessionId) {
+	if let Ok(mut guard) = SCHEDULE_REGISTRIES.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session-keyed hints accumulator
+// ---------------------------------------------------------------------------
+
+/// Registry for hints accumulator, keyed by session ID.
+static HINTS_REGISTRIES: RwLock<Option<HashMap<SessionId, Vec<String>>>> = RwLock::new(None);
+
+/// Push a hint for the current session.
+pub fn push_hint_for_session(session_id: &SessionId, hint: String) {
+	let mut guard = HINTS_REGISTRIES.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	registry.entry(session_id.clone()).or_default().push(hint);
+}
+
+/// Drain hints for a session, returning deduplicated list.
+pub fn drain_hints_for_session(session_id: &SessionId) -> Vec<String> {
+	let mut guard = HINTS_REGISTRIES.write().unwrap();
+	if let Some(registry) = guard.as_mut() {
+		if let Some(hints) = registry.get_mut(session_id) {
+			let mut seen = std::collections::HashSet::new();
+			return hints.drain(..).filter(|h| seen.insert(h.clone())).collect();
+		}
+	}
+	Vec::new()
+}
+
+/// Check if there are pending hints for a session.
+pub fn has_hints_for_session(session_id: &SessionId) -> bool {
+	let guard = HINTS_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some(hints) = registry.get(session_id) {
+			return !hints.is_empty();
+		}
+	}
+	false
+}
+
+/// Clear hints when a session ends.
+pub fn clear_hints_for_session(session_id: &SessionId) {
+	if let Ok(mut guard) = HINTS_REGISTRIES.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session-keyed dynamic agent manager
+// ---------------------------------------------------------------------------
+
+/// Registry for dynamic agents, keyed by session ID.
+/// Each session has its own set of registered/enabled agents.
+use crate::mcp::core::dynamic_agents::DynamicAgentConfig;
+
+/// Type alias for a session's dynamic agent state (agents map, enabled map).
+type DynamicAgentState = (HashMap<String, DynamicAgentConfig>, HashMap<String, bool>);
+
+static DYNAMIC_AGENT_REGISTRIES: RwLock<Option<HashMap<SessionId, DynamicAgentState>>> =
+	RwLock::new(None);
+
+pub fn register_dynamic_agent_for_session(session_id: &SessionId, agent: DynamicAgentConfig) {
+	let agent_name = agent.name.clone();
+	let mut guard = DYNAMIC_AGENT_REGISTRIES.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	let (agents, enabled) = registry
+		.entry(session_id.clone())
+		.or_insert_with(|| (HashMap::new(), HashMap::new()));
+	agents.insert(agent_name.clone(), agent);
+	enabled.insert(agent_name, false);
+}
+
+/// Enable a dynamic agent for a session.
+pub fn enable_dynamic_agent_for_session(session_id: &SessionId, agent_name: &str) -> bool {
+	let mut guard = DYNAMIC_AGENT_REGISTRIES.write().unwrap();
+	if let Some(registry) = guard.as_mut() {
+		if let Some((agents, enabled)) = registry.get_mut(session_id) {
+			if agents.contains_key(agent_name) {
+				enabled.insert(agent_name.to_string(), true);
+				return true;
+			}
+		}
+	}
+	false
+}
+
+/// Disable a dynamic agent for a session.
+pub fn disable_dynamic_agent_for_session(session_id: &SessionId, agent_name: &str) -> bool {
+	let mut guard = DYNAMIC_AGENT_REGISTRIES.write().unwrap();
+	if let Some(registry) = guard.as_mut() {
+		if let Some((_, enabled)) = registry.get_mut(session_id) {
+			if enabled.contains_key(agent_name) {
+				enabled.insert(agent_name.to_string(), false);
+				return true;
+			}
+		}
+	}
+	false
+}
+
+/// Remove a dynamic agent for a session.
+pub fn remove_dynamic_agent_for_session(
+	session_id: &SessionId,
+	agent_name: &str,
+) -> Option<DynamicAgentConfig> {
+	let mut guard = DYNAMIC_AGENT_REGISTRIES.write().unwrap();
+	if let Some(registry) = guard.as_mut() {
+		if let Some((agents, enabled)) = registry.get_mut(session_id) {
+			enabled.remove(agent_name);
+			return agents.remove(agent_name);
+		}
+	}
+	None
+}
+
+/// Get all dynamic agents for a session.
+pub fn get_dynamic_agents_for_session(
+	session_id: &SessionId,
+) -> Vec<(String, DynamicAgentConfig, bool)> {
+	let guard = DYNAMIC_AGENT_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some((agents, enabled)) = registry.get(session_id) {
+			return agents
+				.iter()
+				.map(|(name, config)| {
+					let is_enabled = *enabled.get(name).unwrap_or(&false);
+					(name.clone(), config.clone(), is_enabled)
+				})
+				.collect();
+		}
+	}
+	Vec::new()
+}
+
+/// Check if a dynamic agent exists for a session.
+pub fn has_dynamic_agent(session_id: &SessionId, agent_name: &str) -> bool {
+	let guard = DYNAMIC_AGENT_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some((agents, _)) = registry.get(session_id) {
+			return agents.contains_key(agent_name);
+		}
+	}
+	false
+}
+
+/// Check if a dynamic agent is enabled for a session.
+pub fn is_dynamic_agent_enabled(session_id: &SessionId, agent_name: &str) -> bool {
+	let guard = DYNAMIC_AGENT_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some((_, enabled)) = registry.get(session_id) {
+			return *enabled.get(agent_name).unwrap_or(&false);
+		}
+	}
+	false
+}
+
+/// Clear all dynamic agents for a session.
+pub fn clear_dynamic_agents_for_session(session_id: &SessionId) {
+	if let Ok(mut guard) = DYNAMIC_AGENT_REGISTRIES.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session-keyed dynamic MCP server manager
+// ---------------------------------------------------------------------------
+
+use crate::config::McpServerConfig;
+use crate::mcp::McpFunction;
+
+/// Type alias for a session's dynamic server state (servers map, functions map, enabled map).
+type DynamicServerState = (
+	HashMap<String, McpServerConfig>,
+	HashMap<String, Vec<McpFunction>>,
+	HashMap<String, bool>,
+);
+
+static DYNAMIC_SERVER_REGISTRIES: RwLock<Option<HashMap<SessionId, DynamicServerState>>> =
+	RwLock::new(None);
+
+pub fn register_dynamic_server_for_session(session_id: &SessionId, server: McpServerConfig) {
+	let server_name = server.name().to_string();
+	let mut guard = DYNAMIC_SERVER_REGISTRIES.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	let (servers, _functions, enabled) = registry
+		.entry(session_id.clone())
+		.or_insert_with(|| (HashMap::new(), HashMap::new(), HashMap::new()));
+	servers.insert(server_name.clone(), server);
+	enabled.insert(server_name, false);
+}
+
+/// Enable a dynamic MCP server for a session (stores functions).
+pub fn enable_dynamic_server_for_session(
+	session_id: &SessionId,
+	server_name: &str,
+	funcs: Vec<McpFunction>,
+) -> bool {
+	let mut guard = DYNAMIC_SERVER_REGISTRIES.write().unwrap();
+	if let Some(registry) = guard.as_mut() {
+		if let Some((servers, functions, enabled)) = registry.get_mut(session_id) {
+			if servers.contains_key(server_name) {
+				functions.insert(server_name.to_string(), funcs);
+				enabled.insert(server_name.to_string(), true);
+				return true;
+			}
+		}
+	}
+	false
+}
+
+/// Disable a dynamic MCP server for a session.
+pub fn disable_dynamic_server_for_session(session_id: &SessionId, server_name: &str) -> bool {
+	let mut guard = DYNAMIC_SERVER_REGISTRIES.write().unwrap();
+	if let Some(registry) = guard.as_mut() {
+		if let Some((_, functions, enabled)) = registry.get_mut(session_id) {
+			if enabled.contains_key(server_name) {
+				enabled.insert(server_name.to_string(), false);
+				functions.remove(server_name);
+				return true;
+			}
+		}
+	}
+	false
+}
+
+/// Remove a dynamic MCP server for a session.
+pub fn remove_dynamic_server_for_session(
+	session_id: &SessionId,
+	server_name: &str,
+) -> Option<McpServerConfig> {
+	let mut guard = DYNAMIC_SERVER_REGISTRIES.write().unwrap();
+	if let Some(registry) = guard.as_mut() {
+		if let Some((servers, functions, enabled)) = registry.get_mut(session_id) {
+			functions.remove(server_name);
+			enabled.remove(server_name);
+			return servers.remove(server_name);
+		}
+	}
+	None
+}
+
+/// Get all dynamic MCP servers for a session.
+pub fn get_dynamic_servers_for_session(session_id: &SessionId) -> Vec<(String, Vec<String>, bool)> {
+	let guard = DYNAMIC_SERVER_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some((servers, _functions, enabled)) = registry.get(session_id) {
+			return servers
+				.iter()
+				.map(|(name, config)| {
+					let tools = config.tools().to_vec();
+					let is_enabled = *enabled.get(name).unwrap_or(&false);
+					(name.clone(), tools, is_enabled)
+				})
+				.collect();
+		}
+	}
+	Vec::new()
+}
+
+/// Get functions for a dynamic MCP server for a session.
+pub fn get_dynamic_server_functions_for_session(
+	session_id: &SessionId,
+	server_name: &str,
+) -> Option<Vec<McpFunction>> {
+	let guard = DYNAMIC_SERVER_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some((_, functions, _)) = registry.get(session_id) {
+			return functions.get(server_name).cloned();
+		}
+	}
+	None
+}
+
+/// Get all enabled dynamic server configs for a session.
+pub fn get_all_dynamic_server_configs_for_session(session_id: &SessionId) -> Vec<McpServerConfig> {
+	let guard = DYNAMIC_SERVER_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some((servers, _, enabled)) = registry.get(session_id) {
+			return servers
+				.iter()
+				.filter(|(name, _)| *enabled.get(*name).unwrap_or(&false))
+				.map(|(_, config)| config.clone())
+				.collect();
+		}
+	}
+	Vec::new()
+}
+
+/// Get all dynamic server functions for a session.
+pub fn get_all_dynamic_server_functions_for_session(session_id: &SessionId) -> Vec<McpFunction> {
+	let guard = DYNAMIC_SERVER_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some((_, functions, enabled)) = registry.get(session_id) {
+			return functions
+				.iter()
+				.filter(|(name, _)| *enabled.get(*name).unwrap_or(&false))
+				.flat_map(|(_, funcs)| funcs.iter().cloned())
+				.collect();
+		}
+	}
+	Vec::new()
+}
+
+/// Check if a server name is dynamically managed for a session.
+pub fn has_dynamic_server(session_id: &SessionId, server_name: &str) -> bool {
+	let guard = DYNAMIC_SERVER_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some((servers, _, _)) = registry.get(session_id) {
+			return servers.contains_key(server_name);
+		}
+	}
+	false
+}
+
+/// Check if a tool belongs to any dynamic server for a session.
+pub fn is_dynamic_server_tool(session_id: &SessionId, tool_name: &str) -> bool {
+	let guard = DYNAMIC_SERVER_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some((_, functions, _)) = registry.get(session_id) {
+			return functions
+				.values()
+				.any(|funcs| funcs.iter().any(|f| f.name == tool_name));
+		}
+	}
+	false
+}
+
+/// Get the dynamic server name for a specific tool for a session.
+pub fn get_dynamic_server_name_by_tool(session_id: &SessionId, tool_name: &str) -> Option<String> {
+	let guard = DYNAMIC_SERVER_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some((_, functions, _)) = registry.get(session_id) {
+			for (server_name, funcs) in functions {
+				if funcs.iter().any(|f| f.name == tool_name) {
+					return Some(server_name.clone());
+				}
+			}
+		}
+	}
+	None
+}
+
+/// Clear all dynamic MCP servers for a session.
+pub fn clear_dynamic_servers_for_session(session_id: &SessionId) {
+	if let Ok(mut guard) = DYNAMIC_SERVER_REGISTRIES.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session-keyed background job manager
+// ---------------------------------------------------------------------------
+
+use crate::session::background_jobs::{BackgroundJobManager, CompletedJob};
+
+/// Registry for session background job managers.
+/// Each session has its own job manager for async agent jobs.
+static JOB_MANAGERS: RwLock<Option<HashMap<SessionId, Arc<BackgroundJobManager>>>> =
+	RwLock::new(None);
+
+/// Initialize a job manager for a session.
+/// Returns the receiver for completed jobs.
+pub fn init_job_manager_for_session(
+	session_id: &SessionId,
+) -> tokio::sync::mpsc::Receiver<CompletedJob> {
+	let max_concurrent = std::thread::available_parallelism()
+		.map(|p| p.get())
+		.unwrap_or(4);
+	let (manager, rx) = BackgroundJobManager::new(max_concurrent);
+	let mut guard = JOB_MANAGERS.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	registry.insert(session_id.clone(), Arc::new(manager));
+	rx
+}
+
+/// Get the job manager for the current session.
+pub fn get_job_manager_for_session() -> Option<Arc<BackgroundJobManager>> {
+	let session_id = current_session_id()?;
+	let guard = JOB_MANAGERS.read().ok()?;
+	let registry = guard.as_ref()?;
+	registry.get(&session_id).cloned()
+}
+
+/// Kill all jobs for a session (called on session exit).
+pub fn kill_all_jobs_for_session(session_id: &SessionId) {
+	if let Ok(mut guard) = JOB_MANAGERS.write() {
+		if let Some(registry) = guard.as_mut() {
+			if let Some(manager) = registry.remove(session_id) {
+				manager.kill_all();
+			}
+		}
+	}
+}
+
+/// Clear job manager for a session (called during cleanup).
+pub fn clear_job_manager_for_session(session_id: &SessionId) {
+	kill_all_jobs_for_session(session_id);
+}
+
+// ---------------------------------------------------------------------------
+// Session cleanup
+// ---------------------------------------------------------------------------
+
+/// Clean up all session-scoped state when a session ends.
+/// Call this when a WebSocket connection closes or a session is destroyed.
+pub fn cleanup_session(session_id: &SessionId) {
+	clear_notification_sender_for_session(session_id);
+	clear_session_workdir(session_id);
+	clear_session_role(session_id);
+	clear_session_config(session_id);
+	clear_plan_storage(session_id);
+	clear_task_start_index(session_id);
+	clear_schedule_storage(session_id);
+	clear_hints_for_session(session_id);
+	clear_dynamic_agents_for_session(session_id);
+	clear_dynamic_servers_for_session(session_id);
+	clear_job_manager_for_session(session_id);
+	crate::log_debug!("Cleaned up session-scoped state for: {}", session_id);
+}

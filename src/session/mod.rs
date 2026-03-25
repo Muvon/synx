@@ -18,6 +18,7 @@ pub mod cache;
 pub mod cancellation; // Cancellation management
 pub mod chat; // Chat session logic
 mod chat_helper; // Chat command completion
+pub mod context; // Session-scoped context for multi-session concurrency
 pub mod helper_functions; // Helper functions for layers and other components
 pub mod history; // Role-based history management
 pub mod image; // Image processing and attachment utilities

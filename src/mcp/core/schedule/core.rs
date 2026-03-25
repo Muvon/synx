@@ -26,8 +26,16 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 static SCHEDULE_STORE: OnceLock<Arc<Mutex<ScheduleStore>>> = OnceLock::new();
 
-fn get_store() -> &'static Arc<Mutex<ScheduleStore>> {
-	SCHEDULE_STORE.get_or_init(|| Arc::new(Mutex::new(ScheduleStore::new())))
+/// Get schedule storage for the current context.
+/// Returns session-scoped storage if in a session, otherwise CLI global.
+fn get_store() -> Arc<Mutex<ScheduleStore>> {
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::get_schedule_storage(&session_id)
+	} else {
+		SCHEDULE_STORE
+			.get_or_init(|| Arc::new(Mutex::new(ScheduleStore::new())))
+			.clone()
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -227,8 +235,9 @@ fn handle_add(call: &McpToolCall) -> Result<McpToolResult> {
 }
 
 fn handle_list(call: &McpToolCall) -> Result<McpToolResult> {
-	let store = get_store().lock().unwrap();
-	let entries = store.entries();
+	let store = get_store();
+	let guard = store.lock().unwrap();
+	let entries = guard.entries();
 
 	if entries.is_empty() {
 		return Ok(McpToolResult::success(
@@ -354,16 +363,17 @@ fn handle_edit(call: &McpToolCall) -> Result<McpToolResult> {
 			"edit requires at least one of: when, message, description".to_string(),
 		));
 	}
-
-	let updated = get_store()
+	let store = get_store();
+	let updated = store
 		.lock()
 		.unwrap()
 		.edit(&id, new_description, new_message, new_when);
 
 	if updated {
 		// Read back the updated entry for confirmation.
-		let store = get_store().lock().unwrap();
-		let entry = store.entries().iter().find(|e| e.id == id);
+		let store = get_store();
+		let guard = store.lock().unwrap();
+		let entry = guard.entries().iter().find(|e| e.id == id);
 		let summary = entry
 			.map(|e| {
 				format!(

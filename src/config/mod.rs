@@ -535,31 +535,69 @@ thread_local! {
 /// Global current role — uses RwLock instead of thread_local! because tokio's
 /// multi-threaded runtime can migrate async tasks between OS threads across .await
 /// points, which would cause thread_local! values to silently disappear.
-/// Safe as a global: one session per process, reads vastly outnumber writes.
+///
+/// For multi-session WebSocket mode, role is stored per-session in session::context.
+/// This global is used as fallback for CLI mode.
 static CURRENT_ROLE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
 /// Set the current config for the thread (to be used by logging macros)
+///
+/// For WebSocket sessions, stores in session-scoped context.
+/// For CLI mode, stores in thread-local storage.
 pub fn set_thread_config(config: &Config) {
+	// Try session-scoped first (WebSocket mode)
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::set_session_config(&session_id, config);
+		return;
+	}
+	// Fall back to thread-local (CLI mode)
 	CURRENT_CONFIG.with(|c| {
 		*c.borrow_mut() = Some(config.clone());
 	});
 }
 
 /// Set the current role (to be used by MCP tools like persist)
+///
+/// For WebSocket sessions, stores in session-scoped context.
+/// For CLI mode, stores in process-global storage.
 pub fn set_thread_role(role: &str) {
+	// Try session-scoped first (WebSocket mode)
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::set_session_role(&session_id, role);
+		return;
+	}
+	// Fall back to process-global (CLI mode)
 	*CURRENT_ROLE.write().unwrap() = Some(role.to_string());
 }
 
 /// Get the current role
+///
+/// For WebSocket sessions, returns from session-scoped context.
+/// For CLI mode, returns from process-global storage.
 pub fn get_thread_role() -> Option<String> {
+	// Try session-scoped first (WebSocket mode)
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::get_session_role(&session_id);
+	}
+	// Fall back to process-global (CLI mode)
 	CURRENT_ROLE.read().unwrap().clone()
 }
 
 /// Get the current config for the thread
+///
+/// For WebSocket sessions, returns from session-scoped context.
+/// For CLI mode, returns from thread-local storage.
 pub fn with_thread_config<F, R>(f: F) -> Option<R>
 where
 	F: FnOnce(&Config) -> R,
 {
+	// Try session-scoped first (WebSocket mode)
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::get_session_config(&session_id)
+			.as_ref()
+			.map(f);
+	}
+	// Fall back to thread-local (CLI mode)
 	CURRENT_CONFIG.with(|c| (*c.borrow()).as_ref().map(f))
 }
 // LOGGING MACROS

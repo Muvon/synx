@@ -19,28 +19,31 @@
 // and injects a single user-role message so the AI sees the guidance without
 // polluting individual tool result strings.
 //
-// Thread-local storage is correct here: each tokio::spawn task gets its own
-// OS thread (or is pinned to one), so hints from concurrent tool calls accumulate
-// independently and are drained by the coordinating task after join_all().
-// The drain happens in the same task that spawned the tool tasks, which runs on
-// the coordinator thread — so we use a Mutex-protected global instead to safely
-// collect across spawn boundaries.
+// Session-scoped: each session has its own hints accumulator, keyed by session ID.
+// The push/drain/has functions check current_session_id() to route to the correct
+// session's accumulator. Falls back to global CLI accumulator when not in a session.
 
 use std::sync::Mutex;
 
 static HINTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Push a hint into the accumulator. Deduplication is applied at drain time.
-/// Only call this when the recommended tool is actually enabled (check before calling).
+/// Routes to session-scoped accumulator if in a session, otherwise global CLI.
 pub fn push_hint(hint: &str) {
-	if let Ok(mut hints) = HINTS.lock() {
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::push_hint_for_session(&session_id, hint.to_string());
+	} else if let Ok(mut hints) = HINTS.lock() {
 		hints.push(hint.to_string());
 	}
 }
 
-/// Drain all accumulated hints, returning deduplicated list in insertion order.
+/// Drain all accumulated hints for the current context, returning deduplicated list.
+/// Routes to session-scoped accumulator if in a session, otherwise global CLI.
 /// Clears the accumulator — ready for the next tool execution round.
 pub fn drain_hints() -> Vec<String> {
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::drain_hints_for_session(&session_id);
+	}
 	let Ok(mut hints) = HINTS.lock() else {
 		return Vec::new();
 	};
@@ -50,6 +53,10 @@ pub fn drain_hints() -> Vec<String> {
 }
 
 /// Returns true if there are any pending hints (without draining).
+/// Routes to session-scoped accumulator if in a session, otherwise global CLI.
 pub fn has_hints() -> bool {
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::has_hints_for_session(&session_id);
+	}
 	HINTS.lock().is_ok_and(|h| !h.is_empty())
 }

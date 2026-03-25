@@ -52,6 +52,9 @@ fn get_manager() -> &'static Arc<RwLock<DynamicManagerState>> {
 ///
 /// Stores the config in the registry with enabled=false.
 /// Use `enable_server` to connect and activate it.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn register_server(server: McpServerConfig) -> Result<()> {
 	let server_name = server.name().to_string();
 
@@ -70,6 +73,13 @@ pub fn register_server(server: McpServerConfig) -> Result<()> {
 		_ => {}
 	}
 
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		crate::session::context::register_dynamic_server_for_session(&session_id, server);
+		return Ok(());
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_manager();
 	let mut state = manager.write().unwrap();
 	if state.servers.contains_key(&server_name) {
@@ -87,18 +97,33 @@ pub fn register_server(server: McpServerConfig) -> Result<()> {
 ///
 /// Returns the list of activated functions.
 /// Also registers the tools in the global tool map.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub async fn enable_server(
 	name: &str,
 	filter_tools: Option<Vec<String>>,
 ) -> Result<Vec<McpFunction>> {
-	let server =
-		{
-			let manager = get_manager();
-			let state = manager.read().unwrap();
-			state.servers.get(name).cloned().ok_or_else(|| {
-				anyhow::anyhow!("Server '{}' not registered. Use 'add' first.", name)
-			})?
-		};
+	// Check if we're in a session context
+	let session_id = crate::session::context::current_session_id();
+
+	// Get the server config (from session or global)
+	let server = if let Some(ref sid) = session_id {
+		// Get from session registry
+		crate::session::context::get_all_dynamic_server_configs_for_session(sid)
+			.into_iter()
+			.find(|c| c.name() == name)
+			.ok_or_else(|| anyhow::anyhow!("Server '{}' not registered. Use 'add' first.", name))?
+	} else {
+		// Fall back to global singleton for CLI mode
+		let manager = get_manager();
+		let state = manager.read().unwrap();
+		state
+			.servers
+			.get(name)
+			.cloned()
+			.ok_or_else(|| anyhow::anyhow!("Server '{}' not registered. Use 'add' first.", name))?
+	};
 
 	let functions = crate::mcp::server::get_server_functions(&server)
 		.await
@@ -123,11 +148,16 @@ pub async fn enable_server(
 
 	let tool_names: Vec<String> = functions.iter().map(|f| f.name.clone()).collect();
 
-	let manager = get_manager();
-	let mut state = manager.write().unwrap();
-	state.functions.insert(name.to_string(), functions.clone());
-	state.enabled.insert(name.to_string(), true);
-	drop(state); // Release lock before calling tool_map
+	// Update the registry (session or global)
+	if let Some(ref sid) = session_id {
+		crate::session::context::enable_dynamic_server_for_session(sid, name, functions.clone());
+	} else {
+		// Fall back to global singleton for CLI mode
+		let manager = get_manager();
+		let mut state = manager.write().unwrap();
+		state.functions.insert(name.to_string(), functions.clone());
+		state.enabled.insert(name.to_string(), true);
+	}
 
 	// Register tools in the global tool map
 	crate::mcp::tool_map::register_dynamic_server_tools(name, &server, &tool_names);
@@ -139,7 +169,29 @@ pub async fn enable_server(
 ///
 /// The server config stays registered; use `enable_server` to re-activate.
 /// Also unregisters the tools from the global tool map.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn disable_server(name: &str) -> Result<()> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		if crate::session::context::disable_dynamic_server_for_session(&session_id, name) {
+			// Get tool names before they're removed
+			let tool_names: Vec<String> =
+				crate::session::context::get_dynamic_server_functions_for_session(
+					&session_id,
+					name,
+				)
+				.map(|funcs| funcs.iter().map(|f| f.name.clone()).collect())
+				.unwrap_or_default();
+			// Unregister the tools from the global tool map
+			crate::mcp::tool_map::unregister_dynamic_server_tools(name, &tool_names);
+			return Ok(());
+		}
+		anyhow::bail!("Server '{}' not found", name);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_manager();
 	let mut state = manager.write().unwrap();
 	if !state.servers.contains_key(name) {
@@ -162,7 +214,26 @@ pub fn disable_server(name: &str) -> Result<()> {
 ///
 /// Returns the removed server config if it existed, or None if not found.
 /// Also unregisters the tools from the global tool map.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn remove_server(name: &str) -> Option<McpServerConfig> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		// Get tool names before they're removed
+		let tool_names: Vec<String> =
+			crate::session::context::get_dynamic_server_functions_for_session(&session_id, name)
+				.map(|funcs| funcs.iter().map(|f| f.name.clone()).collect())
+				.unwrap_or_default();
+		let removed = crate::session::context::remove_dynamic_server_for_session(&session_id, name);
+		if removed.is_some() {
+			// Unregister tools from the global tool map
+			crate::mcp::tool_map::unregister_dynamic_server_tools(name, &tool_names);
+		}
+		return removed;
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_manager();
 	let mut state = manager.write().unwrap();
 	let tool_names: Vec<String> = state
@@ -183,7 +254,16 @@ pub fn remove_server(name: &str) -> Option<McpServerConfig> {
 }
 
 /// List all registered dynamic servers with their tool filter and enabled status.
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn list_servers() -> Vec<(String, Vec<String>, bool)> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::get_dynamic_servers_for_session(&session_id);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_manager();
 	let state = manager.read().unwrap();
 	state
@@ -198,14 +278,35 @@ pub fn list_servers() -> Vec<(String, Vec<String>, bool)> {
 }
 
 /// Get functions for a specific dynamic server
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn get_functions(name: &str) -> Option<Vec<McpFunction>> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::get_dynamic_server_functions_for_session(
+			&session_id,
+			name,
+		);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_manager();
 	let state = manager.read().unwrap();
 	state.functions.get(name).cloned()
 }
 
 /// Get all enabled dynamic server configs (for tool map building).
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn get_all_configs() -> Vec<McpServerConfig> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::get_all_dynamic_server_configs_for_session(&session_id);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_manager();
 	let state = manager.read().unwrap();
 	state
@@ -217,21 +318,48 @@ pub fn get_all_configs() -> Vec<McpServerConfig> {
 }
 
 /// Get all dynamic server functions (for tool map building)
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn get_all_functions() -> Vec<McpFunction> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::get_all_dynamic_server_functions_for_session(&session_id);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_manager();
 	let state = manager.read().unwrap();
 	state.functions.values().flatten().cloned().collect()
 }
 
 /// Check if a server name is dynamically managed
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn is_dynamic(name: &str) -> bool {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::has_dynamic_server(&session_id, name);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_manager();
 	let state = manager.read().unwrap();
 	state.servers.contains_key(name)
 }
 
 /// Check if a tool belongs to any dynamic server (by tool name)
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn is_dynamic_by_tool(tool_name: &str) -> bool {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::is_dynamic_server_tool(&session_id, tool_name);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_manager();
 	let state = manager.read().unwrap();
 	state
@@ -241,7 +369,16 @@ pub fn is_dynamic_by_tool(tool_name: &str) -> bool {
 }
 
 /// Get the dynamic server name for a specific tool (by tool name)
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn get_dynamic_server_name_by_tool(tool_name: &str) -> Option<String> {
+	// Check if we're in a session context
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		return crate::session::context::get_dynamic_server_name_by_tool(&session_id, tool_name);
+	}
+
+	// Fall back to global singleton for CLI mode
 	let manager = get_manager();
 	let state = manager.read().unwrap();
 	for (server_name, funcs) in &state.functions {
