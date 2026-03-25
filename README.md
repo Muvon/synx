@@ -5,14 +5,14 @@
 > **Plug and play AI agents for any domain.**
 > Community-built specialists that self-configure, self-extend, and just work — no setup, no code, no vendor lock-in.
 
-## The Problem Every Developer Knows
+## The Problem
 
 You want an AI that actually knows your domain. Instead you get:
 
 - **45 minutes of setup** — MCP servers, system prompts, tool configs, wiring everything together
 - **Rate limit walls mid-task** — Claude Code throttles you, Cursor burns your budget, you lose the thread
 - **Context rot** — session fills up, agent forgets decisions from an hour ago, you restart from zero
-- **One-size-fits-all** — the same generic assistant whether you're debugging Rust or interpreting a blood test
+- **One-size-fits-all** — the same generic assistant whether you're debugging Rust, interpreting a blood test, or reviewing a contract
 
 Every AI tool in 2026 is a coding assistant that lets you swap models. **That's it.**
 
@@ -32,6 +32,8 @@ octomind run developer:rust       # Senior Rust dev, full toolchain pre-wired
 octomind run doctor:blood         # Medical lab analyst, reads your actual results
 octomind run devops:kubernetes    # K8s operator with kubectl + helm ready
 octomind run security:pentest     # Security specialist, offensive tooling attached
+octomind run legal:contracts      # Contract reviewer, jurisdiction-aware
+octomind run finance:analyst      # Financial analyst, wired to your data sources
 ```
 
 What happens when you run `octomind run doctor:blood`:
@@ -46,6 +48,21 @@ What happens when you run `octomind run doctor:blood`:
 ```
 
 This isn't a prompt or a skill. It's **packaged expertise** — ready to run.
+
+---
+
+## Quick Start
+
+```bash
+# Install (macOS & Linux)
+curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
+
+# One API key gets you all providers (or use any directly)
+export OPENROUTER_API_KEY="your_key"
+
+# Start with a specialist agent — no setup required
+octomind run developer:rust
+```
 
 ---
 
@@ -188,8 +205,6 @@ Real-time cost tracking per session and per request. Know exactly what you're sp
 
 ## Works Everywhere — Plug Into Anything
 
-## Works Everywhere — Plug Into Anything
-
 Octomind isn't just an interactive terminal tool. It runs in every context you need:
 
 ```bash
@@ -214,27 +229,13 @@ octomind acp developer:rust
 
 | Mode | Use For |
 |------|---------|
-| Interactive CLI | Daily development work |
+| Interactive CLI | Daily work, any domain |
 | `--format jsonl` pipe | CI/CD pipelines, shell scripts, automation |
 | `--daemon` + `send` | Background agents, continuous monitoring, long-running tasks |
 | WebSocket server | IDE plugins, web dashboards, external integrations |
 | ACP protocol | Multi-agent orchestration, being called by other agents |
 
 One binary. Every workflow.
----
-
-## Quick Start
-
-```bash
-# Install (macOS & Linux)
-curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
-
-# One API key gets you all providers (or use any directly)
-export OPENROUTER_API_KEY="your_key"
-
-# Start with a specialist agent — no setup required
-octomind run developer:rust
-```
 
 ---
 
@@ -242,11 +243,11 @@ octomind run developer:rust
 
 | Category | Tools |
 |----------|-------|
-| **Code search** | `ast_grep` — structural AST search/replace (not regex), `view` — smart reader with content search |
-| **Editing** | `text_editor`, `batch_edit` (atomic multi-line edits with diff), `extract_lines` |
-| **Execution** | `shell` (full command execution), `workdir` |
+| **Search** | `ast_grep` — structural code search (not regex), `view` — smart file/dir reader |
+| **Editing** | `text_editor`, `batch_edit` — atomic multi-file edits with rollback |
+| **Execution** | `shell` — full command execution with output capture |
 | **Planning** | `plan` — structured multi-step task tracking |
-| **Self-extension** | `mcp` — spawn/enable/disable MCP servers at runtime, `agent` — create sub-agents on demand |
+| **Self-extension** | `mcp` — enable/disable MCP servers at runtime, `agent` — spawn sub-agents on demand |
 
 ---
 
@@ -281,7 +282,9 @@ cd octomind && cargo build --release
 
 The most impactful contribution isn't code — **it's agents.**
 
-Every domain expert who publishes a specialist makes Octomind more useful for everyone. `accountant:tax`, `devops:terraform`, `designer:ux-review`, `scientist:genomics` — the registry grows one TOML file at a time.
+Every domain expert who publishes a specialist makes Octomind useful for an entirely new audience. A cardiologist publishing `doctor:ecg`. A tax attorney publishing `lawyer:tax`. A genomics researcher publishing `scientist:genomics`. One TOML file — and everyone with that problem gets a specialist-grade AI instantly.
+
+`accountant:tax`, `devops:terraform`, `designer:ux-review`, `scientist:genomics` — the registry grows one file at a time.
 
 [How to write a tap agent →](doc/tap-guide.md) | [Open issues →](https://github.com/muvon/octomind/issues)
 
