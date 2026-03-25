@@ -133,6 +133,20 @@ pub async fn process_tool_results(
 		}
 	}
 
+	// 📚 SKILL INJECTION: Inject pending skill content as a normal user message
+	// skill(use) queues content here so it appears in the conversation as a real message
+	// that the AI will see and follow in the next turn.
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		let pending = crate::session::context::take_pending_skill_injections(&session_id);
+		for (skill_name, skill_content) in pending {
+			if let Err(e) = chat_session.add_user_message(&skill_content) {
+				log_debug!("Failed to inject skill '{}': {}", skill_name, e);
+			} else {
+				log_debug!("Injected skill '{}' as user message", skill_name);
+			}
+		}
+	}
+
 	// 🗜️ PLAN-DRIVEN COMPRESSION: Process any pending compression requests
 	// This happens after tool results are added but before the follow-up API call
 	// Compression can significantly reduce context before the next request
