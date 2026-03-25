@@ -297,7 +297,6 @@ pub async fn process_command(
 		}
 		TRUNCATE_COMMAND => truncate::handle_truncate(session, config, &current_role).await,
 		SUMMARIZE_COMMAND => summarize::handle_summarize(session, config).await,
-		CACHE_COMMAND => info::handle_info(session, config),
 		LIST_COMMAND => list::handle_list(session, config, params),
 		MODEL_COMMAND => model::handle_model(session, config, params),
 		SESSION_COMMAND => session::handle_session(session, params),

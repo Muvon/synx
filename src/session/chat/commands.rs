@@ -22,7 +22,6 @@ pub const QUIT_COMMAND: &str = "/quit";
 pub const COPY_COMMAND: &str = "/copy";
 pub const CLEAR_COMMAND: &str = "/clear";
 pub const SAVE_COMMAND: &str = "/save";
-pub const CACHE_COMMAND: &str = "/cache";
 pub const LIST_COMMAND: &str = "/list";
 pub const SESSION_COMMAND: &str = "/session";
 pub const INFO_COMMAND: &str = "/info";
