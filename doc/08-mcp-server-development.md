@@ -9,9 +9,11 @@ This guide explains how to add new built-in MCP servers to Octomind. Use this wh
 Octomind provides **two** built-in MCP servers with core functionality:
 
 **Core Server** (`src/mcp/core/`):
-- `plan(command=\"start|step|next|list|done|reset\", ...)` - Structured task management with progress tracking
-- `mcp(action=\"list|add|enable|disable|remove\", ...)` - Dynamic MCP server management
-- `agent(action=\"list|add|enable|disable|remove\", ...)` - Dynamic agent tool management
+- `plan(command="start|step|next|list|done|reset", ...)` - Structured task management with progress tracking
+- `mcp(action="list|add|enable|disable|remove", ...)` - Dynamic MCP server management
+- `agent(action="list|add|enable|disable|remove", ...)` - Dynamic agent tool management
+- `schedule(...)` - Schedule messages for future injection
+- `skill(action="list|use|forget", ...)` - Manage skills from taps
 
 **Agent Server** (`src/mcp/agent/`):
 - `agent_*()` tools - Delegate tasks to configured ACP sub-agents (each spawns an ACP subprocess or executes in-process for dynamic agents)

@@ -27,7 +27,7 @@ graph TB
     C --> H[Assistant Role<br/>Chat Only]
     C --> I[Custom Roles<br/>Configurable]
 
-    D --> J[Core Server<br/>plan, mcp, agent]
+    D --> J[Core Server<br/>plan, mcp, agent<br/>schedule, skill]
     D --> K[External Servers<br/>octofs, custom MCP]
     D --> L[Agent Server<br/>agent_* tools]
 
@@ -62,6 +62,7 @@ graph TB
 - `mcp(action="list|add|enable|disable|remove", ...)` - Dynamic MCP server management
 - `agent(action="list|add|enable|disable|remove", ...)` - Dynamic agent tool management
 - `schedule(...)` - Schedule messages for future injection
+- `skill(action="list|use|forget", ...)` - Manage skills from taps
 
 **External Filesystem Server** (octofs stdio):
 Filesystem tools are provided by the external `octofs` MCP server, which must be configured in your MCP servers list:

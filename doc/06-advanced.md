@@ -28,6 +28,8 @@ Octomind provides two built-in MCP servers with core functionality:
 - `plan(command="start|step|next|list|done|reset", ...)` - Structured task management with progress tracking
 - `mcp(action="list|add|enable|disable|remove", ...)` - Dynamic MCP server management
 - `agent(action="list|add|enable|disable|remove", ...)` - Dynamic agent tool management
+- `schedule(command="add|list|remove|edit", ...)` - Schedule messages for future injection
+- `skill(action="list|use|forget", ...)` - Manage skills from taps (discover, inject, remove)
 
 **External Filesystem Server** (octofs stdio):
 Filesystem tools are provided by the external `octofs` MCP server:
@@ -174,6 +176,27 @@ The `schedule` tool allows you to schedule messages to be automatically injected
 {"command": "remove", "id": "entry-123"}
 {"command": "edit", "id": "entry-123", "when": "in 1h"}
 ```
+
+### skill — Skill Management from Taps
+
+The `skill` tool manages skills from taps. Skills are reusable instruction packs that inject domain knowledge into context.
+
+**Actions:**
+- **`list`**: Discover available skills across all taps. Supports optional `pattern` (substring filter), `offset`, and `limit` (default 20)
+- **`use`**: Inject a skill's full content into the current session context. The skill instructions become immediately active
+- **`forget`**: Remove a skill from context. Triggers conversation compression to clean up the injected content
+
+**Parameters:**
+- `action` (string, required): Action to perform (`list`, `use`, `forget`)
+- `name` (string, optional): Skill name (required for `use` and `forget` actions)
+- `pattern` (string, optional): Substring filter for skill name/description (for `list` action)
+- `offset` (integer, optional): Pagination offset for `list` action (default: 0)
+- `limit` (integer, optional): Maximum results for `list` action (default: 20)
+
+**Workflow:**
+1. `skill(action="list")` to explore available skills
+2. `skill(action="use", name="skill-name")` to activate a skill
+3. `skill(action="forget", name="skill-name")` when the skill is no longer needed
 
 **Adding a Tool/Server:**
 - Add your tool/server in config and code (see [08-mcp-server-development.md](./08-mcp-server-development.md))

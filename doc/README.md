@@ -26,7 +26,7 @@ Welcome to the comprehensive Octomind documentation. This manual provides detail
 - **Persistent Context**: Smart context management with automatic compression when limits reached
 - **Role-Based Access**: Developer (full tools), Assistant (chat-only), and custom role configurations
 ### Built-in MCP Tools
-- **Core Server**: `plan()`, `mcp()`, `agent()` - Structured task management, dynamic server and agent management
+- **Core Server**: `plan()`, `mcp()`, `agent()`, `schedule()`, `skill()` - Structured task management, dynamic server and agent management, scheduled messages, skill management
 - **Filesystem Server**: `view()`, `text_editor()`, `batch_edit()`, `extract_lines()`, `shell()`, `workdir()`, `ast_grep()` - File operations, command execution, and code analysis
 - **Agent Server**: `agent_*()` - Specialized AI task routing (delegates to configured ACP sub-agents or in-process dynamic agents)
 
@@ -135,7 +135,7 @@ Everything happens within interactive AI conversations. No separate indexing, co
 
 #### **MCP Tool Integration**
 Built-in servers provide development tools:
-- **Core**: `plan()`, `mcp()`, `agent()` - Structured task management, dynamic server and agent management
+- **Core**: `plan()`, `mcp()`, `agent()`, `schedule()`, `skill()` - Structured task management, dynamic server and agent management, scheduled messages, skill management
 - **Filesystem**: `view()`, `text_editor()`, `batch_edit()`, `extract_lines()`, `shell()`, `workdir()`, `ast_grep()` - File operations, command execution, and code analysis
 - **Agent**: `agent_*()` - Specialized AI task routing
 
