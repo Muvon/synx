@@ -56,7 +56,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	// Initialize session-scoped inbox and background job manager now that session ID is set
 	crate::session::inbox::init_inbox_for_session();
 	crate::mcp::agent::functions::init_job_manager();
-	// Start inject listener so `octomind inject` can push messages into this session
+	// Start inject listener so `octomind send` can push messages into this session
 	let _inject_listener = crate::session::inject_listener::start_inject_listener(&chat_session.session.info.name);
 	// Get current directory for file operations - use thread-local if set (ACP/WebSocket), otherwise process cwd
 	let current_dir = crate::mcp::get_thread_working_directory();
@@ -830,7 +830,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	// Initialize session-scoped inbox and background job manager now that session ID is set
 	crate::session::inbox::init_inbox_for_session();
 	crate::mcp::agent::functions::init_job_manager();
-	// Start inject listener so `octomind inject` can push messages into this session
+	// Start inject listener so `octomind send` can push messages into this session
 	let _inject_listener = crate::session::inject_listener::start_inject_listener(&chat_session.session.info.name);
 	// Parse daemon flag from args debug string
 	let daemon = format!("{:?}", args).contains("daemon: true");

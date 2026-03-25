@@ -57,7 +57,12 @@ pub struct RunArgs {
 	pub sandbox: bool,
 }
 pub async fn execute(args: &RunArgs, config: &Config) -> Result<()> {
-	// Daemon mode forces non-interactive (no TTY needed — waits for injected messages).
+	// Daemon mode requires non-interactive (piped stdin or --format).
+	if args.daemon && args.format.is_none() && std::io::stdin().is_terminal() {
+		anyhow::bail!("--daemon requires non-interactive mode (piped stdin or --format)");
+	}
+
+	// Daemon mode forces non-interactive (no TTY needed — waits for send commands).
 	let is_interactive = !args.daemon && args.format.is_none() && std::io::stdin().is_terminal();
 
 	// Full startup: tap/dep resolution + MCP init under one spinner

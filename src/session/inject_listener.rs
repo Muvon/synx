@@ -17,7 +17,7 @@
 //! Each running session binds a UDS at `~/.local/share/octomind/run/<name>.sock`
 //! and writes its PID to `~/.local/share/octomind/run/<name>.pid`.
 //!
-//! The `octomind inject` command connects to this socket, sends a UTF-8 message,
+//! The `octomind send` command connects to this socket, sends a UTF-8 message,
 //! shuts down the write half, and reads back `"ok\n"` or `"error: ...\n"`.
 
 use std::path::PathBuf;

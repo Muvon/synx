@@ -45,7 +45,7 @@ pub struct GenericSessionArgs {
 	pub max_retries: Option<u32>,
 	pub mode: String,
 	/// When true, the non-interactive session loop never exits on its own —
-	/// it waits indefinitely for injected messages (via `octomind inject`).
+	/// it waits indefinitely for messages (via `octomind send`).
 	pub daemon: bool,
 }
 

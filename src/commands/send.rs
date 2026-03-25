@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `octomind inject` — send a message to a running session via its Unix Domain Socket.
+//! `octomind send` — send a message to a running session via its Unix Domain Socket.
 
 use anyhow::{bail, Context, Result};
 use clap::Args;
@@ -21,47 +21,38 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 #[derive(Args, Debug)]
-pub struct InjectArgs {
-	/// Name of the running session to inject into.
-	#[arg(value_name = "SESSION")]
-	pub session: String,
-
-	/// Message to inject. If omitted, reads from stdin.
-	#[arg(value_name = "MESSAGE")]
-	pub message: Option<String>,
+pub struct SendArgs {
+	/// Name of the running session to send to.
+	#[arg(long, short = 'n', value_name = "NAME")]
+	pub name: String,
 }
 
-pub async fn execute(args: &InjectArgs) -> Result<()> {
-	let message = match &args.message {
-		Some(m) => m.clone(),
-		None => {
-			let mut buf = String::new();
-			io::stdin()
-				.read_to_string(&mut buf)
-				.context("failed to read message from stdin")?;
-			buf.trim().to_string()
-		}
-	};
+pub async fn execute(args: &SendArgs) -> Result<()> {
+	let mut buf = String::new();
+	io::stdin()
+		.read_to_string(&mut buf)
+		.context("failed to read message from stdin")?;
+	let message = buf.trim().to_string();
 
 	if message.is_empty() {
-		bail!("message must not be empty");
+		bail!("message must not be empty (read from stdin)");
 	}
 
 	let sock_path = octomind::directories::get_run_dir()
 		.context("failed to resolve run directory")?
-		.join(format!("{}.sock", args.session));
+		.join(format!("{}.sock", args.name));
 
 	if !sock_path.exists() {
 		bail!(
 			"no running session named '{}' (socket not found at {:?})",
-			args.session,
+			args.name,
 			sock_path
 		);
 	}
 
 	let mut stream = UnixStream::connect(&sock_path)
 		.await
-		.with_context(|| format!("failed to connect to session '{}'", args.session))?;
+		.with_context(|| format!("failed to connect to session '{}'", args.name))?;
 
 	// Send message then shut down write half so the session knows we're done.
 	stream
@@ -82,7 +73,7 @@ pub async fn execute(args: &InjectArgs) -> Result<()> {
 
 	let response = response.trim();
 	if response == "ok" {
-		println!("Injected into session '{}'.", args.session);
+		println!("Sent to session '{}'.", args.name);
 		Ok(())
 	} else {
 		bail!("session returned: {}", response);

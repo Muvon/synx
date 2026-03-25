@@ -15,8 +15,8 @@
 pub mod acp;
 pub mod common;
 pub mod config;
-pub mod inject;
 pub mod run;
+pub mod send;
 pub mod server;
 pub mod tap;
 pub mod untap;
@@ -24,8 +24,8 @@ pub mod vars;
 
 pub use acp::AcpArgs;
 pub use config::ConfigArgs;
-pub use inject::InjectArgs;
 pub use run::RunArgs;
+pub use send::SendArgs;
 pub use server::ServerArgs;
 pub use tap::TapArgs;
 pub use untap::UntapArgs;
