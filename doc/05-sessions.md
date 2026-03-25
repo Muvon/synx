@@ -21,11 +21,6 @@
 | **Inheritance** | Inherits from global config | Base for custom roles | Inherits from assistant |
 
 ## Developer Role
-
-Developer role is the default and provides comprehensive development assistance.
-
-### Starting Developer Role
-
 ```bash
 # Default role (developer)
 octomind run
@@ -395,55 +390,41 @@ octomind run developer -n analysis
 
 ### Session Commands
 
-## Session Commands
+Octomind provides 25 built-in commands for session management:
 
-Octomind provides comprehensive session management through built-in commands:
+### Session Management
+- `/help` - Show all available commands (also `/help`)
+- `/exit` - Exit current session (also `/quit`)
+- `/list` - List saved sessions
+- `/session [name]` - Switch to another session
+- `/save [name]` - Save current session
+- `/clear` - Clear terminal screen
 
-### Core Session Commands
-- `/help` - Show all available commands
+### Information & Monitoring
 - `/info` - Display token usage and costs
 - `/report` - Generate detailed usage report with cost breakdown
-- `/context [filter]` - Display session context (all, assistant, user, tool, large)
 - `/model [model]` - View or change current AI model
 - `/role [role]` - View or switch session role
-- `/mcp [command]` - Manage MCP servers and tools
-- `/plan` - View current task plan
-- `/list` - List saved sessions
-- `/save [name]` - Save current session
-- `/done` - Complete task and clean up
-- `/clear` - Clear terminal screen
-- `/loglevel [level]` - Change system log level
+- `/loglevel [level]` - Change system log level (debug, info, none)
+
+### Context Management
+- `/context [filter]` - Display session context (all, assistant, user, tool, large)
+- `/cache` - Mark cache checkpoint for cost savings
 - `/summarize` - Generate conversation summary
 - `/truncate` - Truncate conversation history
-- `/cache` - Manage context caching
-- `/run <layer>` - Run a specific command layer
-- `/workflow <name>` - Execute a workflow
-- `/prompt <name>` - Use a prompt template
+- `/done` - Complete task and clean up (finalize with memorization and auto-commit)
 
-### File and Image Operations
+### File & Media Operations
 - `/image <path>` - Attach image to next message (PNG, JPEG, GIF, WebP, BMP)
 - `/video <path>` - Attach video to next message (MP4, MOV, AVI, WebM, MKV)
-- `/save` - Save current session
-- `/clear` - Clear terminal screen
 - `/copy` - Copy last assistant response to clipboard
-### Context and Memory Management
-- `/cache` - Mark cache checkpoint for cost savings
-- `/summarize` - Generate session summary
-- `/truncate` - Manually truncate session context
-- `/done` - Finalize task with memorization and auto-commit
 
-### Layer and Tool Management
-- `/workflow [name]` - Execute workflows (list available with `/workflow`)
-- `/run <command>` - Execute configured custom commands
-- `/mcp [info|list|full|health|dump|validate]` - MCP server management
+### MCP, Workflows & Planning
+- `/mcp [command]` - Manage MCP servers and tools (info, list, full, health, dump, validate)
+- `/run <layer>` - Run a specific command layer
+- `/workflow [name]` - Execute workflows (list available with `/workflow` alone)
 - `/prompt <text>` - Add a system prompt to current session
-- `/plan` - Show current plan status (uses plan tool)
-
-### System and Session Management
-- `/loglevel [debug|info|none]` - Set log level
-- `/list` - List all sessions
-- `/session [name]` - Switch to another session
-- `/exit` - Exit current session
+- `/plan` - View or manage the current task plan
 
 **Context Management Strategy:**
 - Use `/done` when task is complete (preserves full context with current model + auto-commit)

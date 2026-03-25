@@ -69,7 +69,7 @@ wget https://github.com/muvon/octomind/releases/latest/download/octomind-x86_64-
 
 ### Cargo (Rust Package Manager)
 ```bash
-# Install from crates.io (when published)
+# Install from crates.io
 cargo install octomind
 
 # Install from Git repository

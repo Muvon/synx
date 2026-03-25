@@ -21,9 +21,6 @@ Octomind supports seven AI providers:
 - **Google Vertex AI**: Gemini models via Google Cloud
 - **Amazon Bedrock**: Claude and other models via AWS
 - **Cloudflare Workers AI**: Edge AI inference
-- **DeepSeek**: Cost-effective models
-
-## Supported Providers
 
 ### OpenRouter (Recommended)
 **Access to multiple AI models through a single API**
@@ -360,7 +357,13 @@ Octomind uses a unified token counting system that provides accurate estimates m
 - Includes inter-message overhead
 - Used for conversation history estimation
 
-**`estimate_full_context_tokens(messages: &[Message], config: &Config)`**
+```rust
+estimate_full_context_tokens(
+    messages: &[Message],
+    tools: Option<&[McpFunction]>,
+) -> usize
+```
+
 - Calculates total tokens for an API request
 - Includes system prompt, tool definitions, and conversation history
 - Used for compression triggers and cost estimation
@@ -370,6 +373,7 @@ Octomind uses a unified token counting system that provides accurate estimates m
   - Tool definitions (MCP tools)
   - Safety margin for response generation
 - This is the "single source of truth" used by compression and display
+
 ```
 Full Context = Messages + System Prompt + Tool Definitions + Safety Margin
 

@@ -292,7 +292,6 @@ Get or set the working directory for file and shell operations:
 - `json_output` (boolean, default: false): Get output in JSON format
 - `context` (integer, default: 0): Number of lines of context to show around matches
 - `update_all` (boolean, default: false): Apply rewrites to all matches without confirmation
-- `update_all` (boolean, default: false): Apply rewrites to all matches without confirmation
 
 
 #### Filesystem Tools (type: "builtin")

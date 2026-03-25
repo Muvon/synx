@@ -16,7 +16,7 @@ octomind server
 octomind server --host 0.0.0.0 --port 3000
 
 # Use assistant role (chat-only, no tools)
-octomind server --role assistant
+octomind server --tag assistant
 ```
 
 ### Connect with a Client
@@ -93,7 +93,7 @@ Every message **must** include a `type` field.
 - Server responds with `status` (or `status` + `meta` for structured output)
 
 **Available commands** (same as CLI `/commands`):
-`help`, `info`, `model`, `role`, `mcp`, `context`, `truncate`, `clear`, `loglevel`, `workflow`, `run`, `prompt`, `save`, `done`, `report`, `summarize`, `plan`, `list`
+`help`, `/?`, `exit`, `quit`, `copy`, `clear`, `save`, `list`, `session`, `info`, `done`, `loglevel`, `truncate`, `summarize`, `model`, `run`, `mcp`, `report`, `image`, `video`, `context`, `role`, `prompt`, `plan`, `workflow`
 
 
 **Fields summary:**

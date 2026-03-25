@@ -16,7 +16,7 @@ CLI / WebSocket
       │
       └── MCP servers ← src/mcp/
             ├── core/     plan, mcp, agent, schedule, skill
-            ├── fs/       view, text_editor, batch_edit, extract_lines, shell, workdir, ast_grep
+            ├── (filesystem tools provided by external octofs MCP server)
             └── agent/    agent_* tools → route tasks to configured layers
 ```
 
@@ -92,7 +92,7 @@ let hint = if crate::mcp::tool_map::get_server_for_tool("better_tool").is_some()
     "\n\n⚠️ Prefer `better_tool` here — reason."
 } else { "" };
 ```
-Reference: `src/mcp/fs/shell.rs` (`SHELL_MISUSE_HINTS`), `src/mcp/fs/text_editing.rs` (str_replace → line_replace hint).
+Reference: `src/mcp/core/schedule.rs` (schedule misuse hints), `src/mcp/hint_accumulator.rs` for pattern.
 
 ## Adding a New MCP Tool
 

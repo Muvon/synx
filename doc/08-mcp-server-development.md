@@ -142,49 +142,21 @@ let hint = if crate::mcp::tool_map::get_server_for_tool("better_tool").is_some()
 
 ## Step-by-Step Implementation
 
+### Overview
+
+Adding a new built-in MCP server requires:
+
 1. Create server module structure (`src/mcp/<server_name>/`)
-2. Add your server type to the `McpServerType` enum in `src/config/mcp.rs`
-3. Update server config helpers in the same file
-4. Register tool routing and error handling in `src/mcp/mod.rs` (never return Err, always MCP error)
+2. Create `get_all_functions()` in the module that returns a `Vec<McpFunction>`
+3. Register server discovery in `src/mcp/mod.rs` → `server_functions_for()` function
+4. Register tool execution in `src/mcp/mod.rs` → `try_execute_tool_call()` function
 5. Add config-driven registration and allowed_tools patterns
 6. Validate parameters using MCP-compliant patterns
 7. Never add fallback or default tool logic for missing config
-8. Add misuse hints if a more specific tool should be preferred (see above)
-9. See [src/mcp/*/functions.rs] for examples
+8. Add misuse hints if a more specific tool should be preferred
+9. See [src/mcp/core/functions.rs] for examples
 
-### 2. Update Server Config Helper Methods
-
-**File: `src/config/mcp.rs`**
-
-Add your server to the `from_name` method:
-
-```rust
-pub fn from_name(name: &str) -> Self {
-    let connection_type = match name {
-        \"core\" => McpConnectionType::Builtin,
-        \"filesystem\" => McpConnectionType::Builtin,
-        \"agent\" => McpConnectionType::Builtin,
-        \"database\" => McpConnectionType::Builtin,  // <- Add here
-        _ => McpConnectionType::Http,
-    };
-    // ...
-}
-```
-
-Add a helper constructor method:
-
-```rust
-/// Create a database server configuration
-pub fn database(name: &str, tools: Vec<String>) -> Self {
-    Self::Builtin {
-        name: name.to_string(),
-        timeout_seconds: 30,
-        tools,
-    }
-}
-```
-
-### 3. Create Server Module
+### 2. Create Server Module
 
 **Create directory: `src/mcp/database/`**
 
@@ -306,7 +278,7 @@ async fn execute_schema(call: &McpToolCall) -> Result<McpToolResult> {
 }
 ```
 
-### 4. Add Module to MCP Root
+### 3. Add Module to MCP Root
 
 **File: `src/mcp/mod.rs`**
 
@@ -320,7 +292,7 @@ pub mod fs;
 // ...
 ```
 
-### 5. Update MCP Function Discovery
+### 4. Update MCP Function Discovery
 
 **File: `src/mcp/tool_map.rs`**
 Add your server to the `build_tool_server_map_impl` method:
@@ -338,7 +310,7 @@ match server.name() {
     // ...
 }
 ```
-### 6. Add Server Type Enum (if needed)
+### 6. Add Misuse Hints (Optional)
 
 If your server needs a dedicated enum variant (rare for builtin servers):
 
@@ -353,7 +325,7 @@ pub enum McpServerType {
 }
 ```
 
-### 7. Update Tool Execution
+### 5. Update Tool Execution
 
 **File: `src/mcp/mod.rs`**
 
@@ -398,94 +370,23 @@ match target_server.connection_type {
 }
 ```
 
-### 8. Update Server Health Monitoring
+### 6. Test Your Server
 
-**File: `src/mcp/server.rs`**
+After implementing the steps above, your server is ready. Builtin servers:
+- Don't require external process management
+- Don't need health monitoring (always available)
+- Are discovered through `server_functions_for()` in `src/mcp/mod.rs`
+- Are executed through `try_execute_tool_call()` in `src/mcp/mod.rs`
 
-Add your server type to the builtin server check:
+## Reference: Complete Example
 
-```rust
-match server.connection_type {
-    crate::config::McpConnectionType::Builtin => {
-        // All builtin servers are always available
-    }
-    // ...
-}
-```
+A complete database server example would include:
 
-### 9. Update Session Commands
-
-**File: `src/session/chat/session/commands.rs`**
-
-Add to server health status checks (2 locations):
-
-```rust
-let (health, restart_info) = match server.connection_type {
-    crate::config::McpConnectionType::Builtin => {
-        // All builtin servers are always healthy
-    }
-    // ...
-};
-```
-
-### 10. Update Response Processing
-
-**File: `src/session/chat/response.rs`**
-
-Add to server function gathering:
-
-```rust
-let server_functions = match server.connection_type {
-    crate::config::McpConnectionType::Builtin => {
-        // Handle builtin servers by name
-        match server.name.as_str() {
-            "database" => {
-                crate::mcp::get_cached_internal_functions("database", &server.tools, || {
-                    crate::mcp::database::get_all_functions()
-                })
-            }
-            // ...
-        }
-    }
-    // ...
-};
-```
-
-### 11. Update Config Commands
-
-**File: `src/commands/config.rs`**
-
-Add to server type detection (2 locations):
-
-```rust
-let effective_type = match name.as_str() {
-    "core" => McpServerType::Core,
-    "filesystem" => McpServerType::Filesystem,
-    "agent" => McpServerType::Agent,
-    "database" => McpServerType::Database,  // <- Add here
-    _ => McpServerType::External,
-};
-
-match effective_type {
-    // existing cases...
-    McpServerType::Database => {
-        println!("  - {} (built-in database tools) - available", name)
-    }
-    // ...
-}
-```
-
-And in the display function:
-
-```rust
-match effective_type {
-    // existing cases...
-    McpServerType::Database => {
-        println!("      🗄️ {} (built-in database tools)", name);
-    }
-    // ...
-}
-```
+1. **Module**: `src/mcp/database/mod.rs` + `functions.rs`
+2. **Discovery**: Add to `server_functions_for()` in `src/mcp/mod.rs`
+3. **Execution**: Add to `try_execute_tool_call()` in `src/mcp/mod.rs`
+4. **Config**: Add to `config-templates/default.toml`
+5. **Docs**: Update documentation files
 
 ### 11. Add to Default Configuration
 
