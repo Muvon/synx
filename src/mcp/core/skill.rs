@@ -171,7 +171,7 @@ fn missing_tools(allowed_tools: &[String]) -> Vec<String> {
 /// Scan all active taps for skills. Returns (meta, skill_dir) pairs.
 /// Skills live at `<tap>/skills/<skill-name>/SKILL.md`.
 fn find_all_skills() -> Vec<(SkillMeta, PathBuf)> {
-	let taps = match crate::agent::taps::load_taps() {
+	let taps = match crate::agent::taps::get_taps() {
 		Ok(t) => t,
 		Err(e) => {
 			crate::log_debug!("skill: failed to load taps: {}", e);
@@ -219,6 +219,44 @@ fn find_all_skills() -> Vec<(SkillMeta, PathBuf)> {
 	}
 
 	skills
+}
+
+/// Find a specific skill by name across all taps.
+/// Returns (meta, skill_dir, full_content) — reads SKILL.md only once.
+fn find_skill_by_name(name: &str) -> Option<(SkillMeta, PathBuf, String)> {
+	let taps = match crate::agent::taps::get_taps() {
+		Ok(t) => t,
+		Err(e) => {
+			crate::log_debug!("skill: failed to get taps: {}", e);
+			return None;
+		}
+	};
+
+	for tap in &taps {
+		let skills_dir = match tap.skills_dir() {
+			Ok(d) => d,
+			Err(_) => continue,
+		};
+
+		let skill_dir = skills_dir.join(name);
+		if !skill_dir.is_dir() {
+			continue;
+		}
+
+		let skill_md = skill_dir.join("SKILL.md");
+		let content = match std::fs::read_to_string(&skill_md) {
+			Ok(c) => c,
+			Err(_) => continue,
+		};
+
+		if let Some(meta) = parse_skill_meta(&content) {
+			if meta.name == name {
+				return Some((meta, skill_dir, content));
+			}
+		}
+	}
+
+	None
 }
 
 // ---------------------------------------------------------------------------
@@ -457,11 +495,8 @@ async fn execute_use(call: &McpToolCall) -> Result<McpToolResult, String> {
 		));
 	}
 
-	// Find the skill across taps
-	let all_skills = find_all_skills();
-	let found = all_skills.iter().find(|(meta, _)| meta.name == name);
-
-	let (meta, skill_dir) = match found {
+	// Find the skill across taps (reads SKILL.md once)
+	let (meta, skill_dir, content) = match find_skill_by_name(&name) {
 		Some(s) => s,
 		None => {
 			return Ok(McpToolResult::error(
@@ -475,20 +510,8 @@ async fn execute_use(call: &McpToolCall) -> Result<McpToolResult, String> {
 		}
 	};
 
-	let skill_md_path = skill_dir.join("SKILL.md");
-	let content = match std::fs::read_to_string(&skill_md_path) {
-		Ok(c) => c,
-		Err(e) => {
-			return Ok(McpToolResult::error(
-				call.tool_name.clone(),
-				call.tool_id.clone(),
-				format!("Failed to read SKILL.md for '{}': {}", name, e),
-			))
-		}
-	};
-
 	// Tier 3: append resource catalog (scripts/, references/, assets/)
-	let resources = build_resource_catalog(skill_dir);
+	let resources = build_resource_catalog(&skill_dir);
 
 	// Tool compatibility: warn if required tools are missing in the current role
 	let unavailable = missing_tools(&meta.allowed_tools);

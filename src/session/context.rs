@@ -922,6 +922,15 @@ pub fn take_skill_compress_request(session_id: &SessionId) -> bool {
 	false
 }
 
+/// Clear compression request flag when a session ends.
+fn clear_skill_compress_requests(session_id: &SessionId) {
+	if let Ok(mut guard) = SKILL_COMPRESS_REQUESTED.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Session cleanup
 // ---------------------------------------------------------------------------
@@ -941,5 +950,6 @@ pub fn cleanup_session(session_id: &SessionId) {
 	clear_dynamic_servers_for_session(session_id);
 	clear_job_manager_for_session(session_id);
 	clear_active_skills(session_id);
+	clear_skill_compress_requests(session_id);
 	crate::log_debug!("Cleaned up session-scoped state for: {}", session_id);
 }

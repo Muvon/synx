@@ -154,6 +154,18 @@ fn parse_tap_arg(arg: &str) -> Result<Tap> {
 	Ok(Tap { name, local_path })
 }
 
+/// Returns all active taps (local paths only, no network).
+/// Use this for hot-path lookups (skill discovery, etc.) where taps are
+/// already cloned/symlinked and git pull would add unnecessary latency.
+pub fn get_taps() -> Result<Vec<Tap>> {
+	let mut file = read_taps_file()?;
+	file.taps.push(Tap {
+		name: DEFAULT_TAP.to_string(),
+		local_path: None,
+	});
+	Ok(file.taps)
+}
+
 /// Returns all active taps: user taps first, built-in default last.
 /// Also auto-updates GitHub taps by running git pull (Homebrew-style).
 pub fn load_taps() -> Result<Vec<Tap>> {
