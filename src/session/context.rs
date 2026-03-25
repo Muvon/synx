@@ -793,7 +793,7 @@ pub fn clear_dynamic_servers_for_session(session_id: &SessionId) {
 // Session-keyed background job manager
 // ---------------------------------------------------------------------------
 
-use crate::session::background_jobs::{BackgroundJobManager, CompletedJob};
+use crate::session::background_jobs::BackgroundJobManager;
 
 /// Registry for session background job managers.
 /// Each session has its own job manager for async agent jobs.
@@ -801,18 +801,14 @@ static JOB_MANAGERS: RwLock<Option<HashMap<SessionId, Arc<BackgroundJobManager>>
 	RwLock::new(None);
 
 /// Initialize a job manager for a session.
-/// Returns the receiver for completed jobs.
-pub fn init_job_manager_for_session(
-	session_id: &SessionId,
-) -> tokio::sync::mpsc::Receiver<CompletedJob> {
+pub fn init_job_manager_for_session(session_id: &SessionId) {
 	let max_concurrent = std::thread::available_parallelism()
 		.map(|p| p.get())
 		.unwrap_or(4);
-	let (manager, rx) = BackgroundJobManager::new(max_concurrent);
+	let manager = BackgroundJobManager::new(max_concurrent);
 	let mut guard = JOB_MANAGERS.write().unwrap();
 	let registry = guard.get_or_insert_with(HashMap::new);
 	registry.insert(session_id.clone(), Arc::new(manager));
-	rx
 }
 
 /// Get the job manager for the current session.
@@ -932,44 +928,6 @@ fn clear_skill_compress_requests(session_id: &SessionId) {
 }
 
 // ---------------------------------------------------------------------------
-// Session-keyed pending skill injections
-// ---------------------------------------------------------------------------
-
-/// Pending skill content to inject as system messages after tool results are processed.
-/// Each entry is (skill_name, skill_content). Set by `skill(use)`, consumed by tool_result_processor.
-#[allow(clippy::type_complexity)]
-static PENDING_SKILL_INJECTIONS: RwLock<Option<HashMap<SessionId, Vec<(String, String)>>>> =
-	RwLock::new(None);
-
-/// Queue a skill's content for injection as a system message.
-pub fn push_pending_skill_injection(session_id: &SessionId, name: String, content: String) {
-	let mut guard = PENDING_SKILL_INJECTIONS.write().unwrap();
-	let registry = guard.get_or_insert_with(HashMap::new);
-	registry
-		.entry(session_id.clone())
-		.or_default()
-		.push((name, content));
-}
-
-/// Take (read + clear) all pending skill injections for a session.
-pub fn take_pending_skill_injections(session_id: &SessionId) -> Vec<(String, String)> {
-	let mut guard = PENDING_SKILL_INJECTIONS.write().unwrap();
-	if let Some(registry) = guard.as_mut() {
-		return registry.remove(session_id).unwrap_or_default();
-	}
-	Vec::new()
-}
-
-/// Clear pending skill injections when a session ends.
-fn clear_pending_skill_injections(session_id: &SessionId) {
-	if let Ok(mut guard) = PENDING_SKILL_INJECTIONS.write() {
-		if let Some(registry) = guard.as_mut() {
-			registry.remove(session_id);
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Session cleanup
 // ---------------------------------------------------------------------------
 
@@ -989,6 +947,6 @@ pub fn cleanup_session(session_id: &SessionId) {
 	clear_job_manager_for_session(session_id);
 	clear_active_skills(session_id);
 	clear_skill_compress_requests(session_id);
-	clear_pending_skill_injections(session_id);
+	crate::session::inbox::clear_inbox_for_session(session_id);
 	crate::log_debug!("Cleaned up session-scoped state for: {}", session_id);
 }

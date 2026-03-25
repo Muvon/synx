@@ -530,16 +530,15 @@ async fn execute_use(call: &McpToolCall) -> Result<McpToolResult, String> {
 	// Register as active
 	crate::session::context::add_active_skill(&session_id, &name);
 
-	// Queue skill content for injection as a system message (handled by tool_result_processor)
+	// Push skill content into the session inbox — the loop will inject it as a user message.
 	let mut injection_content = content;
 	if !resources.is_empty() {
 		injection_content.push_str(&resources);
 	}
-	crate::session::context::push_pending_skill_injection(
-		&session_id,
-		name.clone(),
-		injection_content,
-	);
+	crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
+		source: crate::session::inbox::InboxSource::Skill { name: name.clone() },
+		content: injection_content,
+	});
 
 	crate::log_debug!(
 		"skill: queued '{}' for injection in session {}",

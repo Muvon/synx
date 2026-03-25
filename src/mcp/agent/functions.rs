@@ -35,24 +35,20 @@ fn get_max_concurrent_jobs() -> usize {
 		.unwrap_or(4)
 }
 
-/// Initialize the job manager at session start. Returns the receiver for completed jobs.
+/// Initialize the job manager at session start.
 ///
 /// Session-aware: uses session-scoped registry when in a session context,
 /// falls back to global singleton for CLI mode.
-pub fn init_job_manager() -> tokio::sync::mpsc::Receiver<CompletedJob> {
+pub fn init_job_manager() {
 	// Check if we're in a session context
 	if let Some(session_id) = crate::session::context::current_session_id() {
-		return crate::session::context::init_job_manager_for_session(&session_id);
+		crate::session::context::init_job_manager_for_session(&session_id);
+		return;
 	}
 
-	// Fall back to global singleton for CLI mode
-	let (manager, rx) = BackgroundJobManager::new(get_max_concurrent_jobs());
-	if JOB_MANAGER.set(Arc::new(manager)).is_err() {
-		// Already initialized — return a closed receiver; the existing manager handles jobs.
-		let (_, dummy_rx) = tokio::sync::mpsc::channel(1);
-		return dummy_rx;
-	}
-	rx
+	// Fall back to global singleton for CLI mode (uses a dummy session id — no inbox)
+	let manager = BackgroundJobManager::new(get_max_concurrent_jobs());
+	let _ = JOB_MANAGER.set(Arc::new(manager));
 }
 
 /// Get the job manager for the current session or global fallback.

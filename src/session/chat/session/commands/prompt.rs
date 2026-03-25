@@ -20,7 +20,7 @@ use crate::config::Config;
 use anyhow::Result;
 
 pub async fn handle_prompt(
-	session: &mut ChatSession,
+	_session: &mut ChatSession,
 	config: &Config,
 	_role: &str,
 	params: &[&str],
@@ -67,9 +67,14 @@ pub async fn handle_prompt(
 	// Process the prompt template (support variable substitution if needed)
 	let processed_prompt = process_prompt_template(&prompt_config.prompt, config, _role)?;
 
-	// CRITICAL FIX: Don't add the message here, just store it as pending
-	// The main loop will pick it up and process it as normal user input
-	session.pending_prompt = Some(processed_prompt.clone());
+	// Push the prompt into the session inbox so the main loop picks it up
+	// as a normal user message on the next iteration.
+	crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
+		source: crate::session::inbox::InboxSource::Schedule {
+			id: format!("prompt:{}", prompt_name),
+		},
+		content: processed_prompt.clone(),
+	});
 
 	Ok(CommandResult::HandledWithOutput(CommandOutput::Prompt {
 		data: serde_json::json!({

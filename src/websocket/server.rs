@@ -536,22 +536,10 @@ async fn handle_user_message(
 	let mut cancellation = SessionCancellation::new();
 	let operation_rx = cancellation.new_operation();
 
-	// Drain any completed async jobs before processing user input.
-	// Each completed job is injected as a user message so the AI sees it.
-	if let Ok(job) = chat_session.job_rx.try_recv() {
-		let job_msg = if job.output.starts_with("ERROR: ") {
-			format!(
-				"[Async agent '{}' failed]\n\n{}",
-				job.agent_name,
-				job.output.trim_start_matches("ERROR: ")
-			)
-		} else {
-			format!(
-				"[Async agent '{}' completed]\n\n{}",
-				job.agent_name, job.output
-			)
-		};
-		chat_session.add_user_message(&job_msg)?;
+	// Drain any completed async jobs / scheduled messages from the inbox
+	// before processing user input so the AI sees them on the next turn.
+	while let Some(inbox_msg) = crate::session::inbox::try_pop_inbox_message() {
+		chat_session.add_user_message(&inbox_msg.content)?;
 	}
 
 	// Process through layers if enabled (first message)
@@ -662,47 +650,77 @@ async fn handle_user_message(
 		}
 	}
 
-	// Process pending scheduled entries (same as non-interactive keep-alive in main_loop)
-	while crate::mcp::core::has_pending_schedules() {
-		log_debug!("WebSocket: waiting for scheduled entries...");
-		crate::mcp::core::next_schedule_sleep().await;
-
+	// Keep session alive while there are pending inbox messages, scheduled entries, or active jobs.
+	// All injection sources push to the inbox — drain it here, same as non-interactive mode.
+	loop {
+		// Flush any due schedule entries into the inbox first.
 		while let Some(entry) = crate::mcp::core::pop_due_entry() {
 			log_debug!(
 				"Schedule entry [{}] fired (websocket): {}",
 				entry.id,
 				entry.description
 			);
+			crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
+				source: crate::session::inbox::InboxSource::Schedule {
+					id: entry.id.clone(),
+				},
+				content: entry.message,
+			});
+		}
 
-			chat_session.add_user_message(&entry.message)?;
-			let sched_operation_rx = cancellation.new_operation();
-			prepare_for_api_call(
-				&mut chat_session,
-				&config_for_role,
-				sched_operation_rx.clone(),
-			)
-			.await?;
+		// Process all messages currently in the inbox.
+		while let Some(inbox_msg) = crate::session::inbox::try_pop_inbox_message() {
+			log_debug!(
+				"WebSocket: processing inbox message from {:?}",
+				inbox_msg.source
+			);
+			chat_session.add_user_message(&inbox_msg.content)?;
+			let op_rx = cancellation.new_operation();
+			prepare_for_api_call(&mut chat_session, &config_for_role, op_rx.clone()).await?;
 
-			let (sched_tx, mut sched_rx) = tokio::sync::mpsc::unbounded_channel();
-			let sched_sink = WebSocketSink::new(sched_tx);
+			let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+			let sink = WebSocketSink::new(tx);
 
-			let sched_result = execute_api_call_and_process_response(
+			let result = execute_api_call_and_process_response(
 				&mut chat_session,
 				&config_for_role,
 				role,
-				sched_operation_rx,
+				op_rx,
 				OutputMode::WebSocket,
-				sched_sink,
+				sink,
 			)
 			.await;
 
-			while let Ok(msg) = sched_rx.try_recv() {
+			while let Ok(msg) = rx.try_recv() {
 				send_message(ws_sender, &msg).await?;
 			}
 
-			if let Err(e) = sched_result {
-				log_debug!("Error processing scheduled entry [{}]: {}", entry.id, e);
+			if let Err(e) = result {
+				log_debug!("Error processing inbox message (websocket): {}", e);
 			}
+		}
+
+		// Check if there's anything left to wait for.
+		let has_schedules = crate::mcp::core::has_pending_schedules();
+		let active_jobs = crate::mcp::agent::functions::get_job_manager()
+			.map(|m| m.active_count())
+			.unwrap_or(0);
+
+		if !has_schedules && active_jobs == 0 {
+			break;
+		}
+
+		// Wait for the next event: either a schedule timer fires or an inbox message arrives.
+		let inbox_notify = crate::session::inbox::get_inbox_notify();
+		tokio::select! {
+			_ = crate::mcp::core::next_schedule_sleep() => {}
+			_ = async {
+				if let Some(notify) = inbox_notify {
+					notify.notified().await;
+				} else {
+					std::future::pending::<()>().await;
+				}
+			} => {}
 		}
 	}
 

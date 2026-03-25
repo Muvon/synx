@@ -169,8 +169,7 @@ pub struct ChatSession {
 	pub max_retries: u32,              // Maximum number of retries for provider errors
 	pub was_resumed: bool, // Flag indicating if this session was resumed from an existing file
 
-	pub pending_prompt: Option<String>, // Pending prompt text to be processed as user input
-	pub initial_status_shown: bool,     // Flag to track if initial status line was displayed
+	pub initial_status_shown: bool, // Flag to track if initial status line was displayed
 	// Compression hint tracking
 	pub compression_hint_count: usize, // Counter for compression hints
 	pub last_compression_hint_shown: u64, // Timestamp of last compression hint
@@ -183,8 +182,6 @@ pub struct ChatSession {
 	pub first_prompt_idx: Option<usize>,
 	/// Optional JSON schema for structured output (set via --schema CLI flag)
 	pub schema: Option<serde_json::Value>,
-	/// Receiver for completed background agent jobs — injected into the session loop.
-	pub job_rx: tokio::sync::mpsc::Receiver<crate::session::background_jobs::CompletedJob>,
 	/// Critical knowledge entries extracted from compressions — persisted across cycles.
 	/// Capped at `config.compression.knowledge_retention` entries (FIFO).
 	pub critical_knowledge: Vec<String>,
@@ -294,15 +291,13 @@ impl ChatSession {
 			pending_video: None,                // Initialize pending video
 			max_retries: max_retries_value,     // Set max retries value
 			was_resumed: false,                 // This is a new session
-			pending_prompt: None,               // Initialize pending prompt
 			initial_status_shown: false,        // Initialize status display flag
 			compression_hint_count: 0,          // Initialize compression hint counter
 			last_compression_hint_shown: 0,     // Initialize last hint timestamp
 			cached_tools: None,                 // Initialize tool cache (populated on first use)
 			first_prompt_idx: None,             // Initialize first prompt index (set on first user message)
 			schema: None,                       // Schema set later via CLI override
-			job_rx: crate::mcp::agent::functions::init_job_manager(),
-			critical_knowledge: Vec::new(), // Populated from session log on resume
+			critical_knowledge: Vec::new(),     // Populated from session log on resume
 		}
 	}
 
@@ -491,14 +486,12 @@ impl ChatSession {
 						pending_video: None,                 // Initialize pending video
 						max_retries: params.max_retries.unwrap_or(params.config.max_retries), // Use provided max_retries or fall back to config
 						was_resumed: true,          // This session was resumed from file
-						pending_prompt: None,       // Initialize pending prompt
 						initial_status_shown: true, // Don't show status for resumed sessions
 						compression_hint_count,     // Restore from session.info
 						last_compression_hint_shown: last_compression_hint, // Restore from session.info
 						cached_tools: None,         // Initialize tool cache (populated on first use)
 						first_prompt_idx: None,     // Will be detected from existing messages
 						schema: None,               // Schema applied after init via CLI override
-						job_rx: crate::mcp::agent::functions::init_job_manager(),
 						critical_knowledge: Vec::new(), // Will be restored from session log below
 					};
 
@@ -1227,17 +1220,12 @@ mod tests {
 			max_retries: 0,
 
 			was_resumed: false,
-			pending_prompt: None,
 			initial_status_shown: false,
 			compression_hint_count: 0,
 			last_compression_hint_shown: 0,
 			cached_tools: None,
 			first_prompt_idx: None,
 			schema: None,
-			job_rx: {
-				let (_tx, rx) = tokio::sync::mpsc::channel(1);
-				rx
-			},
 			critical_knowledge: Vec::new(),
 		}
 	}

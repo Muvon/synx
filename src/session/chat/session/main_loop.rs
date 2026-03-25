@@ -53,6 +53,9 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	// uses the real session name — must happen after setup determines the actual name.
 	let session_id = chat_session.session.info.name.clone();
 	crate::session::context::with_session_id(session_id, async move {
+	// Initialize session-scoped inbox and background job manager now that session ID is set
+	crate::session::inbox::init_inbox_for_session();
+	crate::mcp::agent::functions::init_job_manager();
 	// Get current directory for file operations - use thread-local if set (ACP/WebSocket), otherwise process cwd
 	let current_dir = crate::mcp::get_thread_working_directory();
 	let mut chat_session = chat_session;
@@ -271,34 +274,19 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		// Set state to reading input
 		*processing_state.lock().unwrap() = ProcessingState::ReadingInput;
 
-		// Drain any completed async jobs before reading user input.
-		// Each completed job is injected as a user message so the AI sees it
-		// on the very next turn without any polling.
-		if let Ok(job) = chat_session.job_rx.try_recv() {
-			let msg = if job.output.starts_with("ERROR: ") {
-				format!(
-					"[Async agent '{}' failed]\n\n{}",
-					job.agent_name,
-					job.output.trim_start_matches("ERROR: ")
-				)
-			} else {
-				format!(
-					"[Async agent '{}' completed]\n\n{}",
-					job.agent_name, job.output
-				)
-			};
-			chat_session.pending_prompt = Some(msg);
-			// Only inject one at a time; the loop picks up the rest next iteration.
+		// Flush any due schedule entries into the inbox so all injection sources
+		// are unified — the loop only needs to drain the inbox from here on.
+		while let Some(entry) = crate::mcp::core::pop_due_entry() {
+			log_debug!("Schedule entry [{}] fired: {}", entry.id, entry.description);
+			crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
+				source: crate::session::inbox::InboxSource::Schedule { id: entry.id.clone() },
+				content: entry.message,
+			});
 		}
 
-		// Check for any scheduled entries that are due right now.
-		// Scheduled messages are injected as user messages, same as async job results.
-		if chat_session.pending_prompt.is_none() {
-			if let Some(entry) = crate::mcp::core::pop_due_entry() {
-				log_debug!("Schedule entry [{}] fired: {}", entry.id, entry.description);
-				chat_session.pending_prompt = Some(entry.message);
-			}
-		}
+		// Pop the first pending inbox message (background agent, schedule, skill, /prompt).
+		// If one is ready, skip user input entirely and process it immediately.
+		let pending_msg = crate::session::inbox::try_pop_inbox_message();
 
 		// Get a new operation token for this iteration
 		let operation_rx = cancellation.new_operation();
@@ -311,14 +299,15 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		)
 		.await;
 
-		let input_result = if let Some(prompt_text) = chat_session.pending_prompt.take() {
-			// Process pending prompt from async job injection or /prompt command
-			log_debug!("Processing pending prompt as user input");
-			InputResult::Text(prompt_text)
+		let input_result = if let Some(inbox_msg) = pending_msg {
+			// An inbox message is ready — inject it without waiting for user input.
+			log_debug!("Processing inbox message from {:?}", inbox_msg.source);
+			InputResult::Text(inbox_msg.content)
 		} else {
-			// Race blocking user input against async job completion.
-			// If a job arrives while the user is typing, inject it immediately
-			// without waiting for the user to press Enter.
+			// Race blocking user input against inbox arrival.
+			// The inbox notify wakes us the moment any producer pushes a message,
+			// so we never miss an injection while the user is at the prompt.
+			let inbox_notify = crate::session::inbox::get_inbox_notify();
 			let estimated_cost = chat_session.estimated_cost;
 			let config_clone = current_config.clone();
 			let role_clone = role.clone();
@@ -345,52 +334,32 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 						Ok(InputResult::Text(String::new()))
 					})?
 				}
-				// Async job completed while user was at the prompt
-				Some(job) = chat_session.job_rx.recv() => {
-					let msg = if job.output.starts_with("ERROR: ") {
-						format!(
-							"[Async agent '{}' failed]\n\n{}",
-							job.agent_name,
-							job.output.trim_start_matches("ERROR: ")
-						)
+				// Inbox message arrived while user was at the prompt
+				_ = async {
+					if let Some(notify) = inbox_notify {
+						notify.notified().await;
 					} else {
-						format!(
-							"[Async agent '{}' completed]\n\n{}",
-							job.agent_name, job.output
-						)
-					};
-					// Unblock the reedline thread by writing a newline to stdin,
-					// so it doesn't silently consume the user's next real keypress.
-					// Unblock the reedline thread by writing a newline to stdin,
-					// so it doesn't silently consume the user's next real keypress.
-					#[cfg(unix)]
-					{
-						let mut stdin_write = unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(0) };
-						let _ = std::io::Write::write_all(&mut stdin_write, b"\n");
-						// Don't close fd 0 — forget the File so it doesn't drop/close stdin
-						std::mem::forget(stdin_write);
+						std::future::pending::<()>().await;
 					}
-
-					InputResult::Text(msg)
-				}
-				// Scheduled entry fired while user was at the prompt
-				_ = crate::mcp::core::next_schedule_sleep() => {
-					// Pop the entry that just became due.
-					// If nothing is due yet (race), return empty — top-of-loop check handles it.
-					let msg = crate::mcp::core::pop_due_entry()
-						.map(|e| {
-							log_debug!("Schedule entry [{}] fired at prompt: {}", e.id, e.description);
-							e.message
-						})
+				} => {
+					// Pop the message that just arrived (or a schedule entry that fired).
+					while let Some(entry) = crate::mcp::core::pop_due_entry() {
+						log_debug!("Schedule entry [{}] fired at prompt: {}", entry.id, entry.description);
+						crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
+							source: crate::session::inbox::InboxSource::Schedule { id: entry.id.clone() },
+							content: entry.message,
+						});
+					}
+					let msg = crate::session::inbox::try_pop_inbox_message()
+						.map(|m| m.content)
 						.unwrap_or_default();
-
+					// Unblock the reedline thread so it doesn't consume the next keypress.
 					#[cfg(unix)]
 					if !msg.is_empty() {
 						let mut stdin_write = unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(0) };
 						let _ = std::io::Write::write_all(&mut stdin_write, b"\n");
 						std::mem::forget(stdin_write);
 					}
-
 					InputResult::Text(msg)
 				}
 			}
@@ -868,6 +837,9 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	// uses the real session name — must happen after setup determines the actual name.
 	let session_id = chat_session.session.info.name.clone();
 	crate::session::context::with_session_id(session_id, async move {
+	// Initialize session-scoped inbox and background job manager now that session ID is set
+	crate::session::inbox::init_inbox_for_session();
+	crate::mcp::agent::functions::init_job_manager();
 	let mut chat_session = chat_session;
 
 	// Setup system prompt and cache using helper function (non-interactive mode)
@@ -1117,20 +1089,22 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		}
 	}
 
-	// Keep session alive while there are pending scheduled entries (non-interactive).
-	// Each due entry is injected as a user message and processed through the full pipeline.
-	while crate::mcp::core::has_pending_schedules() {
-		log_debug!("Non-interactive: waiting for scheduled entries...");
-		crate::mcp::core::next_schedule_sleep().await;
-
+	// Keep session alive while there are pending inbox messages, scheduled entries, or active jobs.
+	// All injection sources (schedule, background agents) push to the inbox — drain it here.
+	loop {
+		// Flush any due schedule entries into the inbox first.
 		while let Some(entry) = crate::mcp::core::pop_due_entry() {
-			log_debug!(
-				"Schedule entry [{}] fired (non-interactive): {}",
-				entry.id,
-				entry.description
-			);
+			log_debug!("Schedule entry [{}] fired (non-interactive): {}", entry.id, entry.description);
+			crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
+				source: crate::session::inbox::InboxSource::Schedule { id: entry.id.clone() },
+				content: entry.message,
+			});
+		}
 
-			chat_session.add_user_message(&entry.message)?;
+		// Process all messages currently in the inbox.
+		while let Some(inbox_msg) = crate::session::inbox::try_pop_inbox_message() {
+			log_debug!("Non-interactive: processing inbox message from {:?}", inbox_msg.source);
+			chat_session.add_user_message(&inbox_msg.content)?;
 			prepare_for_api_call(&mut chat_session, &current_config, operation_rx.clone()).await?;
 
 			let output_mode = if current_config.runtime_output_mode.as_deref() == Some("jsonl") {
@@ -1149,30 +1123,34 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 			)
 			.await
 			{
-				log_debug!("Error processing scheduled entry [{}]: {}", entry.id, e);
+				log_debug!("Error processing inbox message: {}", e);
 			}
 
 			// Refresh operation receiver in case cancellation was triggered
 			operation_rx = cancellation.new_operation();
 		}
-	}
-	// Wait for any async jobs to complete before exiting
-	// This ensures non-interactive sessions don't exit prematurely
-	if let Some(manager) = crate::mcp::agent::functions::get_job_manager() {
-		let active = manager.active_count();
-		if active > 0 {
-			use colored::Colorize;
-			eprintln!(
-				"{}",
-				format!("Waiting for {active} async job(s) to complete...").yellow()
-			);
-			let completed = manager.wait_all().await;
-			if completed > 0 {
-				eprintln!(
-					"{}",
-					format!("✓ {completed} async job(s) completed").green()
-				);
-			}
+
+		// Check if there's anything left to wait for.
+		let has_schedules = crate::mcp::core::has_pending_schedules();
+		let active_jobs = crate::mcp::agent::functions::get_job_manager()
+			.map(|m| m.active_count())
+			.unwrap_or(0);
+
+		if !has_schedules && active_jobs == 0 {
+			break;
+		}
+
+		// Wait for the next event: either a schedule timer fires or an inbox message arrives.
+		let inbox_notify = crate::session::inbox::get_inbox_notify();
+		tokio::select! {
+			_ = crate::mcp::core::next_schedule_sleep() => {}
+			_ = async {
+				if let Some(notify) = inbox_notify {
+					notify.notified().await;
+				} else {
+					std::future::pending::<()>().await;
+				}
+			} => {}
 		}
 	}
 

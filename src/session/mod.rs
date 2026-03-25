@@ -31,6 +31,7 @@ mod project_context;
 pub mod video; // Video processing and attachment utilities // Project context collection and management
 			   // Provider abstraction layer moved to src/providers
 pub mod background_jobs;
+pub mod inbox; // Unified message injection queue for all session sources
 pub mod report; // Session usage reporting
 pub mod smart_summarizer; // Smart text summarization for context management
 mod token_counter; // Token counting utilities // Comprehensive caching system

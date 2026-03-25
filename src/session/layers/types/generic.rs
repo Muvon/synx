@@ -409,18 +409,13 @@ impl GenericLayer {
 			request_spending_checkpoint: 0.0, // Initialize request spending checkpoint
 			max_retries: layer_config.max_retries,
 			was_resumed: false,                       // Layers are never resumed sessions
-			pending_prompt: None,                     // Initialize pending prompt
 			initial_status_shown: true,               // Layers don't show status
 			compression_hint_count: 0,                // Initialize compression hint counter
 			last_compression_hint_shown: 0,           // Initialize last hint timestamp
 			cached_tools: None,                       // Initialize tool cache (populated on first use)
 			first_prompt_idx: Some(first_prompt_idx), // Protect layer's first prompt from compression
 			schema: None,                             // Layers don't use structured output
-			job_rx: {
-				let (_tx, rx) = tokio::sync::mpsc::channel(1);
-				rx
-			},
-			critical_knowledge: Vec::new(), // Layers don't retain knowledge across compressions
+			critical_knowledge: Vec::new(),           // Layers don't retain knowledge across compressions
 		}
 	}
 

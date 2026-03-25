@@ -13,13 +13,12 @@
 // limitations under the License.
 
 // Async agent job tracking — push model.
-// When an async agent finishes, it sends a CompletedJob on the channel
-// registered by the active session. The session loop injects it as a user
-// message so the AI sees the result without any polling.
+// When an async agent finishes, it pushes a message directly into the session
+// inbox so the AI sees the result on the next turn without any polling.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 
 /// Outcome of a completed async agent run.
 #[derive(Debug, Clone)]
@@ -38,26 +37,22 @@ pub struct JobHandle {
 	pub task_handle: tokio::task::JoinHandle<()>,
 }
 
-/// Tracks active job count and holds the sender for pushing completions to the session.
+/// Tracks active job count and pushes completions directly into the session inbox.
 #[derive(Clone, Debug)]
 pub struct BackgroundJobManager {
 	active: Arc<AtomicUsize>,
 	max_concurrent: usize,
-	tx: mpsc::Sender<CompletedJob>,
 	/// Running jobs that can be cancelled on session exit.
 	jobs: Arc<Mutex<Vec<JobHandle>>>,
 }
 
 impl BackgroundJobManager {
-	pub fn new(max_concurrent: usize) -> (Self, mpsc::Receiver<CompletedJob>) {
-		let (tx, rx) = mpsc::channel(64);
-		let mgr = Self {
+	pub fn new(max_concurrent: usize) -> Self {
+		Self {
 			active: Arc::new(AtomicUsize::new(0)),
 			max_concurrent,
-			tx,
 			jobs: Arc::new(Mutex::new(Vec::new())),
-		};
-		(mgr, rx)
+		}
 	}
 
 	/// Returns Err if the concurrency limit is already reached.
@@ -71,10 +66,27 @@ impl BackgroundJobManager {
 	}
 
 	/// Call when an async job finishes (success or failure).
+	/// Pushes the result directly into the session inbox.
 	pub fn release(&self, job: CompletedJob) {
 		self.active.fetch_sub(1, Ordering::SeqCst);
-		// Best-effort send — if the session is gone the result is simply dropped.
-		let _ = self.tx.try_send(job);
+		let content = if job.output.starts_with("ERROR: ") {
+			format!(
+				"[Async agent '{}' failed]\n\n{}",
+				job.agent_name,
+				job.output.trim_start_matches("ERROR: ")
+			)
+		} else {
+			format!(
+				"[Async agent '{}' completed]\n\n{}",
+				job.agent_name, job.output
+			)
+		};
+		crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
+			source: crate::session::inbox::InboxSource::BackgroundAgent {
+				name: job.agent_name,
+			},
+			content,
+		});
 	}
 
 	/// Register a spawned job handle for later cancellation.
@@ -93,7 +105,7 @@ impl BackgroundJobManager {
 		self.active.load(Ordering::SeqCst)
 	}
 
-	/// Wait for all async jobs to complete, draining results into the channel.
+	/// Wait for all async jobs to complete.
 	/// Returns the number of jobs that completed.
 	pub async fn wait_all(&self) -> usize {
 		let handles: Vec<_> = {
@@ -134,10 +146,11 @@ mod tests {
 
 	#[test]
 	fn test_acquire_and_release() {
-		let (mgr, _rx) = BackgroundJobManager::new(2);
+		let mgr = BackgroundJobManager::new(2);
 		assert!(mgr.try_acquire().is_ok());
 		assert!(mgr.try_acquire().is_ok());
 		assert!(mgr.try_acquire().is_err());
+		// release decrements the counter; inbox push is a no-op (no inbox registered)
 		mgr.release(CompletedJob {
 			agent_name: "a".into(),
 			output: "done".into(),
@@ -147,7 +160,7 @@ mod tests {
 
 	#[test]
 	fn test_active_count() {
-		let (mgr, _rx) = BackgroundJobManager::new(10);
+		let mgr = BackgroundJobManager::new(10);
 		assert_eq!(mgr.active_count(), 0);
 		mgr.try_acquire().unwrap();
 		mgr.try_acquire().unwrap();
