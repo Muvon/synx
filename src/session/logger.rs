@@ -265,7 +265,7 @@ pub fn log_knowledge_entry(session_name: &str, knowledge: &str) -> Result<()> {
 	let log_entry = serde_json::json!({
 		"type": "KNOWLEDGE_ENTRY",
 		"timestamp": get_timestamp(),
-		"knowledge": knowledge
+		"content": knowledge
 	});
 	append_to_log(&log_file, &serde_json::to_string(&log_entry)?)?;
 	Ok(())
