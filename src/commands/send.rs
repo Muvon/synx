@@ -25,17 +25,26 @@ pub struct SendArgs {
 	/// Name of the running session to send to.
 	#[arg(long, short = 'n', value_name = "NAME")]
 	pub name: String,
+
+	/// Message to send. If omitted, reads from stdin.
+	#[arg(value_name = "MESSAGE")]
+	pub message: Option<String>,
 }
 
 pub async fn execute(args: &SendArgs) -> Result<()> {
-	let mut buf = String::new();
-	io::stdin()
-		.read_to_string(&mut buf)
-		.context("failed to read message from stdin")?;
-	let message = buf.trim().to_string();
+	let message = match &args.message {
+		Some(m) => m.trim().to_string(),
+		None => {
+			let mut buf = String::new();
+			io::stdin()
+				.read_to_string(&mut buf)
+				.context("failed to read message from stdin")?;
+			buf.trim().to_string()
+		}
+	};
 
 	if message.is_empty() {
-		bail!("message must not be empty (read from stdin)");
+		bail!("message must not be empty (pass as argument or pipe via stdin)");
 	}
 
 	let sock_path = octomind::directories::get_run_dir()

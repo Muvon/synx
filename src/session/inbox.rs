@@ -124,6 +124,20 @@ pub fn push_inbox_message(msg: InboxMessage) {
 	}
 }
 
+/// Push a message into a specific session's inbox by explicit session ID.
+///
+/// Use this when the caller is NOT running inside a session context
+/// (e.g. a `tokio::spawn`-ed task that doesn't inherit the task-local).
+pub fn push_inbox_message_for_session(session_id: &str, msg: InboxMessage) {
+	let mut guard = INBOX.write().unwrap();
+	if let Some(registry) = guard.as_mut() {
+		if let Some(q) = registry.get_mut(session_id) {
+			q.messages.push_back(msg);
+			q.notify.notify_one();
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Consumer API
 // ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::task::AbortHandle;
 
-use crate::session::inbox::{push_inbox_message, InboxMessage, InboxSource};
+use crate::session::inbox::{push_inbox_message_for_session, InboxMessage, InboxSource};
 use crate::{log_debug, log_error};
 
 // ---------------------------------------------------------------------------
@@ -140,10 +140,13 @@ async fn run_listener(session_name: &str) -> anyhow::Result<()> {
 							session_name
 						);
 
-						push_inbox_message(InboxMessage {
-							source: InboxSource::Inject,
-							content,
-						});
+						push_inbox_message_for_session(
+							session_name,
+							InboxMessage {
+								source: InboxSource::Inject,
+								content,
+							},
+						);
 
 						let _ = stream.write_all(b"ok\n").await;
 					}
