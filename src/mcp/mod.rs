@@ -595,6 +595,9 @@ async fn route_builtin_tool(
 				"schedule" => core::execute_schedule_tool(call)
 					.await
 					.map_err(|e| format!("Schedule execution failed: {}", e)),
+				"skill" => core::execute_skill_tool(call)
+					.await
+					.map_err(|e| format!("Skill tool failed: {}", e)),
 				other => {
 					return Err(anyhow::anyhow!(
 						"Tool '{}' not implemented in core server",

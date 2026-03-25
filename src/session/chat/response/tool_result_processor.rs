@@ -278,6 +278,24 @@ pub async fn process_tool_results(
 		);
 	}
 
+	// 🗜️ SKILL FORGET COMPRESSION: Run forced compression when a skill was forgotten
+	// The skill(forget) action sets this flag so injected skill content gets cleaned up
+	if let Some(session_id) = crate::session::context::current_session_id() {
+		if crate::session::context::take_skill_compress_request(&session_id) {
+			if let Err(e) =
+				crate::session::chat::conversation_compression::check_and_compress_conversation(
+					chat_session,
+					config,
+					operation_cancelled.clone(),
+					true,
+				)
+				.await
+			{
+				log_debug!("Skill forget compression failed: {}. Continuing.", e);
+			}
+		}
+	}
+
 	// CRITICAL FIX: Check cache threshold AFTER all tool results are processed
 	// This ensures cache markers are set at the correct boundary - after all parallel
 	// tool results are added to session, but before sending the complete batch to server

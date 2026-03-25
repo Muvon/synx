@@ -840,6 +840,89 @@ pub fn clear_job_manager_for_session(session_id: &SessionId) {
 }
 
 // ---------------------------------------------------------------------------
+// Session-keyed active skills
+// ---------------------------------------------------------------------------
+
+/// Registry for active skills per session.
+/// Each entry is the skill name that has been injected into context via `skill(use)`.
+static ACTIVE_SKILLS: RwLock<Option<HashMap<SessionId, Vec<String>>>> = RwLock::new(None);
+
+/// Register a skill as active for a session.
+pub fn add_active_skill(session_id: &SessionId, skill_name: &str) {
+	let mut guard = ACTIVE_SKILLS.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	let skills = registry.entry(session_id.clone()).or_default();
+	if !skills.contains(&skill_name.to_string()) {
+		skills.push(skill_name.to_string());
+	}
+}
+
+/// Remove a skill from active state for a session.
+pub fn remove_active_skill(session_id: &SessionId, skill_name: &str) {
+	let mut guard = ACTIVE_SKILLS.write().unwrap();
+	if let Some(registry) = guard.as_mut() {
+		if let Some(skills) = registry.get_mut(session_id) {
+			skills.retain(|s| s != skill_name);
+		}
+	}
+}
+
+/// Get all active skill names for a session.
+pub fn get_active_skills(session_id: &SessionId) -> Vec<String> {
+	let guard = ACTIVE_SKILLS.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some(skills) = registry.get(session_id) {
+			return skills.clone();
+		}
+	}
+	Vec::new()
+}
+
+/// Check if a skill is currently active for a session.
+pub fn has_active_skill(session_id: &SessionId, skill_name: &str) -> bool {
+	let guard = ACTIVE_SKILLS.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some(skills) = registry.get(session_id) {
+			return skills.iter().any(|s| s == skill_name);
+		}
+	}
+	false
+}
+
+/// Clear all active skills when a session ends.
+pub fn clear_active_skills(session_id: &SessionId) {
+	if let Ok(mut guard) = ACTIVE_SKILLS.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session-keyed skill compression request
+// ---------------------------------------------------------------------------
+
+/// Flag set by `skill(forget)` to trigger forced compression after tool result processing.
+static SKILL_COMPRESS_REQUESTED: RwLock<Option<HashMap<SessionId, bool>>> = RwLock::new(None);
+
+/// Request forced compression for a session (called by skill forget action).
+pub fn request_skill_compression(session_id: &SessionId) {
+	let mut guard = SKILL_COMPRESS_REQUESTED.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	registry.insert(session_id.clone(), true);
+}
+
+/// Take (read + clear) the compression request flag for a session.
+/// Returns true if compression was requested, false otherwise.
+pub fn take_skill_compress_request(session_id: &SessionId) -> bool {
+	let mut guard = SKILL_COMPRESS_REQUESTED.write().unwrap();
+	if let Some(registry) = guard.as_mut() {
+		return registry.remove(session_id).unwrap_or(false);
+	}
+	false
+}
+
+// ---------------------------------------------------------------------------
 // Session cleanup
 // ---------------------------------------------------------------------------
 
@@ -857,5 +940,6 @@ pub fn cleanup_session(session_id: &SessionId) {
 	clear_dynamic_agents_for_session(session_id);
 	clear_dynamic_servers_for_session(session_id);
 	clear_job_manager_for_session(session_id);
+	clear_active_skills(session_id);
 	crate::log_debug!("Cleaned up session-scoped state for: {}", session_id);
 }

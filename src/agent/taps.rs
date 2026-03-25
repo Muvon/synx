@@ -87,6 +87,11 @@ impl Tap {
 	pub fn deps_dir(&self) -> Result<PathBuf> {
 		Ok(self.local_dir()?.join("deps"))
 	}
+
+	/// Returns the skills directory path for this tap.
+	pub fn skills_dir(&self) -> Result<PathBuf> {
+		Ok(self.local_dir()?.join("skills"))
+	}
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
