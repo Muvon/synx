@@ -1466,7 +1466,7 @@ pub fn display_report(output: &CommandOutput, config: &Config) {
 					cost: entry.get("cost")?.as_str()?.to_string(),
 					tool_calls: entry.get("tool_calls")?.as_u64()? as u32,
 					tools_used: entry.get("tools_used")?.as_str()?.to_string(),
-					human_time: entry.get("human_time")?.as_str()?.to_string(),
+					task_time: entry.get("task_time")?.as_str()?.to_string(),
 					ai_time: entry.get("ai_time")?.as_str()?.to_string(),
 					processing_time: entry.get("processing_time")?.as_str()?.to_string(),
 				})
@@ -1482,8 +1482,8 @@ pub fn display_report(output: &CommandOutput, config: &Config) {
 				.get("total_tool_calls")
 				.and_then(|v| v.as_u64())
 				.unwrap_or(0) as u32,
-			total_human_time_ms: totals
-				.get("total_human_time_ms")
+			total_task_time_ms: totals
+				.get("total_task_time_ms")
 				.and_then(|v| v.as_u64())
 				.unwrap_or(0),
 			total_ai_time_ms: totals

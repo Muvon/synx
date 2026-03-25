@@ -35,7 +35,7 @@ pub struct ReportEntry {
 	pub cost: String,
 	pub tool_calls: u32,
 	pub tools_used: String,
-	pub human_time: String,
+	pub task_time: String,
 	pub ai_time: String,
 	pub processing_time: String,
 }
@@ -44,7 +44,7 @@ pub struct ReportEntry {
 pub struct ReportTotals {
 	pub total_cost: f64,
 	pub total_tool_calls: u32,
-	pub total_human_time_ms: u64,
+	pub total_task_time_ms: u64,
 	pub total_ai_time_ms: u64,
 	pub total_processing_time_ms: u64,
 	pub total_requests: u32,
@@ -54,6 +54,7 @@ pub struct ReportTotals {
 struct RequestContext {
 	pub user_request: String,
 	pub start_timestamp: u64,
+	pub end_timestamp: u64, // Last activity timestamp for this request
 	pub cost_before: f64,
 	pub cost_after: f64,
 	pub tools: HashMap<String, u32>,
@@ -90,6 +91,10 @@ impl SessionReport {
 		// Process entries and track cost/time
 		for log_entry in all_entries.iter() {
 			let log_type = log_entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
+			let entry_timestamp = log_entry
+				.get("timestamp")
+				.and_then(|t| t.as_u64())
+				.unwrap_or(0);
 
 			match log_type {
 				"STATS" => {
@@ -132,14 +137,10 @@ impl SessionReport {
 							.to_string()
 					};
 
-					let timestamp = log_entry
-						.get("timestamp")
-						.and_then(|t| t.as_u64())
-						.unwrap_or(0);
-
 					current_context = Some(RequestContext {
 						user_request: content,
-						start_timestamp: timestamp,
+						start_timestamp: entry_timestamp,
+						end_timestamp: entry_timestamp,
 						cost_before: last_total_cost,
 						cost_after: last_total_cost,
 						tools: HashMap::new(),
@@ -148,10 +149,6 @@ impl SessionReport {
 						tool_time_before: last_total_tool_time_ms,
 						tool_time_after: last_total_tool_time_ms,
 					});
-				}
-				"API_RESPONSE" => {
-					// API responses are now tracked via STATS entries for timing
-					// We don't need to extract timing here anymore
 				}
 				"TOOL_CALL" => {
 					// Track tool usage
@@ -162,10 +159,6 @@ impl SessionReport {
 						}
 					}
 				}
-				"TOOL_RESULT" => {
-					// Tool execution time is now tracked via STATS entries
-					// We don't need to extract timing here anymore
-				}
 				_ => {
 					// Check for any other entries that might contain session cost updates
 					if let Some(session_info) = log_entry.get("session_info") {
@@ -174,6 +167,15 @@ impl SessionReport {
 						{
 							last_total_cost = total_cost;
 						}
+					}
+				}
+			}
+
+			// Track end timestamp for task time: last activity during this request
+			if log_type != "USER" && log_type != "COMMAND" {
+				if let Some(ref mut ctx) = current_context {
+					if entry_timestamp > ctx.end_timestamp {
+						ctx.end_timestamp = entry_timestamp;
 					}
 				}
 			}
@@ -192,7 +194,7 @@ impl SessionReport {
 		let mut totals = ReportTotals {
 			total_cost: 0.0,
 			total_tool_calls: 0,
-			total_human_time_ms: 0,
+			total_task_time_ms: 0,
 			total_ai_time_ms: 0,
 			total_processing_time_ms: 0,
 			total_requests: 0,
@@ -209,17 +211,14 @@ impl SessionReport {
 			// Processing Time = Tool execution time delta from STATS entries
 			let processing_time_ms = ctx.tool_time_after.saturating_sub(ctx.tool_time_before);
 
-			// Calculate human time (time until next request or current time)
-			let human_time_ms = if i + 1 < contexts.len() {
-				// Time to next request
-				let next_ctx = &contexts[i + 1];
-				if next_ctx.start_timestamp > ctx.start_timestamp {
-					(next_ctx.start_timestamp - ctx.start_timestamp) * 1000 // Convert to ms
-				} else {
-					0
-				}
+			// Task time = wall-clock time from user input to last activity for this request
+			let task_time_ms = if ctx.end_timestamp > ctx.start_timestamp {
+				(ctx.end_timestamp - ctx.start_timestamp) * 1000 // Convert to ms
+			} else if i + 1 < contexts.len() {
+				// Fallback: no end_timestamp tracked (e.g. commands with no activity)
+				0
 			} else {
-				// Last request - calculate time from request to current time
+				// Last request still in progress — measure to now
 				let current_timestamp = std::time::SystemTime::now()
 					.duration_since(std::time::UNIX_EPOCH)
 					.unwrap_or_default()
@@ -234,7 +233,7 @@ impl SessionReport {
 
 			totals.total_cost += cost_delta;
 			totals.total_tool_calls += tool_calls;
-			totals.total_human_time_ms += human_time_ms;
+			totals.total_task_time_ms += task_time_ms;
 			totals.total_ai_time_ms += ai_time_ms;
 			totals.total_processing_time_ms += processing_time_ms;
 			totals.total_requests += 1;
@@ -248,16 +247,12 @@ impl SessionReport {
 				processing_time_ms
 			);
 
-			// Debug human time calculation
+			// Debug task time calculation
 			log_debug!(
-				"Human time calc: timestamp={}, next_timestamp={}, human_time_ms={}",
+				"Task time calc: start={}, end={}, task_time_ms={}",
 				ctx.start_timestamp,
-				if i + 1 < contexts.len() {
-					contexts[i + 1].start_timestamp
-				} else {
-					0
-				},
-				human_time_ms
+				ctx.end_timestamp,
+				task_time_ms
 			);
 
 			entries.push(ReportEntry {
@@ -265,7 +260,7 @@ impl SessionReport {
 				cost: format!("{:.5}", cost_delta),
 				tool_calls,
 				tools_used,
-				human_time: format_duration(human_time_ms),
+				task_time: format_duration(task_time_ms),
 				ai_time: format_duration(ai_time_ms),
 				processing_time: format_duration(processing_time_ms),
 			});
@@ -303,8 +298,8 @@ impl SessionReport {
 		let mut markdown = String::new();
 
 		// Table header
-		markdown.push_str("| User Request | Cost ($) | Tool Calls | Tools Used | Human Time | AI Time | Processing Time |\n");
-		markdown.push_str("|--------------|----------|------------|------------|------------|---------|----------------|\n");
+		markdown.push_str("| User Request | Cost ($) | Tool Calls | Tools Used | Task Time | AI Time | Processing Time |\n");
+		markdown.push_str("|--------------|----------|------------|------------|-----------|---------|----------------|\n");
 
 		// Table rows
 		for entry in &self.entries {
@@ -314,7 +309,7 @@ impl SessionReport {
 				entry.cost,
 				entry.tool_calls,
 				self.escape_markdown(&entry.tools_used),
-				entry.human_time,
+				entry.task_time,
 				entry.ai_time,
 				entry.processing_time
 			));
@@ -326,7 +321,7 @@ impl SessionReport {
 			self.totals.total_cost,
 			self.totals.total_tool_calls,
 			self.totals.total_tool_calls,
-			format_duration(self.totals.total_human_time_ms),
+			format_duration(self.totals.total_task_time_ms),
 			format_duration(self.totals.total_ai_time_ms),
 			format_duration(self.totals.total_processing_time_ms)
 		));
@@ -378,11 +373,11 @@ impl SessionReport {
 
 		// Summary
 		markdown_report.push_str(&format!(
-			"## 📈 Summary\n\n**{}** requests • **${:.5}** total cost • **{}** tool calls • **{}** human time • **{}** AI time • **{}** processing time\n",
+			"## 📈 Summary\n\n**{}** requests • **${:.5}** total cost • **{}** tool calls • **{}** task time • **{}** AI time • **{}** processing time\n",
 			self.totals.total_requests,
 			self.totals.total_cost,
 			self.totals.total_tool_calls,
-			format_duration(self.totals.total_human_time_ms),
+			format_duration(self.totals.total_task_time_ms),
 			format_duration(self.totals.total_ai_time_ms),
 			format_duration(self.totals.total_processing_time_ms)
 		));
@@ -409,14 +404,14 @@ impl SessionReport {
 				"cost": e.cost,
 				"tool_calls": e.tool_calls,
 				"tools_used": e.tools_used,
-				"human_time": e.human_time,
+				"task_time": e.task_time,
 				"ai_time": e.ai_time,
 				"processing_time": e.processing_time
 			})).collect::<Vec<_>>(),
 			"totals": {
 				"total_cost": self.totals.total_cost,
 				"total_tool_calls": self.totals.total_tool_calls,
-				"total_human_time_ms": self.totals.total_human_time_ms,
+				"total_task_time_ms": self.totals.total_task_time_ms,
 				"total_ai_time_ms": self.totals.total_ai_time_ms,
 				"total_processing_time_ms": self.totals.total_processing_time_ms,
 				"total_requests": self.totals.total_requests

@@ -194,6 +194,7 @@ pub async fn chat_completion_with_validation(
 		.to_octolib_params()
 		.await
 		.map_err(|e| anyhow::anyhow!("Failed to convert message parameters: {}", e))?;
+
 	let octolib_response = provider.chat_completion(octolib_params).await?;
 
 	// Convert response back to Octomind format
@@ -241,6 +242,7 @@ pub async fn chat_completion_with_provider(
 		.to_octolib_params()
 		.await
 		.map_err(|e| anyhow::anyhow!("Failed to convert message parameters: {}", e))?;
+
 	let octolib_response = provider.chat_completion(octolib_params).await?;
 
 	// Convert response back to Octomind format

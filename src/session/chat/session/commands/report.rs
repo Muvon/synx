@@ -35,7 +35,7 @@ pub fn handle_report(session: &ChatSession, _config: &Config) -> Result<CommandR
 							"cost": entry.cost,
 							"tool_calls": entry.tool_calls,
 							"tools_used": entry.tools_used,
-							"human_time": entry.human_time,
+							"task_time": entry.task_time,
 							"ai_time": entry.ai_time,
 							"processing_time": entry.processing_time
 						})
@@ -45,7 +45,7 @@ pub fn handle_report(session: &ChatSession, _config: &Config) -> Result<CommandR
 				let totals = serde_json::json!({
 					"total_cost": report.totals.total_cost,
 					"total_tool_calls": report.totals.total_tool_calls,
-					"total_human_time_ms": report.totals.total_human_time_ms,
+					"total_task_time_ms": report.totals.total_task_time_ms,
 					"total_ai_time_ms": report.totals.total_ai_time_ms,
 					"total_processing_time_ms": report.totals.total_processing_time_ms
 				});
