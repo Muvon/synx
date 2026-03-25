@@ -44,7 +44,7 @@ pub struct SkillMeta {
 /// Parse YAML frontmatter from a SKILL.md file.
 /// Frontmatter is delimited by `---` lines at the start of the file.
 /// Returns None if the file has no valid frontmatter or missing required fields.
-fn parse_skill_meta(content: &str) -> Option<SkillMeta> {
+pub(crate) fn parse_skill_meta(content: &str) -> Option<SkillMeta> {
 	let content = content.trim_start();
 	if !content.starts_with("---") {
 		return None;
@@ -102,7 +102,7 @@ fn parse_skill_meta(content: &str) -> Option<SkillMeta> {
 /// absolute paths. The AI uses `shell` / `view` to access them on demand.
 ///
 /// Returns an empty string when no resources are found.
-fn build_resource_catalog(skill_dir: &std::path::Path) -> String {
+pub(crate) fn build_resource_catalog(skill_dir: &std::path::Path) -> String {
 	let subdirs = ["scripts", "references", "assets"];
 
 	let mut sections: Vec<String> = Vec::new();

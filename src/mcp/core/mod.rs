@@ -25,6 +25,9 @@ pub mod skill;
 #[cfg(test)]
 mod plan_tests;
 
+#[cfg(test)]
+mod skill_tests;
+
 // Re-export main functionality
 pub use dynamic::execute_mcp_command;
 pub use dynamic_agents::execute_agent_tool_command;
