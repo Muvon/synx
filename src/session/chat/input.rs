@@ -388,7 +388,17 @@ pub fn read_user_input(
 				return Ok(InputResult::Exit);
 			}
 			Err(err) => {
-				println!("Error: {:?}", err);
+				let msg = format!("{err:?}");
+				// Terminal is broken/detached (e.g. another shell took over, resize event
+				// while no TTY, or crossterm cursor-position timeout). Looping would spam
+				// the same error endlessly — exit cleanly instead.
+				if msg.contains("cursor position could not be read")
+					|| msg.contains("not a terminal")
+					|| msg.contains("inappropriate ioctl")
+				{
+					return Ok(InputResult::Exit);
+				}
+				log_info!("Reedline error: {}", msg);
 				return Ok(InputResult::Text(String::new()));
 			}
 		}
