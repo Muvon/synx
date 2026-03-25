@@ -536,10 +536,51 @@ async fn handle_user_message(
 	let mut cancellation = SessionCancellation::new();
 	let operation_rx = cancellation.new_operation();
 
-	// Drain any completed async jobs / scheduled messages from the inbox
-	// before processing user input so the AI sees them on the next turn.
-	while let Some(inbox_msg) = crate::session::inbox::try_pop_inbox_message() {
-		chat_session.add_user_message(&inbox_msg.content)?;
+	// Process any inbox messages that arrived before this user message
+	// (background agents, scheduled entries, skills) — each gets its own
+	// full AI turn so the model actually responds to them, not just sees them
+	// silently prepended to the conversation.
+	{
+		// Flush due schedule entries first.
+		while let Some(entry) = crate::mcp::core::pop_due_entry() {
+			log_debug!(
+				"Schedule entry [{}] fired (pre-user, websocket): {}",
+				entry.id,
+				entry.description
+			);
+			crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
+				source: crate::session::inbox::InboxSource::Schedule {
+					id: entry.id.clone(),
+				},
+				content: entry.message,
+			});
+		}
+		while let Some(inbox_msg) = crate::session::inbox::try_pop_inbox_message() {
+			log_debug!(
+				"WebSocket pre-user: processing inbox message from {:?}",
+				inbox_msg.source
+			);
+			chat_session.add_user_message(&inbox_msg.content)?;
+			let op_rx = cancellation.new_operation();
+			prepare_for_api_call(&mut chat_session, &config_for_role, op_rx.clone()).await?;
+			let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+			let sink = WebSocketSink::new(tx);
+			let result = execute_api_call_and_process_response(
+				&mut chat_session,
+				&config_for_role,
+				role,
+				op_rx,
+				OutputMode::WebSocket,
+				sink,
+			)
+			.await;
+			while let Ok(msg) = rx.try_recv() {
+				send_message(ws_sender, &msg).await?;
+			}
+			if let Err(e) = result {
+				log_debug!("Error processing pre-user inbox message (websocket): {}", e);
+			}
+		}
 	}
 
 	// Process through layers if enabled (first message)
