@@ -180,6 +180,7 @@ fn find_all_skills() -> Vec<(SkillMeta, PathBuf)> {
 	};
 
 	let mut skills = Vec::new();
+	let mut seen_names = std::collections::HashSet::new();
 
 	for tap in &taps {
 		let skills_dir = match tap.skills_dir() {
@@ -213,7 +214,9 @@ fn find_all_skills() -> Vec<(SkillMeta, PathBuf)> {
 			};
 
 			if let Some(meta) = parse_skill_meta(&content) {
-				skills.push((meta, skill_dir));
+				if seen_names.insert(meta.name.clone()) {
+					skills.push((meta, skill_dir));
+				}
 			}
 		}
 	}
