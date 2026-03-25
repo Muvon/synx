@@ -208,33 +208,44 @@ async fn execute_tools_with_context(
 		let tool_call_clone = tool_call.clone(); // Clone for async move
 		let cancel_token_for_task = operation_cancelled.clone(); // Pass cancellation token
 
+		// Get session ID for task-local propagation
+		let session_id = context.session_name().to_string();
+
 		// Create the appropriate execution task based on context
 		let task = match context {
 			ToolExecutionContext::MainSession { .. } => {
 				tokio::spawn(async move {
-					let mut call_with_id = tool_call_clone.clone();
-					// CRITICAL: Use the original tool_id, don't change it
-					call_with_id.tool_id = tool_id_for_task.clone();
-					crate::mcp::execute_tool_call(
-						&call_with_id,
-						&config_clone,
-						cancel_token_for_task,
-					)
+					// Propagate session ID to spawned task for session-scoped state
+					crate::session::context::with_session_id(session_id, async move {
+						let mut call_with_id = tool_call_clone.clone();
+						// CRITICAL: Use the original tool_id, don't change it
+						call_with_id.tool_id = tool_id_for_task.clone();
+						crate::mcp::execute_tool_call(
+							&call_with_id,
+							&config_clone,
+							cancel_token_for_task,
+						)
+						.await
+					})
 					.await
 				})
 			}
 			ToolExecutionContext::Layer { layer_config, .. } => {
 				let layer_config_clone = (**layer_config).clone();
 				tokio::spawn(async move {
-					let mut call_with_id = tool_call_clone.clone();
-					// CRITICAL: Use the original tool_id, don't change it
-					call_with_id.tool_id = tool_id_for_task.clone();
-					crate::mcp::execute_layer_tool_call(
-						&call_with_id,
-						&config_clone,
-						&layer_config_clone,
-						cancel_token_for_task, // FIXED: Pass cancellation token
-					)
+					// Propagate session ID to spawned task for session-scoped state
+					crate::session::context::with_session_id(session_id, async move {
+						let mut call_with_id = tool_call_clone.clone();
+						// CRITICAL: Use the original tool_id, don't change it
+						call_with_id.tool_id = tool_id_for_task.clone();
+						crate::mcp::execute_layer_tool_call(
+							&call_with_id,
+							&config_clone,
+							&layer_config_clone,
+							cancel_token_for_task, // FIXED: Pass cancellation token
+						)
+						.await
+					})
 					.await
 				})
 			}
