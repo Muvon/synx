@@ -221,6 +221,22 @@ octomind run
 > ast_grep(pattern="fn $NAME($ARGS)", language="rust")
 ```
 
+### Background Agent Workflow
+
+```bash
+# Terminal 1: Start a long-running daemon
+octomind run --name watcher --daemon --format plain
+
+# Terminal 2: Send tasks to it anytime
+echo "watch for new PRs and review them" | octomind send --name watcher
+
+# Later, from a script:
+#!/bin/bash
+echo "check CI status for branch $BRANCH" | octomind send --name watcher
+
+# The daemon keeps running, processing each message in sequence
+```
+
 ### Session Commands
 
 Essential commands for session management:

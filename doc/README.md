@@ -120,6 +120,10 @@ octomind run                       # Developer session (full tools)
 octomind run assistant             # Chat-only session
 octomind run developer:rust        # Registry agent (fetches manifest)
 
+# Background agents (daemon mode)
+octomind run --name myagent --daemon --format plain   # Start daemon
+echo "task" | octomind send --name myagent              # Send message
+
 # Within sessions
 /help                             # Show available commands
 /info                             # Token usage and costs

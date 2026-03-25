@@ -188,6 +188,8 @@ Real-time cost tracking per session and per request. Know exactly what you're sp
 
 ## Works Everywhere — Plug Into Anything
 
+## Works Everywhere — Plug Into Anything
+
 Octomind isn't just an interactive terminal tool. It runs in every context you need:
 
 ```bash
@@ -196,6 +198,12 @@ octomind run developer:rust
 
 # Non-interactive — pipe tasks directly from scripts or CI/CD
 echo "review this PR for security issues" | octomind run --format jsonl
+
+# Daemon mode — long-running background agent
+octomind run --name myagent --daemon --format plain
+
+# Send messages to running daemon from anywhere
+echo "check the build status" | octomind send --name myagent
 
 # WebSocket server — connect IDE plugins, dashboards, automation
 octomind server --port 8080
@@ -208,11 +216,11 @@ octomind acp developer:rust
 |------|---------|
 | Interactive CLI | Daily development work |
 | `--format jsonl` pipe | CI/CD pipelines, shell scripts, automation |
+| `--daemon` + `send` | Background agents, continuous monitoring, long-running tasks |
 | WebSocket server | IDE plugins, web dashboards, external integrations |
 | ACP protocol | Multi-agent orchestration, being called by other agents |
 
 One binary. Every workflow.
-
 ---
 
 ## Quick Start

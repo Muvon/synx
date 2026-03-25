@@ -388,6 +388,38 @@ octomind run -r project_review
 octomind run developer -n analysis
 ```
 
+### Daemon Mode: Background Agents
+
+Octomind can run long-lived background agents that wait for messages from external sources:
+
+```bash
+# Start a daemon session (requires non-interactive mode)
+octomind run --name myagent --daemon --format plain
+
+# Send a message to the running daemon from another terminal or script
+echo "check the build status and report any failures" | octomind send --name myagent
+
+# The daemon stays running, processing messages as they arrive
+# Perfect for CI/CD integration, monitoring, or multi-agent coordination
+```
+
+**How it works:**
+1. `--daemon` flag keeps the session alive indefinitely, waiting for injected messages
+2. `octomind send --name <session>` delivers a message via Unix Domain Socket
+3. The daemon processes each message and returns to waiting state
+4. No TTY required — runs in background, controlled entirely via `send`
+
+**Use cases:**
+- **CI/CD integration**: Start a daemon at pipeline start, send tasks from various stages
+- **Continuous monitoring**: Daemon watches for issues, you send check-in messages
+- **Multi-agent coordination**: One agent runs as daemon, others send tasks to it
+- **Remote control**: Start daemon on server, send commands from local machine
+
+**Requirements:**
+- `--daemon` requires non-interactive mode (`--format` or piped stdin)
+- Interactive sessions (TTY) cannot use `--daemon`
+- The session must have a name (`--name`) for `send` to target it
+
 ### Session Commands
 
 Octomind provides 25 built-in commands for session management:
