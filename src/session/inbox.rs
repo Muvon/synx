@@ -45,6 +45,8 @@ pub enum InboxSource {
 	BackgroundAgent { name: String },
 	/// A `skill(use)` activation that needs its content injected.
 	Skill { name: String },
+	/// An external injection via `octomind inject` CLI command.
+	Inject,
 }
 
 /// A message waiting to be injected into the session as a user turn.

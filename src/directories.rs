@@ -81,6 +81,18 @@ pub fn get_sessions_dir() -> Result<PathBuf> {
 	Ok(sessions_dir)
 }
 
+/// Get the run directory path — holds per-session Unix socket and PID files.
+pub fn get_run_dir() -> Result<PathBuf> {
+	let data_dir = get_octomind_data_dir()?;
+	let run_dir = data_dir.join("run");
+
+	if !run_dir.exists() {
+		fs::create_dir_all(&run_dir)?;
+	}
+
+	Ok(run_dir)
+}
+
 /// Get the logs directory path
 pub fn get_logs_dir() -> Result<PathBuf> {
 	let data_dir = get_octomind_data_dir()?;
@@ -119,6 +131,7 @@ pub fn print_directory_info() -> Result<()> {
 	println!("  Sessions Dir: {}", get_sessions_dir()?.display());
 	println!("  Logs Dir:     {}", get_logs_dir()?.display());
 	println!("  Cache Dir:    {}", get_cache_dir()?.display());
+	println!("  Run Dir:      {}", get_run_dir()?.display());
 
 	Ok(())
 }

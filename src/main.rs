@@ -58,6 +58,9 @@ enum Commands {
 	/// Show all available placeholder variables and their values
 	Vars(commands::VarsArgs),
 
+	/// Inject a message into a running session by name.
+	Inject(commands::InjectArgs),
+
 	/// Generate shell completion scripts
 	Completion {
 		/// The shell to generate completion for
@@ -132,6 +135,7 @@ async fn run_with_cleanup(args: CliArgs, config: Config) -> Result<(), anyhow::E
 		Commands::Tap(tap_args) => commands::tap::execute(&tap_args)?,
 		Commands::Untap(untap_args) => commands::untap::execute(&untap_args)?,
 		Commands::Vars(vars_args) => commands::vars::execute(&vars_args, &config).await?,
+		Commands::Inject(inject_args) => commands::inject::execute(&inject_args).await?,
 		Commands::Completion { shell } => {
 			let mut app = CliArgs::command();
 			let name = app.get_name().to_string();

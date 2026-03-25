@@ -47,12 +47,18 @@ pub struct RunArgs {
 	#[arg(long, short = 'm', value_name = "MODEL")]
 	pub model: Option<String>,
 
+	/// Keep the session alive indefinitely, waiting for messages injected via `octomind inject`.
+	/// Implies non-interactive mode (requires --format).
+	#[arg(long)]
+	pub daemon: bool,
+
 	/// Restrict all filesystem writes to the current working directory
 	#[arg(long)]
 	pub sandbox: bool,
 }
 pub async fn execute(args: &RunArgs, config: &Config) -> Result<()> {
-	let is_interactive = args.format.is_none() && std::io::stdin().is_terminal();
+	// Daemon mode forces non-interactive (no TTY needed — waits for injected messages).
+	let is_interactive = !args.daemon && args.format.is_none() && std::io::stdin().is_terminal();
 
 	// Full startup: tap/dep resolution + MCP init under one spinner
 	let (run_config, role) =
@@ -65,13 +71,19 @@ pub async fn execute(args: &RunArgs, config: &Config) -> Result<()> {
 		resume: args.resume.clone(),
 		resume_recent: args.resume_recent,
 		model: args.model.clone(),
+		daemon: args.daemon,
 		..Default::default()
 	};
 
 	if is_interactive {
 		session::chat::run_interactive_session(&session_args, &run_config).await
 	} else {
-		let input = read_input()?;
+		// In daemon mode with no piped input, start with an empty message (just open the session).
+		let input = if args.daemon && std::io::stdin().is_terminal() {
+			String::new()
+		} else {
+			read_input()?
+		};
 		session::chat::run_interactive_session_with_input(&session_args, &run_config, &input).await
 	}
 }
