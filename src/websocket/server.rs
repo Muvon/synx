@@ -28,7 +28,7 @@ use crate::session::output::{OutputMode, WebSocketSink};
 use crate::{log_debug, log_error, log_info};
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -70,19 +70,17 @@ impl WebSocketServer {
 				Ok((stream, peer_addr)) => {
 					log_info!("Connection accepted from {}", peer_addr);
 
-					// Handle connection directly (sequential for simplicity)
-					// This avoids Send/Sync issues and is fine for initial implementation
-					if let Err(e) = handle_connection(
-						stream,
-						peer_addr,
-						Arc::clone(&self.config),
-						self.role.clone(),
-						Arc::clone(&sessions),
-					)
-					.await
-					{
-						log_error!("Connection handler failed for {}: {}", peer_addr, e);
-					}
+					let config = Arc::clone(&self.config);
+					let role = self.role.clone();
+					let sessions = Arc::clone(&sessions);
+
+					tokio::spawn(async move {
+						if let Err(e) =
+							handle_connection(stream, peer_addr, config, role, sessions).await
+						{
+							log_error!("Connection handler failed for {}: {}", peer_addr, e);
+						}
+					});
 				}
 				Err(e) => {
 					log_error!("Failed to accept connection: {}", e);
@@ -110,6 +108,9 @@ async fn handle_connection(
 	log_info!("WebSocket handshake completed for {}", peer_addr);
 
 	let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+
+	// Track session IDs used on this connection for cleanup on disconnect
+	let mut active_session_ids: HashSet<String> = HashSet::new();
 
 	// Send welcome message
 	let welcome = ServerMessage::status(
@@ -147,9 +148,15 @@ async fn handle_connection(
 				}
 
 				// Process the message
-				if let Err(e) =
-					process_client_message(client_msg, &mut ws_sender, &config, &role, &sessions)
-						.await
+				if let Err(e) = process_client_message(
+					client_msg,
+					&mut ws_sender,
+					&config,
+					&role,
+					&sessions,
+					&mut active_session_ids,
+				)
+				.await
 				{
 					log_error!("Message processing failed for {}: {}", peer_addr, e);
 					let error = ServerMessage::error(format!("Internal error: {}", e));
@@ -178,7 +185,16 @@ async fn handle_connection(
 		}
 	}
 
-	log_info!("Connection closed: {}", peer_addr);
+	// Clean up notification senders for sessions used on this connection.
+	// Sessions themselves persist (can be resumed on another connection).
+	for sid in &active_session_ids {
+		crate::session::context::clear_notification_sender_for_session(sid);
+	}
+	log_info!(
+		"Connection closed: {} (cleaned up {} session(s))",
+		peer_addr,
+		active_session_ids.len()
+	);
 	Ok(())
 }
 
@@ -192,16 +208,27 @@ async fn process_client_message(
 	config: &Config,
 	role: &str,
 	sessions: &Arc<Mutex<HashMap<String, ChatSession>>>,
+	active_session_ids: &mut HashSet<String>,
 ) -> Result<()> {
 	match client_msg {
 		ClientMessage::Session(msg) => {
-			handle_session_message(msg, ws_sender, config, role, sessions).await
+			handle_session_message(msg, ws_sender, config, role, sessions, active_session_ids).await
 		}
 		ClientMessage::Message(msg) => {
-			handle_user_message(msg, ws_sender, config, role, sessions).await
+			let session_id = msg.session_id.clone();
+			active_session_ids.insert(session_id.clone());
+			crate::session::context::with_session_id(session_id, async {
+				handle_user_message(msg, ws_sender, config, role, sessions).await
+			})
+			.await
 		}
 		ClientMessage::Command(msg) => {
-			handle_command_message(msg, ws_sender, config, role, sessions).await
+			let session_id = msg.session_id.clone();
+			active_session_ids.insert(session_id.clone());
+			crate::session::context::with_session_id(session_id, async {
+				handle_command_message(msg, ws_sender, config, role, sessions).await
+			})
+			.await
 		}
 	}
 }
@@ -217,6 +244,7 @@ async fn handle_session_message(
 	config: &Config,
 	role: &str,
 	sessions: &Arc<Mutex<HashMap<String, ChatSession>>>,
+	active_session_ids: &mut HashSet<String>,
 ) -> Result<()> {
 	log_debug!("Handling session message: session_id={:?}", msg.session_id);
 
@@ -290,6 +318,8 @@ async fn handle_session_message(
 		.await?;
 
 	let session_id = chat_session.session.info.name.clone();
+	active_session_ids.insert(session_id.clone());
+
 	let status_msg = if is_new {
 		format!("Session created: {}", session_id)
 	} else {

@@ -163,7 +163,7 @@ pub async fn initialize_servers_for_role(config: &crate::config::Config) -> Resu
 // Initialize servers with optional progress callback for UI updates
 pub async fn initialize_servers_for_role_with_callback(
 	config: &crate::config::Config,
-	progress_callback: Option<&dyn Fn(McpInitProgress)>,
+	progress_callback: Option<&(dyn Fn(McpInitProgress) + Send + Sync)>,
 ) -> Result<()> {
 	// The config passed here should be the merged config for the role
 	// config.mcp.servers already contains only the role's enabled servers
@@ -286,7 +286,7 @@ pub async fn initialize_mcp_for_role(role: &str, config: &crate::config::Config)
 pub async fn initialize_mcp_for_role_with_callback(
 	role: &str,
 	config: &crate::config::Config,
-	progress_callback: Option<&dyn Fn(McpInitProgress)>,
+	progress_callback: Option<&(dyn Fn(McpInitProgress) + Send + Sync)>,
 ) -> Result<()> {
 	let config_for_role = config.get_merged_config_for_role(role);
 	// Set session context (role + project) so MCP servers receive it during initialization
