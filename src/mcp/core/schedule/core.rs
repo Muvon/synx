@@ -42,9 +42,18 @@ fn get_store() -> Arc<Mutex<ScheduleStore>> {
 // Session-loop helpers (called from main_loop.rs)
 // ---------------------------------------------------------------------------
 
-/// Pop the earliest entry that is due right now. Called once per loop iteration.
-pub fn pop_due_entry() -> Option<ScheduleEntry> {
-	get_store().lock().unwrap().pop_due()
+/// Flush all due entries into the session inbox.  Call once per loop iteration
+/// so the inbox is the single source of truth for all injected messages.
+pub fn flush_due_to_inbox() {
+	let store = get_store();
+	while let Some(entry) = store.lock().unwrap().pop_due() {
+		crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
+			source: crate::session::inbox::InboxSource::Schedule {
+				id: entry.id.clone(),
+			},
+			content: entry.message,
+		});
+	}
 }
 
 /// Returns true if there are any pending scheduled entries.

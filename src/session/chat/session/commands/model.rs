@@ -30,13 +30,15 @@ pub fn handle_model(
 		let _system_model = config.get_effective_model();
 
 		// Build JSON output
-		return Ok(CommandResult::HandledWithOutput(CommandOutput::Model {
-			old_model: None,
-			new_model: session.model.clone(),
-			changed: false,
-			saved: None,
-			save_error: None,
-		}));
+		return Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Model {
+				old_model: None,
+				new_model: session.model.clone(),
+				changed: false,
+				saved: None,
+				save_error: None,
+			},
+		)));
 	}
 
 	// Change to a new model (runtime only)
@@ -59,21 +61,25 @@ pub fn handle_model(
 	let saved = match session.save() {
 		Ok(_) => Some(true),
 		Err(e) => {
-			return Ok(CommandResult::HandledWithOutput(CommandOutput::Model {
-				old_model: Some(old_model),
-				new_model,
-				changed: true,
-				saved: Some(false),
-				save_error: Some(e.to_string()),
-			}));
+			return Ok(CommandResult::HandledWithOutput(Box::new(
+				CommandOutput::Model {
+					old_model: Some(old_model),
+					new_model,
+					changed: true,
+					saved: Some(false),
+					save_error: Some(e.to_string()),
+				},
+			)));
 		}
 	};
 
-	Ok(CommandResult::HandledWithOutput(CommandOutput::Model {
-		old_model: Some(old_model),
-		new_model,
-		changed: true,
-		saved,
-		save_error: None,
-	}))
+	Ok(CommandResult::HandledWithOutput(Box::new(
+		CommandOutput::Model {
+			old_model: Some(old_model),
+			new_model,
+			changed: true,
+			saved,
+			save_error: None,
+		},
+	)))
 }

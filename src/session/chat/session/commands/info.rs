@@ -16,11 +16,10 @@
 
 use super::super::core::ChatSession;
 use super::{CommandOutput, CommandResult};
+use crate::config::Config;
 use anyhow::Result;
 
-pub fn handle_info(session: &ChatSession) -> Result<CommandResult> {
-	// Get session info - for now, extract key fields
-	// The full JSON is available via to_json() for WebSocket
+pub fn handle_info(session: &ChatSession, config: &Config) -> Result<CommandResult> {
 	let info = &session.session.info;
 
 	let tokens_used = info.input_tokens + info.output_tokens;
@@ -46,15 +45,29 @@ pub fn handle_info(session: &ChatSession) -> Result<CommandResult> {
 		None
 	};
 
-	Ok(CommandResult::HandledWithOutput(CommandOutput::Info {
-		session_name: info.name.clone(),
-		model: info.model.clone(),
-		role: session.role.clone(),
-		tokens_used,
-		tokens_cached: info.cache_read_tokens,
-		tokens_cache_write: info.cache_write_tokens,
-		total_cost: info.total_cost,
-		cache_savings,
-		compression_stats,
-	}))
+	// Collect cache marker stats
+	let cache_manager = crate::session::cache::CacheManager::new();
+	let cache_stats =
+		cache_manager.get_cache_statistics_with_config(&session.session, Some(config));
+
+	Ok(CommandResult::HandledWithOutput(Box::new(
+		CommandOutput::Info {
+			session_name: info.name.clone(),
+			model: info.model.clone(),
+			role: session.role.clone(),
+			tokens_input: info.input_tokens,
+			tokens_output: info.output_tokens,
+			tokens_used,
+			tokens_cached: info.cache_read_tokens,
+			tokens_cache_write: info.cache_write_tokens,
+			tokens_reasoning: info.reasoning_tokens,
+			total_cost: info.total_cost,
+			cache_savings,
+			compression_stats,
+			cache_markers_system: cache_stats.system_markers as u64,
+			cache_markers_tool: cache_stats.tool_markers as u64,
+			cache_markers_content: cache_stats.content_markers as u64,
+			cache_non_cached_tokens: cache_stats.current_non_cached_tokens,
+		},
+	)))
 }

@@ -14,7 +14,6 @@
 
 // Session command processing - refactored into separate modules
 
-mod cache;
 mod clear;
 mod context;
 mod copy;
@@ -60,12 +59,20 @@ pub enum CommandOutput {
 		session_name: String,
 		model: String,
 		role: String,
+		tokens_input: u64,
+		tokens_output: u64,
 		tokens_used: u64,
 		tokens_cached: u64,
 		tokens_cache_write: u64,
+		tokens_reasoning: u64,
 		total_cost: f64,
 		cache_savings: f64,
 		compression_stats: Option<crate::session::CompressionStats>,
+		// Cache marker stats (from CacheManager)
+		cache_markers_system: u64,
+		cache_markers_tool: u64,
+		cache_markers_content: u64,
+		cache_non_cached_tokens: u64,
 	},
 	Model {
 		old_model: Option<String>,
@@ -120,10 +127,6 @@ pub enum CommandOutput {
 		tokens_after: usize,
 		tokens_saved: usize,
 		summary: bool,
-	},
-	Cache {
-		cache_command: String,
-		data: serde_json::Value,
 	},
 	Context {
 		filter: String,
@@ -197,7 +200,7 @@ impl CommandOutput {
 	pub async fn display_cli(&mut self, session: &mut ChatSession, config: &Config) {
 		match self {
 			Self::Help { .. } => display::display_help(self, config),
-			Self::Info { .. } => session.display_session_info(),
+			Self::Info { .. } => display::display_info(self),
 			Self::Model { .. } => display::display_model(self),
 			Self::Role { .. } => display::display_role(self),
 			Self::Loglevel { .. } => display::display_loglevel(self),
@@ -225,7 +228,6 @@ impl CommandOutput {
 			Self::Plan { .. } => display::display_plan(self),
 			Self::Truncate { .. } => display::display_truncate(self),
 			Self::Summarize { .. } => display::display_summarize(self),
-			Self::Cache { .. } => display::display_cache(self),
 			Self::Context { .. } => display::display_context(self, session, config).await,
 			Self::Image { .. } => display::display_image(self),
 			Self::Video { .. } => display::display_video(self),
@@ -248,10 +250,10 @@ impl CommandOutput {
 // Command processing result
 #[derive(Debug)]
 pub enum CommandResult {
-	Handled,                          // Command was processed successfully, continue session
-	HandledWithOutput(CommandOutput), // Command was processed with typed output
-	Exit,                             // Exit the session
-	TreatAsUserInput,                 // This input should be treated as user input, not a command
+	Handled,                               // Command was processed successfully, continue session
+	HandledWithOutput(Box<CommandOutput>), // Command was processed with typed output
+	Exit,                                  // Exit the session
+	TreatAsUserInput,                      // This input should be treated as user input, not a command
 }
 
 // Process user commands
@@ -283,7 +285,7 @@ pub async fn process_command(
 		COPY_COMMAND => copy::handle_copy(&session.last_response),
 		CLEAR_COMMAND => clear::handle_clear(),
 		SAVE_COMMAND => save::handle_save(session),
-		INFO_COMMAND => info::handle_info(session),
+		INFO_COMMAND => info::handle_info(session, config),
 		REPORT_COMMAND => report::handle_report(session, config),
 
 		CONTEXT_COMMAND => context::handle_context(session, params),
@@ -295,7 +297,7 @@ pub async fn process_command(
 		}
 		TRUNCATE_COMMAND => truncate::handle_truncate(session, config, &current_role).await,
 		SUMMARIZE_COMMAND => summarize::handle_summarize(session, config).await,
-		CACHE_COMMAND => cache::handle_cache(session, config, params).await,
+		CACHE_COMMAND => info::handle_info(session, config),
 		LIST_COMMAND => list::handle_list(session, config, params),
 		MODEL_COMMAND => model::handle_model(session, config, params),
 		SESSION_COMMAND => session::handle_session(session, params),

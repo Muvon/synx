@@ -40,14 +40,16 @@ pub async fn handle_workflow(
 		crate::log_debug!("Workflows found: {}", available_workflows.len());
 		crate::log_debug!("Workflows config: {:?}", config.workflows);
 
-		return Ok(CommandResult::HandledWithOutput(CommandOutput::Workflow {
-			workflow_executed: String::new(),
-			data: serde_json::json!({
-				"action": "list",
-				"workflows": available_workflows,
-				"message": if available_workflows.is_empty() { "No workflows configured" } else { "Available workflows" }
-			}),
-		}));
+		return Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Workflow {
+				workflow_executed: String::new(),
+				data: serde_json::json!({
+					"action": "list",
+					"workflows": available_workflows,
+					"message": if available_workflows.is_empty() { "No workflows configured" } else { "Available workflows" }
+				}),
+			},
+		)));
 	}
 
 	let workflow_name = params[0];
@@ -56,15 +58,17 @@ pub async fn handle_workflow(
 	if !config.workflows.iter().any(|w| w.name == workflow_name) {
 		let available_workflows: Vec<String> =
 			config.workflows.iter().map(|w| w.name.clone()).collect();
-		return Ok(CommandResult::HandledWithOutput(CommandOutput::Workflow {
-			workflow_executed: workflow_name.to_string(),
-			data: serde_json::json!({
-				"action": "execute",
-				"success": false,
-				"error": format!("Workflow not found: {}", workflow_name),
-				"available_workflows": available_workflows
-			}),
-		}));
+		return Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Workflow {
+				workflow_executed: workflow_name.to_string(),
+				data: serde_json::json!({
+					"action": "execute",
+					"success": false,
+					"error": format!("Workflow not found: {}", workflow_name),
+					"available_workflows": available_workflows
+				}),
+			},
+		)));
 	}
 
 	// Get the input for the workflow
@@ -87,26 +91,30 @@ pub async fn handle_workflow(
 		Ok(should_continue) => {
 			if !should_continue {
 				// Spending threshold reached - instant decline for /workflow commands
-				return Ok(CommandResult::HandledWithOutput(CommandOutput::Workflow {
-					workflow_executed: workflow_name.to_string(),
-					data: serde_json::json!({
-						"action": "execute",
-						"success": false,
-						"error": "Workflow execution cancelled due to spending threshold."
-					}),
-				}));
+				return Ok(CommandResult::HandledWithOutput(Box::new(
+					CommandOutput::Workflow {
+						workflow_executed: workflow_name.to_string(),
+						data: serde_json::json!({
+							"action": "execute",
+							"success": false,
+							"error": "Workflow execution cancelled due to spending threshold."
+						}),
+					},
+				)));
 			}
 		}
 		Err(e) => {
 			// Error checking threshold, log warning and stop execution
-			return Ok(CommandResult::HandledWithOutput(CommandOutput::Workflow {
-				workflow_executed: workflow_name.to_string(),
-				data: serde_json::json!({
-					"action": "execute",
-					"success": false,
-					"error": format!("Error checking spending threshold: {}", e)
-				}),
-			}));
+			return Ok(CommandResult::HandledWithOutput(Box::new(
+				CommandOutput::Workflow {
+					workflow_executed: workflow_name.to_string(),
+					data: serde_json::json!({
+						"action": "execute",
+						"success": false,
+						"error": format!("Error checking spending threshold: {}", e)
+					}),
+				},
+			)));
 		}
 	}
 
@@ -115,26 +123,30 @@ pub async fn handle_workflow(
 		Ok(should_continue) => {
 			if !should_continue {
 				// Request spending threshold exceeded - stop execution
-				return Ok(CommandResult::HandledWithOutput(CommandOutput::Workflow {
-					workflow_executed: workflow_name.to_string(),
-					data: serde_json::json!({
-						"action": "execute",
-						"success": false,
-						"error": "Workflow execution cancelled due to request spending threshold."
-					}),
-				}));
+				return Ok(CommandResult::HandledWithOutput(Box::new(
+					CommandOutput::Workflow {
+						workflow_executed: workflow_name.to_string(),
+						data: serde_json::json!({
+							"action": "execute",
+							"success": false,
+							"error": "Workflow execution cancelled due to request spending threshold."
+						}),
+					},
+				)));
 			}
 		}
 		Err(e) => {
 			// Error checking request threshold, log warning and stop execution
-			return Ok(CommandResult::HandledWithOutput(CommandOutput::Workflow {
-				workflow_executed: workflow_name.to_string(),
-				data: serde_json::json!({
-					"action": "execute",
-					"success": false,
-					"error": format!("Error checking request spending threshold: {}", e)
-				}),
-			}));
+			return Ok(CommandResult::HandledWithOutput(Box::new(
+				CommandOutput::Workflow {
+					workflow_executed: workflow_name.to_string(),
+					data: serde_json::json!({
+						"action": "execute",
+						"success": false,
+						"error": format!("Error checking request spending threshold: {}", e)
+					}),
+				},
+			)));
 		}
 	}
 
@@ -159,23 +171,27 @@ pub async fn handle_workflow(
 		)
 		.await
 	{
-		Ok((result, progress)) => Ok(CommandResult::HandledWithOutput(CommandOutput::Workflow {
-			workflow_executed: workflow_name.to_string(),
-			data: serde_json::json!({
-				"action": "execute",
-				"success": true,
-				"result": result,
-				"progress": progress,
-				"workflow_description": workflow_description
-			}),
-		})),
-		Err(e) => Ok(CommandResult::HandledWithOutput(CommandOutput::Workflow {
-			workflow_executed: workflow_name.to_string(),
-			data: serde_json::json!({
-				"action": "execute",
-				"success": false,
-				"error": format!("Workflow execution failed: {}", e)
-			}),
-		})),
+		Ok((result, progress)) => Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Workflow {
+				workflow_executed: workflow_name.to_string(),
+				data: serde_json::json!({
+					"action": "execute",
+					"success": true,
+					"result": result,
+					"progress": progress,
+					"workflow_description": workflow_description
+				}),
+			},
+		))),
+		Err(e) => Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Workflow {
+				workflow_executed: workflow_name.to_string(),
+				data: serde_json::json!({
+					"action": "execute",
+					"success": false,
+					"error": format!("Workflow execution failed: {}", e)
+				}),
+			},
+		))),
 	}
 }

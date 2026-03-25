@@ -276,13 +276,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 		// Flush any due schedule entries into the inbox so all injection sources
 		// are unified — the loop only needs to drain the inbox from here on.
-		while let Some(entry) = crate::mcp::core::pop_due_entry() {
-			log_debug!("Schedule entry [{}] fired: {}", entry.id, entry.description);
-			crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
-				source: crate::session::inbox::InboxSource::Schedule { id: entry.id.clone() },
-				content: entry.message,
-			});
-		}
+		crate::mcp::core::flush_due_to_inbox();
 
 		// Pop the first pending inbox message (background agent, schedule, skill, /prompt).
 		// If one is ready, skip user input entirely and process it immediately.
@@ -343,13 +337,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 					}
 				} => {
 					// Pop the message that just arrived (or a schedule entry that fired).
-					while let Some(entry) = crate::mcp::core::pop_due_entry() {
-						log_debug!("Schedule entry [{}] fired at prompt: {}", entry.id, entry.description);
-						crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
-							source: crate::session::inbox::InboxSource::Schedule { id: entry.id.clone() },
-							content: entry.message,
-						});
-					}
+					crate::mcp::core::flush_due_to_inbox();
 					let msg = crate::session::inbox::try_pop_inbox_message()
 						.map(|m| m.content)
 						.unwrap_or_default();
@@ -1093,13 +1081,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	// All injection sources (schedule, background agents) push to the inbox — drain it here.
 	loop {
 		// Flush any due schedule entries into the inbox first.
-		while let Some(entry) = crate::mcp::core::pop_due_entry() {
-			log_debug!("Schedule entry [{}] fired (non-interactive): {}", entry.id, entry.description);
-			crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
-				source: crate::session::inbox::InboxSource::Schedule { id: entry.id.clone() },
-				content: entry.message,
-			});
-		}
+		crate::mcp::core::flush_due_to_inbox();
 
 		// Process all messages currently in the inbox.
 		while let Some(inbox_msg) = crate::session::inbox::try_pop_inbox_message() {

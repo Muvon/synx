@@ -542,19 +542,7 @@ async fn handle_user_message(
 	// silently prepended to the conversation.
 	{
 		// Flush due schedule entries first.
-		while let Some(entry) = crate::mcp::core::pop_due_entry() {
-			log_debug!(
-				"Schedule entry [{}] fired (pre-user, websocket): {}",
-				entry.id,
-				entry.description
-			);
-			crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
-				source: crate::session::inbox::InboxSource::Schedule {
-					id: entry.id.clone(),
-				},
-				content: entry.message,
-			});
-		}
+		crate::mcp::core::flush_due_to_inbox();
 		while let Some(inbox_msg) = crate::session::inbox::try_pop_inbox_message() {
 			log_debug!(
 				"WebSocket pre-user: processing inbox message from {:?}",
@@ -695,19 +683,7 @@ async fn handle_user_message(
 	// All injection sources push to the inbox — drain it here, same as non-interactive mode.
 	loop {
 		// Flush any due schedule entries into the inbox first.
-		while let Some(entry) = crate::mcp::core::pop_due_entry() {
-			log_debug!(
-				"Schedule entry [{}] fired (websocket): {}",
-				entry.id,
-				entry.description
-			);
-			crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
-				source: crate::session::inbox::InboxSource::Schedule {
-					id: entry.id.clone(),
-				},
-				content: entry.message,
-			});
-		}
+		crate::mcp::core::flush_due_to_inbox();
 
 		// Process all messages currently in the inbox.
 		while let Some(inbox_msg) = crate::session::inbox::try_pop_inbox_message() {

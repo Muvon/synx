@@ -34,19 +34,23 @@ pub async fn handle_summarize(session: &mut ChatSession, config: &Config) -> Res
 			let new_tokens = crate::session::estimate_session_tokens(&session.session.messages);
 			let tokens_saved = current_tokens.saturating_sub(new_tokens);
 
-			Ok(CommandResult::HandledWithOutput(CommandOutput::Summarize {
-				success: true,
-				tokens_before: current_tokens,
-				tokens_after: new_tokens,
-				tokens_saved,
-				summary: true,
-			}))
+			Ok(CommandResult::HandledWithOutput(Box::new(
+				CommandOutput::Summarize {
+					success: true,
+					tokens_before: current_tokens,
+					tokens_after: new_tokens,
+					tokens_saved,
+					summary: true,
+				},
+			)))
 		}
-		Err(e) => Ok(CommandResult::HandledWithOutput(CommandOutput::Error {
-			error: format!("Summarization failed: {}", e),
-			context: Some(serde_json::json!({
-				"tokens_before": current_tokens
-			})),
-		})),
+		Err(e) => Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Error {
+				error: format!("Summarization failed: {}", e),
+				context: Some(serde_json::json!({
+					"tokens_before": current_tokens
+				})),
+			},
+		))),
 	}
 }

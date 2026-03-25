@@ -20,15 +20,19 @@ use anyhow::Result;
 
 pub fn handle_save(session: &mut ChatSession) -> Result<CommandResult> {
 	match session.save() {
-		Ok(_) => Ok(CommandResult::HandledWithOutput(CommandOutput::Save {
-			success: true,
-			message: Some("Session saved successfully".to_string()),
-			session_id: Some(session.session.info.name.clone()),
-		})),
-		Err(e) => Ok(CommandResult::HandledWithOutput(CommandOutput::Save {
-			success: false,
-			message: Some(format!("Failed to save session: {}", e)),
-			session_id: None,
-		})),
+		Ok(_) => Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Save {
+				success: true,
+				message: Some("Session saved successfully".to_string()),
+				session_id: Some(session.session.info.name.clone()),
+			},
+		))),
+		Err(e) => Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Save {
+				success: false,
+				message: Some(format!("Failed to save session: {}", e)),
+				session_id: None,
+			},
+		))),
 	}
 }

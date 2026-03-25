@@ -51,9 +51,11 @@ pub fn handle_context(session: &ChatSession, params: &[&str]) -> Result<CommandR
 		})
 		.collect();
 
-	Ok(CommandResult::HandledWithOutput(CommandOutput::Context {
-		filter,
-		total_messages: session.session.messages.len(),
-		filtered_messages,
-	}))
+	Ok(CommandResult::HandledWithOutput(Box::new(
+		CommandOutput::Context {
+			filter,
+			total_messages: session.session.messages.len(),
+			filtered_messages,
+		},
+	)))
 }

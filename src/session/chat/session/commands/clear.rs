@@ -18,8 +18,10 @@ use super::{CommandOutput, CommandResult};
 use anyhow::Result;
 
 pub fn handle_clear() -> Result<CommandResult> {
-	Ok(CommandResult::HandledWithOutput(CommandOutput::Clear {
-		success: true,
-		message: "Screen cleared".to_string(),
-	}))
+	Ok(CommandResult::HandledWithOutput(Box::new(
+		CommandOutput::Clear {
+			success: true,
+			message: "Screen cleared".to_string(),
+		},
+	)))
 }

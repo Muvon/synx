@@ -212,18 +212,27 @@ async fn execute_config_agent(
 		let agent_name_owned = agent_config.name.clone();
 		let task_owned = task.to_string();
 		let workdir_owned = workdir.to_path_buf();
+		// Capture session ID before spawn — task-locals don't propagate across tokio::spawn
+		let session_id = crate::session::context::current_session_id();
 
 		// Spawn the async task
 		let handle = tokio::spawn(async move {
-			let output =
-				match run_acp_command(&command, &task_owned, &workdir_owned, cancel_rx).await {
-					Ok(text) => text,
-					Err(e) => format!("ERROR: {e:#}"),
-				};
-			mgr.release(CompletedJob {
-				agent_name: agent_name_owned,
-				output,
-			});
+			let run = async move {
+				let output =
+					match run_acp_command(&command, &task_owned, &workdir_owned, cancel_rx).await {
+						Ok(text) => text,
+						Err(e) => format!("ERROR: {e:#}"),
+					};
+				mgr.release(CompletedJob {
+					agent_name: agent_name_owned,
+					output,
+				});
+			};
+			if let Some(sid) = session_id {
+				crate::session::context::with_session_id(sid, run).await;
+			} else {
+				run.await;
+			}
 		});
 
 		// Register the job for potential cancellation
@@ -312,20 +321,29 @@ async fn execute_dynamic_agent(
 		let (cancel_tx, cancel_rx) = watch::channel(false);
 		let mgr = Arc::clone(&manager);
 		let agent_name = agent_config_owned.name.clone();
+		// Capture session ID before spawn — task-locals don't propagate across tokio::spawn
+		let session_id = crate::session::context::current_session_id();
 
 		let handle = tokio::spawn(async move {
-			let output = match run_dynamic_agent_in_process(
-				&agent_config_owned,
-				&task_owned,
-				&merged_config,
-				cancel_rx,
-			)
-			.await
-			{
-				Ok(text) => text,
-				Err(e) => format!("ERROR: {e:#}"),
+			let run = async move {
+				let output = match run_dynamic_agent_in_process(
+					&agent_config_owned,
+					&task_owned,
+					&merged_config,
+					cancel_rx,
+				)
+				.await
+				{
+					Ok(text) => text,
+					Err(e) => format!("ERROR: {e:#}"),
+				};
+				mgr.release(CompletedJob { agent_name, output });
 			};
-			mgr.release(CompletedJob { agent_name, output });
+			if let Some(sid) = session_id {
+				crate::session::context::with_session_id(sid, run).await;
+			} else {
+				run.await;
+			}
 		});
 
 		manager.register_job(JobHandle {

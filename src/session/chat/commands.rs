@@ -42,7 +42,7 @@ pub const PROMPT_COMMAND: &str = "/prompt";
 pub const PLAN_COMMAND: &str = "/plan";
 pub const WORKFLOW_COMMAND: &str = "/workflow";
 // List of all available commands for autocomplete
-pub const COMMANDS: [&str; 26] = [
+pub const COMMANDS: [&str; 25] = [
 	HELP_COMMAND,
 	HELP_COMMAND_ALT,
 	EXIT_COMMAND,
@@ -50,7 +50,6 @@ pub const COMMANDS: [&str; 26] = [
 	COPY_COMMAND,
 	CLEAR_COMMAND,
 	SAVE_COMMAND,
-	CACHE_COMMAND,
 	LIST_COMMAND,
 	SESSION_COMMAND,
 	INFO_COMMAND,

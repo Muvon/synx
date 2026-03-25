@@ -37,10 +37,6 @@ pub fn display_help(output: &CommandOutput, config: &Config) {
 		println!("{} - Clear the screen", CLEAR_COMMAND.cyan());
 		println!("{} - Save the session", SAVE_COMMAND.cyan());
 		println!(
-			"{} - Manage cache checkpoints: /cache [stats|clear|threshold]",
-			CACHE_COMMAND.cyan()
-		);
-		println!(
 			"{} [page] - List all available sessions with pagination (default: page 1)",
 			LIST_COMMAND.cyan()
 		);
@@ -390,174 +386,109 @@ pub fn display_summarize(output: &CommandOutput) {
 	}
 }
 
-pub fn display_cache(output: &CommandOutput) {
-	if let CommandOutput::Cache {
-		cache_command,
-		data,
+pub fn display_info(output: &CommandOutput) {
+	use crate::session::chat::session::utils::format_number;
+
+	if let CommandOutput::Info {
+		session_name,
+		model,
+		tokens_input,
+		tokens_output,
+		tokens_used,
+		tokens_cached,
+		tokens_cache_write,
+		tokens_reasoning,
+		total_cost,
+		compression_stats,
+		cache_markers_system,
+		cache_markers_tool,
+		cache_markers_content,
+		cache_non_cached_tokens,
+		..
 	} = output
 	{
-		match cache_command.as_str() {
-			"check_support" => {
-				println!("{}", "This model does not support caching.".bright_yellow());
-			}
-			"cache_next_message" => {
+		println!(
+			"{}",
+			"───────────── Session Information ─────────────".bright_cyan()
+		);
+		println!(
+			"{} {}",
+			"Session name:".yellow(),
+			session_name.bright_white()
+		);
+		println!("{} {}", "Main model:".yellow(), model.bright_white());
+
+		let total_tokens = tokens_used + tokens_cached + tokens_cache_write + tokens_reasoning;
+		println!(
+			"{} {}",
+			"Total tokens:".yellow(),
+			format_number(total_tokens).bright_white()
+		);
+		println!(
+			"{} {} input, {} output, {} cache read, {} cache write, {} reasoning",
+			"Breakdown:".yellow(),
+			format_number(*tokens_input).bright_blue(),
+			format_number(*tokens_output).bright_green(),
+			format_number(*tokens_cached).bright_magenta(),
+			format_number(*tokens_cache_write).bright_cyan(),
+			format_number(*tokens_reasoning).white(),
+		);
+		println!("{} ${:.5}", "Total cost:".yellow(), total_cost);
+
+		// Compression stats
+		if let Some(stats) = compression_stats {
+			println!();
+			println!(
+				"{}",
+				"───────────── Compression Statistics ─────────────".bright_cyan()
+			);
+			if stats.conversation_compressions > 0 {
 				println!(
-					"{}",
-					"The next user message will be marked for caching.".bright_green()
-				);
-				if let Some(stats) = data.get("statistics") {
-					// Format cache statistics
-					let system_markers = stats
-						.get("system_markers")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-					let tool_markers = stats
-						.get("tool_markers")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-					let content_markers = stats
-						.get("content_markers")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-					let total_cache_read = stats
-						.get("total_cache_read_tokens")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-					let total_cache_write = stats
-						.get("total_cache_write_tokens")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-
-					let current_non_cached = stats
-						.get("current_non_cached_tokens")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-
-					println!("\n{}", "Cache Statistics:".bright_cyan());
-					println!("  System markers: {}", system_markers);
-					println!("  Tool markers: {}", tool_markers);
-					println!("  Content markers: {}", content_markers);
-					println!("  Total cache read tokens: {}", total_cache_read);
-					println!("  Total cache write tokens: {}", total_cache_write);
-					println!("  Current non-cached tokens: {}", current_non_cached);
-				}
-			}
-			"stats" => {
-				if let Some(stats) = data.get("statistics") {
-					let system_markers = stats
-						.get("system_markers")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-					let tool_markers = stats
-						.get("tool_markers")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-					let content_markers = stats
-						.get("content_markers")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-					let total_cache_read = stats
-						.get("total_cache_read_tokens")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-					let total_cache_write = stats
-						.get("total_cache_write_tokens")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-
-					let current_non_cached = stats
-						.get("current_non_cached_tokens")
-						.and_then(|v| v.as_u64())
-						.unwrap_or(0);
-
-					println!("{}", "Cache Statistics:".bright_cyan());
-					println!("  System markers: {}", system_markers);
-					println!("  Tool markers: {}", tool_markers);
-					println!("  Content markers: {}", content_markers);
-					println!("  Total cache read tokens: {}", total_cache_read);
-					println!("  Total cache write tokens: {}", total_cache_write);
-					println!("  Current non-cached tokens: {}", current_non_cached);
-				}
-			}
-			"clear" => {
-				if let Some(cleared) = data.get("cleared_markers").and_then(|v| v.as_u64()) {
-					if cleared > 0 {
-						println!(
-							"{}",
-							format!("Cleared {} content cache markers", cleared).bright_green()
-						);
-					} else {
-						println!("{}", "No content cache markers to clear".bright_yellow());
-					}
-				}
-			}
-			"threshold" => {
-				if let Some(threshold) = data.get("cache_tokens_threshold").and_then(|v| v.as_u64())
-				{
-					if threshold > 0 {
-						println!(
-							"{}",
-							format!("Current auto-cache threshold: {} tokens", threshold)
-								.bright_cyan()
-						);
-						println!(
-							"{}",
-							format!(
-								"Auto-cache will trigger when non-cached tokens reach {} tokens",
-								threshold
-							)
-							.bright_blue()
-						);
-					} else {
-						println!(
-							"{}",
-							"Auto-cache is disabled (threshold set to 0)".bright_yellow()
-						);
-					}
-				}
-
-				if let Some(timeout) = data.get("cache_timeout_seconds").and_then(|v| v.as_u64()) {
-					if timeout > 0 {
-						let timeout_minutes = timeout / 60;
-						println!(
-							"{}",
-							format!(
-								"Time-based auto-cache: {} seconds ({} minutes)",
-								timeout, timeout_minutes
-							)
-							.bright_green()
-						);
-						println!(
-							"{}",
-							format!(
-								"Auto-cache will trigger if {} minutes pass since last checkpoint",
-								timeout_minutes
-							)
-							.bright_blue()
-						);
-					} else {
-						println!("{}", "Time-based auto-cache is disabled".bright_yellow());
-					}
-				}
-			}
-			"error" => {
-				println!("{}", "Invalid cache command. Usage:".bright_red());
-				println!(
-					"{}",
-					"  /cache - Add cache checkpoint at last user message".cyan()
-				);
-				println!(
-					"{}",
-					"  /cache stats - Show detailed cache statistics".cyan()
-				);
-				println!("{}", "  /cache clear - Clear content cache markers".cyan());
-				println!(
-					"{}",
-					"  /cache threshold - Show auto-cache threshold settings".cyan()
+					"{} {}",
+					"Conversation compressions:".yellow(),
+					format_number(stats.conversation_compressions as u64).bright_white()
 				);
 			}
-			_ => {}
+			println!(
+				"{} {}",
+				"Messages removed:".yellow(),
+				format_number(stats.total_messages_removed as u64).bright_green()
+			);
+			println!(
+				"{} {}",
+				"Tokens saved:".yellow(),
+				format_number(stats.total_tokens_saved).bright_green()
+			);
+			let avg_ratio = stats.avg_compression_ratio() * 100.0;
+			if avg_ratio > 0.0 {
+				println!("{} {:.1}%", "Avg compression:".yellow(), avg_ratio);
+			}
 		}
+
+		// Cache stats
+		println!();
+		println!(
+			"{}",
+			"───────────── Cache Statistics ─────────────".bright_cyan()
+		);
+		println!("{} {}", "System markers:".yellow(), cache_markers_system);
+		println!("{} {}", "Tool markers:".yellow(), cache_markers_tool);
+		println!("{} {}", "Content markers:".yellow(), cache_markers_content);
+		println!(
+			"{} {}",
+			"Cache read tokens:".yellow(),
+			format_number(*tokens_cached).bright_magenta()
+		);
+		println!(
+			"{} {}",
+			"Cache write tokens:".yellow(),
+			format_number(*tokens_cache_write).bright_cyan()
+		);
+		println!(
+			"{} {}",
+			"Non-cached tokens:".yellow(),
+			format_number(*cache_non_cached_tokens).bright_white()
+		);
 	}
 }
 

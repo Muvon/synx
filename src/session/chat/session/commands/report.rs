@@ -50,24 +50,27 @@ pub fn handle_report(session: &ChatSession, _config: &Config) -> Result<CommandR
 					"total_processing_time_ms": report.totals.total_processing_time_ms
 				});
 
-				Ok(CommandResult::HandledWithOutput(CommandOutput::Report {
-					entries,
-					totals,
-				}))
+				Ok(CommandResult::HandledWithOutput(Box::new(
+					CommandOutput::Report { entries, totals },
+				)))
 			}
-			Err(e) => Ok(CommandResult::HandledWithOutput(CommandOutput::Error {
-				error: format!("Failed to generate report: {}", e),
-				context: Some(serde_json::json!({
-					"hint": "Make sure the session log file exists and is readable."
-				})),
-			})),
+			Err(e) => Ok(CommandResult::HandledWithOutput(Box::new(
+				CommandOutput::Error {
+					error: format!("Failed to generate report: {}", e),
+					context: Some(serde_json::json!({
+						"hint": "Make sure the session log file exists and is readable."
+					})),
+				},
+			))),
 		}
 	} else {
-		Ok(CommandResult::HandledWithOutput(CommandOutput::Error {
-			error: "No session file available for report generation.".to_string(),
-			context: Some(serde_json::json!({
-				"hint": "Save the session first with /save command."
-			})),
-		}))
+		Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Error {
+				error: "No session file available for report generation.".to_string(),
+				context: Some(serde_json::json!({
+					"hint": "Save the session first with /save command."
+				})),
+			},
+		)))
 	}
 }

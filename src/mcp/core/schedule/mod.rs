@@ -16,6 +16,6 @@ pub mod core;
 pub mod storage;
 
 pub use core::{
-	execute_schedule_tool, get_schedule_function, has_pending_schedules, next_schedule_sleep,
-	pop_due_entry,
+	execute_schedule_tool, flush_due_to_inbox, get_schedule_function, has_pending_schedules,
+	next_schedule_sleep,
 };

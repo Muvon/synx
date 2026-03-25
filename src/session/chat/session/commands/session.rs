@@ -32,10 +32,12 @@ pub fn handle_session(session: &mut ChatSession, params: &[&str]) -> Result<Comm
 		// Set the session name to return
 		session.session.info.name = new_session_name.clone();
 
-		Ok(CommandResult::HandledWithOutput(CommandOutput::Session {
-			switched: true,
-			session_name: new_session_name,
-		}))
+		Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Session {
+				switched: true,
+				session_name: new_session_name,
+			},
+		)))
 	} else {
 		// Get the session name from the parameters
 		let new_session_name = params.join(" ");
@@ -49,10 +51,12 @@ pub fn handle_session(session: &mut ChatSession, params: &[&str]) -> Result<Comm
 				.unwrap_or("")
 				== new_session_name
 			{
-				return Ok(CommandResult::HandledWithOutput(CommandOutput::Session {
-					switched: false,
-					session_name: new_session_name,
-				}));
+				return Ok(CommandResult::HandledWithOutput(Box::new(
+					CommandOutput::Session {
+						switched: false,
+						session_name: new_session_name,
+					},
+				)));
 			}
 		}
 
@@ -60,9 +64,11 @@ pub fn handle_session(session: &mut ChatSession, params: &[&str]) -> Result<Comm
 		// We'll use a specific return code that tells the main loop to switch sessions
 		session.session.info.name = new_session_name.clone();
 
-		Ok(CommandResult::HandledWithOutput(CommandOutput::Session {
-			switched: true,
-			session_name: new_session_name,
-		}))
+		Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Session {
+				switched: true,
+				session_name: new_session_name,
+			},
+		)))
 	}
 }

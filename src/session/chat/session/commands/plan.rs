@@ -25,16 +25,20 @@ pub async fn handle_plan() -> Result<CommandResult> {
 				.await
 				.ok();
 
-			Ok(CommandResult::HandledWithOutput(CommandOutput::Plan {
-				has_plan: true,
-				plan: plan_json,
-				display: Some(plan_display),
-			}))
+			Ok(CommandResult::HandledWithOutput(Box::new(
+				CommandOutput::Plan {
+					has_plan: true,
+					plan: plan_json,
+					display: Some(plan_display),
+				},
+			)))
 		}
-		Err(e) => Ok(CommandResult::HandledWithOutput(CommandOutput::Plan {
-			has_plan: false,
-			plan: None,
-			display: Some(e.to_string()),
-		})),
+		Err(e) => Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Plan {
+				has_plan: false,
+				plan: None,
+				display: Some(e.to_string()),
+			},
+		))),
 	}
 }

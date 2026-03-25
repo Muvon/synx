@@ -29,15 +29,17 @@ pub async fn handle_role(
 		// Show current role and available roles
 		let available_roles: Vec<String> = config.roles.iter().map(|r| r.name.clone()).collect();
 
-		return Ok(CommandResult::HandledWithOutput(CommandOutput::Role {
-			old_role: None,
-			new_role: session.role.clone(),
-			current_role: Some(session.role.clone()),
-			available_roles: Some(available_roles),
-			changed: false,
-			saved: None,
-			save_error: None,
-		}));
+		return Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Role {
+				old_role: None,
+				new_role: session.role.clone(),
+				current_role: Some(session.role.clone()),
+				available_roles: Some(available_roles),
+				changed: false,
+				saved: None,
+				save_error: None,
+			},
+		)));
 	}
 
 	let new_role = params[0];
@@ -46,25 +48,29 @@ pub async fn handle_role(
 	if !config.roles.iter().any(|r| r.name == new_role) {
 		let available_roles: Vec<String> = config.roles.iter().map(|r| r.name.clone()).collect();
 
-		return Ok(CommandResult::HandledWithOutput(CommandOutput::Error {
-			error: format!("Invalid role: {}", new_role),
-			context: Some(serde_json::json!({
-				"available_roles": available_roles
-			})),
-		}));
+		return Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Error {
+				error: format!("Invalid role: {}", new_role),
+				context: Some(serde_json::json!({
+					"available_roles": available_roles
+				})),
+			},
+		)));
 	}
 
 	// Don't switch if already using this role
 	if session.role == new_role {
-		return Ok(CommandResult::HandledWithOutput(CommandOutput::Role {
-			old_role: None,
-			new_role: new_role.to_string(),
-			current_role: Some(new_role.to_string()),
-			available_roles: None,
-			changed: false,
-			saved: None,
-			save_error: None,
-		}));
+		return Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Role {
+				old_role: None,
+				new_role: new_role.to_string(),
+				current_role: Some(new_role.to_string()),
+				available_roles: None,
+				changed: false,
+				saved: None,
+				save_error: None,
+			},
+		)));
 	}
 
 	// Get new role configuration
@@ -88,12 +94,14 @@ pub async fn handle_role(
 		session.model = old_model;
 		session.temperature = config.get_role_config(&old_role).0.temperature;
 
-		return Ok(CommandResult::HandledWithOutput(CommandOutput::Error {
-			error: format!("Failed to switch role: {}", e),
-			context: Some(serde_json::json!({
-				"reverted": true
-			})),
-		}));
+		return Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Error {
+				error: format!("Failed to switch role: {}", e),
+				context: Some(serde_json::json!({
+					"reverted": true
+				})),
+			},
+		)));
 	}
 
 	// Log the role change for session restoration
@@ -112,13 +120,15 @@ pub async fn handle_role(
 		Err(e) => (Some(false), Some(e.to_string())),
 	};
 
-	Ok(CommandResult::HandledWithOutput(CommandOutput::Role {
-		old_role: Some(old_role),
-		new_role: new_role.to_string(),
-		current_role: None,
-		available_roles: None,
-		changed: true,
-		saved,
-		save_error,
-	}))
+	Ok(CommandResult::HandledWithOutput(Box::new(
+		CommandOutput::Role {
+			old_role: Some(old_role),
+			new_role: new_role.to_string(),
+			current_role: None,
+			available_roles: None,
+			changed: true,
+			saved,
+			save_error,
+		},
+	)))
 }

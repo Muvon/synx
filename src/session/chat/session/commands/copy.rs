@@ -20,26 +20,34 @@ use arboard::Clipboard;
 
 pub fn handle_copy(last_response: &str) -> Result<CommandResult> {
 	if last_response.is_empty() {
-		return Ok(CommandResult::HandledWithOutput(CommandOutput::Copy {
-			copied: false,
-			length: None,
-		}));
+		return Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Copy {
+				copied: false,
+				length: None,
+			},
+		)));
 	}
 
 	match Clipboard::new() {
 		Ok(mut clipboard) => match clipboard.set_text(last_response) {
-			Ok(_) => Ok(CommandResult::HandledWithOutput(CommandOutput::Copy {
-				copied: true,
-				length: Some(last_response.len()),
-			})),
-			Err(_) => Ok(CommandResult::HandledWithOutput(CommandOutput::Copy {
+			Ok(_) => Ok(CommandResult::HandledWithOutput(Box::new(
+				CommandOutput::Copy {
+					copied: true,
+					length: Some(last_response.len()),
+				},
+			))),
+			Err(_) => Ok(CommandResult::HandledWithOutput(Box::new(
+				CommandOutput::Copy {
+					copied: false,
+					length: None,
+				},
+			))),
+		},
+		Err(_) => Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Copy {
 				copied: false,
 				length: None,
-			})),
-		},
-		Err(_) => Ok(CommandResult::HandledWithOutput(CommandOutput::Copy {
-			copied: false,
-			length: None,
-		})),
+			},
+		))),
 	}
 }

@@ -32,10 +32,12 @@ pub fn handle_list(
 		match params[0].parse::<usize>() {
 			Ok(p) if p > 0 => p,
 			_ => {
-				return Ok(CommandResult::HandledWithOutput(CommandOutput::Error {
-					error: "Page number must be a positive integer".to_string(),
-					context: None,
-				}));
+				return Ok(CommandResult::HandledWithOutput(Box::new(
+					CommandOutput::Error {
+						error: "Page number must be a positive integer".to_string(),
+						context: None,
+					},
+				)));
 			}
 		}
 	} else {
@@ -45,13 +47,15 @@ pub fn handle_list(
 	match list_available_sessions() {
 		Ok(sessions) => {
 			if sessions.is_empty() {
-				return Ok(CommandResult::HandledWithOutput(CommandOutput::List {
-					sessions: vec![],
-					total_sessions: 0,
-					page,
-					total_pages: 0,
-					plain_text: Some("No sessions found.".to_string()),
-				}));
+				return Ok(CommandResult::HandledWithOutput(Box::new(
+					CommandOutput::List {
+						sessions: vec![],
+						total_sessions: 0,
+						page,
+						total_pages: 0,
+						plain_text: Some("No sessions found.".to_string()),
+					},
+				)));
 			}
 
 			// Pagination settings
@@ -60,13 +64,15 @@ pub fn handle_list(
 			let total_pages = total_sessions.div_ceil(SESSIONS_PER_PAGE);
 
 			if page > total_pages {
-				return Ok(CommandResult::HandledWithOutput(CommandOutput::Error {
-					error: format!("Page {} not found. Total pages: {}", page, total_pages),
-					context: Some(serde_json::json!({
-						"page": page,
-						"total_pages": total_pages
-					})),
-				}));
+				return Ok(CommandResult::HandledWithOutput(Box::new(
+					CommandOutput::Error {
+						error: format!("Page {} not found. Total pages: {}", page, total_pages),
+						context: Some(serde_json::json!({
+							"page": page,
+							"total_pages": total_pages
+						})),
+					},
+				)));
 			}
 
 			// Calculate pagination bounds
@@ -195,17 +201,21 @@ pub fn handle_list(
 			// Don't render here - let display_cli handle it to avoid double printing
 			// The markdown_content is passed to CommandOutput::List for display_cli to render
 
-			Ok(CommandResult::HandledWithOutput(CommandOutput::List {
-				sessions: sessions_json,
-				total_sessions,
-				page,
-				total_pages,
-				plain_text: Some(markdown_content),
-			}))
+			Ok(CommandResult::HandledWithOutput(Box::new(
+				CommandOutput::List {
+					sessions: sessions_json,
+					total_sessions,
+					page,
+					total_pages,
+					plain_text: Some(markdown_content),
+				},
+			)))
 		}
-		Err(e) => Ok(CommandResult::HandledWithOutput(CommandOutput::Error {
-			error: format!("Failed to list sessions: {}", e),
-			context: None,
-		})),
+		Err(e) => Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Error {
+				error: format!("Failed to list sessions: {}", e),
+				context: None,
+			},
+		))),
 	}
 }

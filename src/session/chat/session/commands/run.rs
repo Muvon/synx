@@ -32,14 +32,16 @@ pub async fn handle_run(
 		// Show available commands for this role
 		let available_commands = command_executor::list_available_commands(config, role);
 
-		return Ok(CommandResult::HandledWithOutput(CommandOutput::Run {
-			command_executed: String::new(),
-			data: serde_json::json!({
-				"action": "list",
-				"commands": available_commands,
-				"message": if available_commands.is_empty() { "No commands configured" } else { "Available commands" }
-			}),
-		}));
+		return Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Run {
+				command_executed: String::new(),
+				data: serde_json::json!({
+					"action": "list",
+					"commands": available_commands,
+					"message": if available_commands.is_empty() { "No commands configured" } else { "Available commands" }
+				}),
+			},
+		)));
 	}
 
 	let command_name = params[0];
@@ -47,15 +49,17 @@ pub async fn handle_run(
 	// Check if command exists
 	if !command_executor::command_exists(config, role, command_name) {
 		let available_commands = command_executor::list_available_commands(config, role);
-		return Ok(CommandResult::HandledWithOutput(CommandOutput::Run {
-			command_executed: command_name.to_string(),
-			data: serde_json::json!({
-				"action": "execute",
-				"success": false,
-				"error": format!("Command not found: {}", command_name),
-				"available_commands": available_commands
-			}),
-		}));
+		return Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Run {
+				command_executed: command_name.to_string(),
+				data: serde_json::json!({
+					"action": "execute",
+					"success": false,
+					"error": format!("Command not found: {}", command_name),
+					"available_commands": available_commands
+				}),
+			},
+		)));
 	}
 
 	// Get the input for the command layer
@@ -81,26 +85,30 @@ pub async fn handle_run(
 		Ok(should_continue) => {
 			if !should_continue {
 				// Spending threshold reached - instant decline for /run commands
-				return Ok(CommandResult::HandledWithOutput(CommandOutput::Run {
-					command_executed: command_name.to_string(),
-					data: serde_json::json!({
-						"action": "execute",
-						"success": false,
-						"error": "Command execution cancelled due to spending threshold."
-					}),
-				}));
+				return Ok(CommandResult::HandledWithOutput(Box::new(
+					CommandOutput::Run {
+						command_executed: command_name.to_string(),
+						data: serde_json::json!({
+							"action": "execute",
+							"success": false,
+							"error": "Command execution cancelled due to spending threshold."
+						}),
+					},
+				)));
 			}
 		}
 		Err(e) => {
 			// Error checking threshold, log warning and stop execution
-			return Ok(CommandResult::HandledWithOutput(CommandOutput::Run {
-				command_executed: command_name.to_string(),
-				data: serde_json::json!({
-					"action": "execute",
-					"success": false,
-					"error": format!("Error checking spending threshold: {}", e)
-				}),
-			}));
+			return Ok(CommandResult::HandledWithOutput(Box::new(
+				CommandOutput::Run {
+					command_executed: command_name.to_string(),
+					data: serde_json::json!({
+						"action": "execute",
+						"success": false,
+						"error": format!("Error checking spending threshold: {}", e)
+					}),
+				},
+			)));
 		}
 	}
 
@@ -109,26 +117,30 @@ pub async fn handle_run(
 		Ok(should_continue) => {
 			if !should_continue {
 				// Request spending threshold exceeded - stop execution
-				return Ok(CommandResult::HandledWithOutput(CommandOutput::Run {
-					command_executed: command_name.to_string(),
-					data: serde_json::json!({
-						"action": "execute",
-						"success": false,
-						"error": "Command execution cancelled due to request spending threshold."
-					}),
-				}));
+				return Ok(CommandResult::HandledWithOutput(Box::new(
+					CommandOutput::Run {
+						command_executed: command_name.to_string(),
+						data: serde_json::json!({
+							"action": "execute",
+							"success": false,
+							"error": "Command execution cancelled due to request spending threshold."
+						}),
+					},
+				)));
 			}
 		}
 		Err(e) => {
 			// Error checking request threshold, log warning and stop execution
-			return Ok(CommandResult::HandledWithOutput(CommandOutput::Run {
-				command_executed: command_name.to_string(),
-				data: serde_json::json!({
-					"action": "execute",
-					"success": false,
-					"error": format!("Error checking request spending threshold: {}", e)
-				}),
-			}));
+			return Ok(CommandResult::HandledWithOutput(Box::new(
+				CommandOutput::Run {
+					command_executed: command_name.to_string(),
+					data: serde_json::json!({
+						"action": "execute",
+						"success": false,
+						"error": format!("Error checking request spending threshold: {}", e)
+					}),
+				},
+			)));
 		}
 	}
 
@@ -143,21 +155,25 @@ pub async fn handle_run(
 	)
 	.await
 	{
-		Ok(result) => Ok(CommandResult::HandledWithOutput(CommandOutput::Run {
-			command_executed: command_name.to_string(),
-			data: serde_json::json!({
-				"action": "execute",
-				"success": true,
-				"result": result
-			}),
-		})),
-		Err(e) => Ok(CommandResult::HandledWithOutput(CommandOutput::Run {
-			command_executed: command_name.to_string(),
-			data: serde_json::json!({
-				"action": "execute",
-				"success": false,
-				"error": format!("Command execution failed: {}", e)
-			}),
-		})),
+		Ok(result) => Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Run {
+				command_executed: command_name.to_string(),
+				data: serde_json::json!({
+					"action": "execute",
+					"success": true,
+					"result": result
+				}),
+			},
+		))),
+		Err(e) => Ok(CommandResult::HandledWithOutput(Box::new(
+			CommandOutput::Run {
+				command_executed: command_name.to_string(),
+				data: serde_json::json!({
+					"action": "execute",
+					"success": false,
+					"error": format!("Command execution failed: {}", e)
+				}),
+			},
+		))),
 	}
 }
