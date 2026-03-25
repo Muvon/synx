@@ -46,10 +46,17 @@ async fn print_command_output(
 pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Config) -> Result<()> {
 	// Setup and initialize session using helper function
 
-	let (mut chat_session, config_for_role, role, mut first_message_processed) =
+	let (chat_session, config_for_role, role, first_message_processed) =
 		setup_and_initialize_session(args, config).await?;
+
+	// Set task-local session ID so all session-scoped state (skills, plans, schedules, etc.)
+	// uses the real session name — must happen after setup determines the actual name.
+	let session_id = chat_session.session.info.name.clone();
+	crate::session::context::with_session_id(session_id, async move {
 	// Get current directory for file operations - use thread-local if set (ACP/WebSocket), otherwise process cwd
 	let current_dir = crate::mcp::get_thread_working_directory();
+	let mut chat_session = chat_session;
+	let mut first_message_processed = first_message_processed;
 
 	// Setup system prompt and cache using helper function (BEFORE showing interactive prompts)
 	setup_system_prompt_and_cache(&mut chat_session, &config_for_role, &role, true).await?;
@@ -843,6 +850,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	}
 
 	Ok(())
+	}).await
 }
 
 // Run a single non-interactive session with provided input
@@ -853,8 +861,14 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 ) -> Result<()> {
 	// Setup and initialize session using helper function
 
-	let (mut chat_session, config_for_role, role, first_message_processed) =
+	let (chat_session, config_for_role, role, first_message_processed) =
 		setup_and_initialize_session(args, config).await?;
+
+	// Set task-local session ID so all session-scoped state (skills, plans, schedules, etc.)
+	// uses the real session name — must happen after setup determines the actual name.
+	let session_id = chat_session.session.info.name.clone();
+	crate::session::context::with_session_id(session_id, async move {
+	let mut chat_session = chat_session;
 
 	// Setup system prompt and cache using helper function (non-interactive mode)
 	setup_system_prompt_and_cache(&mut chat_session, &config_for_role, &role, false).await?;
@@ -1165,4 +1179,5 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	// Save session before exit
 	let _ = chat_session.save();
 	Ok(())
+	}).await
 }

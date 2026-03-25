@@ -68,19 +68,12 @@ pub async fn execute(args: &RunArgs, config: &Config) -> Result<()> {
 		..Default::default()
 	};
 
-	// Set task-local session ID so all session-scoped state (skills, plans, schedules, etc.)
-	// works in CLI mode the same way as in WebSocket mode.
-	let session_id = args.name.clone().unwrap_or_else(|| "cli".to_string());
-	octomind::session::context::with_session_id(session_id, async move {
-		if is_interactive {
-			session::chat::run_interactive_session(&session_args, &run_config).await
-		} else {
-			let input = read_input()?;
-			session::chat::run_interactive_session_with_input(&session_args, &run_config, &input)
-				.await
-		}
-	})
-	.await
+	if is_interactive {
+		session::chat::run_interactive_session(&session_args, &run_config).await
+	} else {
+		let input = read_input()?;
+		session::chat::run_interactive_session_with_input(&session_args, &run_config, &input).await
+	}
 }
 
 /// Read input from stdin (piped or interactive prompt is not our job here).
