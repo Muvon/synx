@@ -414,18 +414,25 @@ pub struct PersistResult {
 ///
 /// If the server is currently enabled, sets auto_bind to the current role.
 /// If the server is disabled, clears auto_bind (so it won't auto-activate).
+///
+/// Session-aware: uses session-scoped registry when in a session context,
+/// falls back to global singleton for CLI mode.
 pub fn persist_server(name: &str) -> Result<PersistResult> {
-	let (server, is_enabled) = {
-		let manager = get_manager();
-		let state = manager.read().unwrap();
-		let server = state
-			.servers
-			.get(name)
-			.cloned()
-			.ok_or_else(|| anyhow::anyhow!("Server '{}' not registered", name))?;
-		let is_enabled = *state.enabled.get(name).unwrap_or(&false);
-		(server, is_enabled)
-	};
+	let (server, is_enabled) =
+		if let Some(session_id) = crate::session::context::current_session_id() {
+			crate::session::context::get_dynamic_server_for_session(&session_id, name)
+				.ok_or_else(|| anyhow::anyhow!("Server '{}' not registered", name))?
+		} else {
+			let manager = get_manager();
+			let state = manager.read().unwrap();
+			let server = state
+				.servers
+				.get(name)
+				.cloned()
+				.ok_or_else(|| anyhow::anyhow!("Server '{}' not registered", name))?;
+			let is_enabled = *state.enabled.get(name).unwrap_or(&false);
+			(server, is_enabled)
+		};
 
 	// Determine auto_bind based on enabled state and current role
 	let auto_bind = if is_enabled {
@@ -987,8 +994,10 @@ async fn handle_unpersist(call: &crate::mcp::McpToolCall) -> Result<McpToolResul
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use serial_test::serial;
 
 	#[tokio::test]
+	#[serial]
 	async fn test_list_empty() {
 		clear_all();
 		let servers = list_servers();
@@ -1003,6 +1012,7 @@ mod tests {
 	}
 
 	#[tokio::test]
+	#[serial]
 	async fn test_persist_enabled_server_stores_auto_bind() {
 		clear_all();
 
@@ -1057,6 +1067,7 @@ mod tests {
 	}
 
 	#[tokio::test]
+	#[serial]
 	async fn test_persist_disabled_server_clears_auto_bind() {
 		clear_all();
 

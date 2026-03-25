@@ -763,6 +763,23 @@ pub fn get_dynamic_server_name_by_tool(session_id: &SessionId, tool_name: &str) 
 	None
 }
 
+/// Get a specific dynamic server config and its enabled status for a session.
+pub fn get_dynamic_server_for_session(
+	session_id: &SessionId,
+	server_name: &str,
+) -> Option<(McpServerConfig, bool)> {
+	let guard = DYNAMIC_SERVER_REGISTRIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some((servers, _, enabled)) = registry.get(session_id) {
+			if let Some(config) = servers.get(server_name) {
+				let is_enabled = *enabled.get(server_name).unwrap_or(&false);
+				return Some((config.clone(), is_enabled));
+			}
+		}
+	}
+	None
+}
+
 /// Clear all dynamic MCP servers for a session.
 pub fn clear_dynamic_servers_for_session(session_id: &SessionId) {
 	if let Ok(mut guard) = DYNAMIC_SERVER_REGISTRIES.write() {
