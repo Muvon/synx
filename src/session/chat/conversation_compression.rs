@@ -1276,11 +1276,11 @@ async fn apply_compression(
 	// Insert compressed summary (compressed block is always cached=true — new stable boundary)
 	session.insert_compressed_knowledge(start_idx, compressed_entry)?;
 
-	// NOTE: first_prompt_idx is NOT updated here. It always points to the first real
-	// user message — the permanent reference. find_compression_range uses
-	// first_prompt_idx-1 as the anchor so first_prompt_idx itself is always inside
-	// the drain range and gets folded into the new summary each cycle.
-	// This prevents both the original-task-preserved bug AND summary accumulation.
+	// NOTE: first_prompt_idx is NOT updated here. It always points to the
+	// original first user message — the permanent anchor. On subsequent
+	// compressions, the old compressed summary (at start_idx+1) will be in
+	// the drain range and get re-compressed into a fresh summary. This is
+	// correct: each compression cycle folds all prior context into one summary.
 
 	// Calculate metrics
 	let tokens_saved = tokens_before.saturating_sub(tokens_after);
@@ -1491,17 +1491,12 @@ fn find_compression_range(
 	let preserve_count = 4;
 	let mut compress_count = conversation_indices.len() - preserve_count;
 
-	// CRITICAL: Start boundary is the message BEFORE first_prompt_idx so that
-	// first_prompt_idx itself falls inside the drain range (start_idx+1..=end_idx).
-	// This means the first real user message and any prior compressed summary are
-	// always re-compressed into the new summary — no accumulation of orphaned summaries.
-	// The anchor (start_idx) is always the last bootstrap message (instructions/welcome/system),
-	// which is never compressible content and never has tool_calls.
+	// CRITICAL: Start boundary is first_prompt_idx (INCLUSIVE - never compress this or before)
 	// If not set (e.g. resumed sessions), detect bootstrap messages and skip past them.
 	// Bootstrap pattern: system[0] → assistant(welcome)[1] → optional user(instructions)[2]
 	// We must NEVER compress the system prompt, welcome message, or instructions file.
 	let mut start_idx = match first_prompt_idx {
-		Some(idx) => idx.saturating_sub(1),
+		Some(idx) => idx,
 		None => {
 			let mut idx = system_idx + 1;
 			// Skip welcome message (assistant immediately after system, WITHOUT tool_calls).
@@ -1761,12 +1756,6 @@ mod tests {
 
 	#[test]
 	fn start_boundary_must_not_orphan_initial_tool_sequence() {
-		// When the session starts with an assistant+tool sequence before the first user
-		// message (e.g. resumed sessions), first_prompt_idx points to the first real user.
-		// start_idx = first_prompt_idx - 1 = 2 (the tool message).
-		// Drain starts at idx 3 (the first user message).
-		// The assistant(tool_calls) at idx 1 and tool at idx 2 are BEFORE the drain range
-		// — they are preserved. No orphaning of the initial tool sequence.
 		let mut messages = Vec::new();
 		messages.push(msg("system")); // 0
 
@@ -1783,33 +1772,25 @@ mod tests {
 		messages.push(tool1);
 
 		// Add enough conversation messages to trigger compression.
-		messages.push(msg("user")); // 3  ← first_prompt_idx
+		messages.push(msg("user")); // 3
 		messages.push(msg("assistant")); // 4
 		messages.push(msg("user")); // 5
 		messages.push(msg("assistant")); // 6
 		messages.push(msg("user")); // 7
 		messages.push(msg("assistant")); // 8
-								   // first_prompt_idx=Some(3) → start_idx = 3 - 1 = 2 (the tool message)
+								   // Test with first_prompt_idx set to index 3 (first real user message)
 		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
 
-		// start_idx = 2 (tool message before first user). Drain = 3..=end_idx.
-		// assistant(call_1) at 1 and tool(call_1) at 2 are both BEFORE drain — preserved intact.
-		assert_eq!(start_idx, 2, "start_idx must be first_prompt_idx - 1 = 2");
-		assert!(
-			end_idx >= 3,
-			"drain must start at or after first user message"
+		// Safety requirement: compression starts AFTER first_prompt_idx (INCLUSIVE boundary)
+		// first_prompt_idx=3 means index 3 is PROTECTED, compression starts at 4
+		assert_eq!(
+			start_idx, 3,
+			"start_idx must equal first_prompt_idx (INCLUSIVE boundary)"
 		);
-
-		// Critical: the initial tool sequence [1,2] is entirely before the drain range
-		let drain_start = start_idx + 1; // = 3
 		assert!(
-			drain_start > 2,
-			"Drain must start after the tool result at idx 2 — initial tool sequence is preserved"
+			end_idx >= 4,
+			"range should start compressing only after first_prompt_idx"
 		);
-		// Verify: assistant at idx 1 still has its tool result at idx 2 (not in drain)
-		assert_eq!(messages[1].role, "assistant");
-		assert!(messages[1].tool_calls.is_some());
-		assert_eq!(messages[2].role, "tool"); // tool result preserved alongside its assistant
 	}
 
 	#[test]
@@ -1886,12 +1867,8 @@ mod tests {
 
 	#[test]
 	fn anchor_with_tool_calls_and_first_prompt_idx() {
-		// When first_prompt_idx=Some(2) points to an assistant with tool_calls,
-		// the new design sets start_idx = first_prompt_idx - 1 = 1 (the user before it).
-		// The anchor is now the user at idx 1 — no tool_calls, no advancement needed.
-		// The assistant(tool_calls) at idx 2 AND its tool result at idx 3 are BOTH inside
-		// the drain range (start_idx+1..=end_idx = 2..=end_idx), so they are removed
-		// together — no orphaning of tool_use blocks.
+		// When first_prompt_idx points to an assistant with tool_calls,
+		// start_idx must still advance past its tool results.
 		let mut messages = Vec::new();
 		messages.push(msg("system")); // 0
 		messages.push(msg("user")); // 1
@@ -1917,32 +1894,15 @@ mod tests {
 		messages.push(msg("user")); // 9
 		messages.push(msg("assistant")); // 10
 
-		// first_prompt_idx=Some(2) → start_idx = 2 - 1 = 1 (user, no tool_calls)
+		// first_prompt_idx=Some(2) points to the assistant with tool_calls
 		let (start_idx, end_idx) = find_compression_range(&messages, Some(2)).unwrap();
 
-		// Anchor is the user at idx 1 — drain starts at idx 2.
-		// assistant(call_X) at 2 and tool(call_X) at 3 are both in drain range → no orphaning.
-		assert_eq!(start_idx, 1, "start_idx must be first_prompt_idx - 1 = 1");
-		assert!(end_idx > start_idx, "must have valid range");
-
-		// Verify: no assistant with tool_calls is left as the anchor (which would orphan results)
+		// Must advance past tool result at index 3
 		assert!(
-			messages[start_idx].tool_calls.is_none(),
-			"Anchor at start_idx must NOT have tool_calls (would orphan tool results in drain)"
+			start_idx >= 4,
+			"start_idx must advance past tool results even with first_prompt_idx. Got {start_idx}"
 		);
-
-		// Verify: drain range contains both the assistant(tool_calls) and its tool result together
-		let drain = &messages[start_idx + 1..=end_idx];
-		let has_tc_assistant = drain
-			.iter()
-			.any(|m| m.role == "assistant" && m.tool_calls.is_some());
-		let has_tool_result = drain.iter().any(|m| m.role == "tool");
-		if has_tc_assistant {
-			assert!(
-				has_tool_result,
-				"If drain contains assistant(tool_calls), it must also contain the tool results"
-			);
-		}
+		assert!(end_idx > start_idx, "must have valid range");
 	}
 
 	// ============================================================================
@@ -2014,9 +1974,7 @@ mod tests {
 
 	#[test]
 	fn bootstrap_preserved_system_message_never_in_range() {
-		// Regardless of first_prompt_idx, system message must never be IN the drain range.
-		// Drain range = start_idx+1..=end_idx. System at idx 0 is safe as long as
-		// start_idx >= 0 (it is the anchor, never drained).
+		// Regardless of first_prompt_idx, system message must never be in compression range
 		let mut messages = Vec::new();
 		messages.push(msg("system")); // 0
 		messages.push(msg("assistant")); // 1
@@ -2025,28 +1983,15 @@ mod tests {
 			messages.push(msg("assistant"));
 		}
 
-		// Test with None: bootstrap detection skips welcome[1] and instructions[2]
-		let (start_none, end_none) = find_compression_range(&messages, None).unwrap();
-		// Drain is start_none+1..=end_none — system at 0 is never in this range
-		assert!(
-			start_none >= 1,
-			"with None, bootstrap detection must skip past system+welcome"
-		);
-		assert!(end_none > start_none, "must have valid range");
+		// Test with None
+		let (start_none, _end_none) = find_compression_range(&messages, None).unwrap();
+		assert!(start_none > 0, "system message at 0 must not be start_idx");
+		// Drain is start_idx+1..=end_idx, so system at 0 is safe if start_idx > 0
 
-		// Test with Some(1): start_idx = 1 - 1 = 0 (system is anchor, never drained)
+		// Test with Some(1)
 		let (start_some, end_some) = find_compression_range(&messages, Some(1)).unwrap();
-		// System at 0 is the anchor — drain starts at 1, system is never removed
-		assert_eq!(
-			start_some, 0,
-			"with Some(1), start_idx = first_prompt_idx - 1 = 0"
-		);
-		assert!(end_some > start_some, "must have valid range");
-		// The drain range start_some+1..=end_some starts at 1, never touches system at 0
-		assert!(
-			start_some + 1 > 0,
-			"drain range must start after system message — system is never compressed"
-		);
+		assert!(start_some >= 1, "start_idx must be >= 1");
+		assert!(end_some > start_some);
 	}
 
 	#[test]
@@ -2707,100 +2652,84 @@ mod tests {
 	}
 
 	// ============================================================================
-	// SEQUENTIAL COMPRESSION TESTS: Verify permanent anchor — first_prompt_idx never
-	// changes, and find_compression_range uses first_prompt_idx-1 as start_idx so
-	// the first user message and any prior summary are always in the drain range.
-	// This prevents both the original-task-preserved bug AND summary accumulation.
+	// SEQUENTIAL COMPRESSION TESTS: Verify first_prompt_idx stays at original
+	// user message and old compressed summaries get re-compressed (not orphaned)
 	// ============================================================================
 
 	#[test]
 	fn first_prompt_idx_never_changes_after_compression() {
 		// first_prompt_idx must always point to the original first user message.
 		// It is set once in main_loop.rs and never updated by compression.
-		// find_compression_range uses first_prompt_idx-1 as the anchor so
-		// first_prompt_idx itself is inside the drain range each cycle.
+		// This ensures the anchor is always the original user prompt.
 
 		let mut messages = Vec::new();
 		messages.push(msg("system")); // 0
-		messages.push(msg("user")); // 1 - first_prompt_idx (permanent)
+		messages.push(msg("user")); // 1 - first_prompt_idx
 		for i in 0..8 {
 			messages.push(msg(if i % 2 == 0 { "assistant" } else { "user" }));
 		} // 2-9
 
 		let first_prompt_idx = Some(1usize);
 
-		// First compression: start_idx = first_prompt_idx - 1 = 0 (system)
+		// First compression
 		let (start1, end1) = find_compression_range(&messages, first_prompt_idx).unwrap();
-		assert_eq!(start1, 0, "start_idx must be first_prompt_idx - 1 (system)");
+		assert_eq!(start1, 1, "start_idx must be first_prompt_idx");
 		assert!(end1 >= 4);
 
-		// Drain range is 1..=end1 — first user message IS in the drain range
-		assert!(
-			(start1 + 1..=end1).contains(&1),
-			"first user message must be in drain range"
-		);
-
-		// first_prompt_idx stays Some(1) — never updated by compression
+		// After compression, first_prompt_idx stays Some(1) — NOT updated.
+		// The compressed summary is inserted at index 2, but the anchor stays at 1.
 		assert_eq!(
 			first_prompt_idx,
 			Some(1),
 			"first_prompt_idx must not change"
 		);
 
-		// Simulate post-compression state: summary at 1, preserved tail after
+		// Simulate post-compression state: anchor at 1, summary at 2, preserved tail
 		let mut after = Vec::new();
-		after.push(msg("system")); // 0 - anchor (start_idx)
+		after.push(msg("system")); // 0
+		after.push(msg("user")); // 1 - anchor (kept)
 		let mut comp = msg("assistant");
 		comp.name = Some("plan_compression".to_string());
-		after.push(comp); // 1 - compressed summary (was first_prompt_idx, now summary)
+		after.push(comp); // 2 - compressed summary
 		for i in 0..8 {
 			after.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
-		} // 2-9
+		} // 3-10
 
-		// Second compression — first_prompt_idx is STILL Some(1), start_idx = 0
+		// Second compression — first_prompt_idx is STILL Some(1)
 		let (start2, end2) = find_compression_range(&after, first_prompt_idx).unwrap();
 		assert_eq!(
-			start2, 0,
-			"second compression also starts at system (anchor)"
+			start2, 1,
+			"second compression also starts at original anchor"
 		);
 		assert!(end2 >= 4);
-
-		// Old summary at 1 IS in the drain range — it gets re-compressed
-		assert!(
-			(start2 + 1..=end2).contains(&1),
-			"old summary must be in drain range (re-compressed, not orphaned)"
-		);
 	}
 
 	#[test]
 	fn old_compressed_summary_is_recompressed_on_next_cycle() {
-		// After first compression, summary sits at index 1 (first_prompt_idx position).
-		// On second compression with first_prompt_idx=Some(1), start_idx=0 (system),
-		// so the drain range is [1..=end_idx] — the old summary IS drained.
+		// After first compression, the summary sits at index 2 (role=assistant).
+		// On second compression with first_prompt_idx=Some(1), start_idx=1,
+		// so the drain range is [2..=end_idx] — the old summary IS drained.
 		// This is correct: each cycle folds all prior context into one fresh summary.
 
 		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0 - permanent anchor (start_idx)
+		messages.push(msg("system")); // 0
+		messages.push(msg("user")); // 1 - permanent anchor
 		let mut comp = msg("assistant");
 		comp.name = Some("plan_compression".to_string());
 		comp.content = "OLD_SUMMARY_V1".to_string();
-		messages.push(comp); // 1 - old compressed summary (at first_prompt_idx position)
+		messages.push(comp); // 2 - old compressed summary
 		for i in 0..8 {
 			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
-		} // 2-9
+		} // 3-10
 
-		// first_prompt_idx=Some(1): start_idx = 1 - 1 = 0
 		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
-		assert_eq!(
-			start_idx, 0,
-			"start at system (anchor before first_prompt_idx)"
-		);
+		assert_eq!(start_idx, 1, "start at permanent anchor");
 
-		// Drain range is start_idx+1..=end_idx = 1..=end_idx
-		// Index 1 (old summary) IS in the drain range — it gets re-compressed
+		// Drain range is start_idx+1..=end_idx = 2..=end_idx
+		// Index 2 (old summary) IS in the drain range — it gets re-compressed
 		let drain_range = (start_idx + 1)..=end_idx;
 		assert!(
-			drain_range.contains(&1),
+			drain_range.contains(&2),
 			"Old compressed summary must be IN the drain range (re-compressed)"
 		);
 
@@ -2819,31 +2748,32 @@ mod tests {
 		// After N compressions, there is always exactly ONE compressed summary
 		// between the anchor and the preserved tail — never accumulating orphans.
 		//
-		// Cycle 1: first_prompt_idx=1, start_idx=0, drain 1..=end → summary at 1
-		// Cycle 2: first_prompt_idx=1, start_idx=0, drain 1..=end → summary at 1 (replaces old)
-		// Cycle 3: first_prompt_idx=1, start_idx=0, drain 1..=end → summary at 1 (replaces old)
+		// Cycle 1: [sys, user(anchor), asst, user, asst, ...] → drain 2..=end → insert summary at 2
+		// Cycle 2: [sys, user(anchor), summary_v1, user, asst, ...] → drain 2..=end → insert summary at 2
+		// Cycle 3: [sys, user(anchor), summary_v2, user, asst, ...] → drain 2..=end → insert summary at 2
 		//
-		// Each cycle: anchor stays at 0 (system), old summary drained, new summary at 1.
+		// Each cycle: anchor stays at 1, old summary drained, new summary at 2.
 
-		// Simulate state after 2nd compression: summary at 1, new messages after
+		// Simulate state after 2nd compression
 		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0 - permanent anchor
+		messages.push(msg("system")); // 0
+		messages.push(msg("user")); // 1 - permanent anchor
 		let mut comp = msg("assistant");
 		comp.name = Some("plan_compression".to_string());
 		comp.content = "SUMMARY_V2".to_string();
-		messages.push(comp); // 1 - summary from 2nd compression
+		messages.push(comp); // 2 - summary from 2nd compression
 		for i in 0..8 {
 			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
-		} // 2-9
+		} // 3-10
 
-		// 3rd compression — still starts at anchor (0), first_prompt_idx=Some(1)
+		// 3rd compression — still starts at anchor (1)
 		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
-		assert_eq!(start_idx, 0, "always starts at system anchor");
+		assert_eq!(start_idx, 1);
 
-		// Old summary at 1 is in drain range — gets replaced, no accumulation
-		assert!((start_idx + 1..=end_idx).contains(&1));
+		// Old summary at 2 is in drain range
+		assert!((start_idx + 1..=end_idx).contains(&2));
 
-		// After drain + insert: anchor at 0, new summary at 1, preserved tail after
+		// After drain + insert: anchor at 1, new summary at 2, preserved tail after
 		// No accumulation of old summaries — always exactly one.
 	}
 
@@ -2930,20 +2860,15 @@ mod tests {
 
 	#[test]
 	fn messages_to_compress_excludes_anchor_message() {
+		// messages_to_compress must be start_idx+1..=end_idx (exclude anchor).
 		// The anchor at start_idx is KEPT by remove_messages_in_range.
-		// Drain range = start_idx+1..=end_idx (anchor excluded).
-		//
-		// With first_prompt_idx=Some(1), start_idx = 0 (system is anchor).
-		// The first user message at idx 1 IS in the drain range — this is intentional:
-		// it gets re-compressed into the new summary so old summaries don't accumulate.
-		// The system message at idx 0 (the anchor) is NEVER in the drain range.
 
 		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0 ← anchor (start_idx=0)
+		messages.push(msg("system")); // 0
 
-		let mut first_user = msg("user"); // 1
-		first_user.content = "FIRST_USER_CONTENT".to_string();
-		messages.push(first_user);
+		let mut anchor = msg("user"); // 1
+		anchor.content = "ANCHOR_CONTENT_MUST_NOT_BE_SUMMARIZED".to_string();
+		messages.push(anchor);
 
 		messages.push(msg("assistant")); // 2
 		messages.push(msg("user")); // 3
@@ -2954,24 +2879,21 @@ mod tests {
 		messages.push(msg("assistant")); // 8
 
 		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
-		assert_eq!(
-			start_idx, 0,
-			"start_idx must be first_prompt_idx - 1 = 0 (system)"
-		);
+		assert_eq!(start_idx, 1);
 
-		// The anchor (system at 0) is NOT in the drain range
-		let drain = &messages[start_idx + 1..=end_idx];
+		let correct = &messages[start_idx + 1..=end_idx];
+		let wrong = &messages[start_idx..=end_idx];
+
+		assert_eq!(correct.len(), end_idx - start_idx);
+		assert_eq!(wrong.len(), end_idx - start_idx + 1);
+
 		assert!(
-			!drain.iter().any(|m| m.role == "system"),
-			"System message (anchor) must NOT be in drain range"
+			!correct.iter().any(|m| m.content.contains("ANCHOR_CONTENT")),
+			"Anchor must NOT be in messages_to_compress"
 		);
-
-		// The drain range is non-empty and valid
-		assert!(!drain.is_empty(), "Drain range must not be empty");
-		assert_eq!(
-			drain.len(),
-			end_idx - start_idx,
-			"Drain length must be end_idx - start_idx"
+		assert!(
+			wrong.iter().any(|m| m.content.contains("ANCHOR_CONTENT")),
+			"Old bug: anchor WAS in messages_to_compress"
 		);
 	}
 
@@ -3057,30 +2979,27 @@ mod tests {
 	#[test]
 	fn test_multiple_compression_cycles_anchor_never_moves() {
 		// Simulate 3 compression cycles on a growing conversation.
-		// With first_prompt_idx=Some(1), start_idx = 0 (system is anchor) every cycle.
-		// After each cycle the old summary is at idx 1 (inside drain range) and gets
-		// folded into the next summary — no accumulation.
+		// After each cycle the old summary is at start_idx+1 and gets folded into the next.
+		// first_prompt_idx must always equal 1 (the original first user message).
 		//
 		// Layout after each cycle:
-		//   [0] system  ← anchor (start_idx always 0)
-		//   [1] assistant (compressed summary, replaces old range)
-		//   [2..] new messages
+		//   [0] system
+		//   [1] user (anchor = first_prompt_idx)
+		//   [2] assistant (compressed summary, replaces old range)
+		//   [3..] new messages
 
 		let first_prompt_idx = Some(1usize);
 
 		// ── Cycle 1: 12 messages ──────────────────────────────────────────────
 		let mut messages: Vec<Message> = Vec::new();
 		messages.push(msg("system")); // 0
-		messages.push(msg("user")); // 1 ← first user (inside drain range)
+		messages.push(msg("user")); // 1 ← anchor
 		for i in 0..10 {
 			messages.push(msg(if i % 2 == 0 { "assistant" } else { "user" }));
 		} // 2-11
 
 		let (s1, e1) = find_compression_range(&messages, first_prompt_idx).unwrap();
-		assert_eq!(
-			s1, 0,
-			"Cycle 1: start must be system anchor (0 = first_prompt_idx - 1)"
-		);
+		assert_eq!(s1, 1, "Cycle 1: start must be anchor (1)");
 		assert!(e1 > s1, "Cycle 1: end must be after anchor");
 		assert!(
 			e1 < messages.len(),
@@ -3100,7 +3019,7 @@ mod tests {
 		}
 
 		let (s2, e2) = find_compression_range(&messages, first_prompt_idx).unwrap();
-		assert_eq!(s2, 0, "Cycle 2: start must still be system anchor (0)");
+		assert_eq!(s2, 1, "Cycle 2: start must still be anchor (1)");
 		assert!(e2 > s2);
 
 		let drained2: Vec<Message> = messages.drain(s2 + 1..=e2).collect();
@@ -3115,10 +3034,10 @@ mod tests {
 		}
 
 		let (s3, e3) = find_compression_range(&messages, first_prompt_idx).unwrap();
-		assert_eq!(s3, 0, "Cycle 3: start must still be system anchor (0)");
+		assert_eq!(s3, 1, "Cycle 3: start must still be anchor (1)");
 		assert!(e3 > s3);
 
-		// After 3 cycles the anchor is always at index 0 — never drifts.
+		// After 3 cycles the anchor is always at index 1 — never drifts.
 		assert_eq!(s1, s2, "Anchor must not drift between cycles");
 		assert_eq!(s2, s3, "Anchor must not drift between cycles");
 	}
@@ -3366,8 +3285,8 @@ mod tests {
 			"Tool-loop session must produce valid compression range, got ({start_idx}, {end_idx})"
 		);
 
-		// start_idx = first_prompt_idx - 1 = 0 (system anchor)
-		assert_eq!(start_idx, 0, "start_idx must be first_prompt_idx - 1 = 0");
+		// start_idx = first_prompt_idx = 1 (user message is the anchor)
+		assert_eq!(start_idx, 1, "start_idx must be first_prompt_idx = 1");
 
 		// end_idx must be before the preserved zone
 		assert!(
