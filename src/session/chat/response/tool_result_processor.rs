@@ -508,26 +508,7 @@ pub async fn process_tool_results(
 
 // Extract tool content from tool result
 fn extract_tool_content(tool_result: &crate::mcp::McpToolResult) -> String {
-	if let Some(output) = tool_result.result.get("output") {
-		// Extract the "output" field which contains the actual tool result
-		if let Some(output_str) = output.as_str() {
-			output_str.to_string()
-		} else {
-			// If output is not a string, serialize it
-			serde_json::to_string(output).unwrap_or_default()
-		}
-	} else if tool_result.result.is_string() {
-		// If result is already a string, use it directly
-		tool_result.result.as_str().unwrap_or("").to_string()
-	} else {
-		// Fallback: look for common fields or use the whole result
-		if let Some(error) = tool_result.result.get("error") {
-			format!("Error: {}", error)
-		} else {
-			// Last resort: serialize the whole result
-			serde_json::to_string(&tool_result.result).unwrap_or_default()
-		}
-	}
+	tool_result.extract_content()
 }
 
 // Make follow-up API call with cancellation support

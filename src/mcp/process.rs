@@ -1341,31 +1341,27 @@ pub async fn get_stdin_server_functions(server: &McpServerConfig) -> Result<Vec<
 		return Ok(functions); // Return empty list on error
 	}
 
-	// Extract the tools list from the result
-	if let Some(result) = response.get("result") {
-		if let Some(tools) = result.get("tools").and_then(|t| t.as_array()) {
-			for tool in tools {
-				if let (Some(name), Some(description)) = (
-					tool.get("name").and_then(|n| n.as_str()),
-					tool.get("description").and_then(|d| d.as_str()),
-				) {
-					// Check if this tool is enabled
+	// Deserialize the result into ListToolsResult for typed tool extraction
+	if let Some(result_value) = response.get("result").cloned() {
+		match serde_json::from_value::<rmcp::model::ListToolsResult>(result_value) {
+			Ok(list_result) => {
+				for tool in list_result.tools {
+					let name = tool.name.as_ref();
 					if server.tools().is_empty()
 						|| crate::mcp::is_tool_allowed_by_patterns(name, server.tools())
 					{
-						// Get parameters from inputSchema if available, otherwise use empty object
-						let parameters = tool.get("inputSchema").cloned().unwrap_or(json!({}));
-
-						// Debug output
-						// println!("Tool details for {}: {}", name, tool);
-
+						let description = tool.description.as_deref().unwrap_or("").to_string();
+						let parameters = tool.schema_as_json_value();
 						functions.push(McpFunction {
 							name: name.to_string(),
-							description: description.to_string(),
+							description,
 							parameters,
 						});
 					}
 				}
+			}
+			Err(e) => {
+				crate::log_debug!("Failed to deserialize ListToolsResult: {}", e);
 			}
 		}
 	} else {
@@ -1443,18 +1439,20 @@ pub async fn execute_stdin_tool_call(
 		));
 	}
 
-	// Extract the result
-	let output = response
+	// Deserialize the result directly into CallToolResult
+	let call_tool_result = response
 		.get("result")
 		.cloned()
-		.unwrap_or(json!("No result"));
+		.and_then(|v| serde_json::from_value::<rmcp::model::CallToolResult>(v).ok())
+		.unwrap_or_else(|| {
+			rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text("No result")])
+		});
 
-	// Create MCP-compliant tool result
-	let tool_result = McpToolResult::success(
-		call.tool_name.clone(),
-		call.tool_id.clone(),
-		crate::mcp::extract_mcp_content(&output),
-	);
+	let tool_result = McpToolResult {
+		tool_name: call.tool_name.clone(),
+		tool_id: call.tool_id.clone(),
+		result: call_tool_result,
+	};
 
 	Ok(tool_result)
 }

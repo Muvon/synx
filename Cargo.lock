@@ -2010,6 +2010,7 @@ dependencies = [
  "reedline",
  "regex",
  "reqwest 0.13.2",
+ "rmcp",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -2549,6 +2550,23 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rmcp"
+version = "1.3.0"
+source = "git+https://github.com/modelcontextprotocol/rust-sdk?branch=main#ac749e3cedfc036a5b77960337669c7cf2338035"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
+ "pin-project-lite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

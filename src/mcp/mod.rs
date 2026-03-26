@@ -18,7 +18,7 @@ use crate::config::McpConnectionType;
 use crate::log_debug;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::io::{IsTerminal, Write};
 use std::sync::{Arc, RwLock};
 
@@ -41,8 +41,8 @@ pub mod utils;
 pub mod workdir;
 
 pub use utils::{
-	ensure_tool_call_ids, extract_mcp_content, guess_tool_category, parse_tool_calls,
-	tool_results_to_messages, ToolResponseMessage,
+	ensure_tool_call_ids, guess_tool_category, parse_tool_calls, tool_results_to_messages,
+	ToolResponseMessage,
 };
 pub use workdir::{
 	get_thread_original_working_directory, get_thread_working_directory,
@@ -75,7 +75,7 @@ pub struct McpToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolResult {
 	pub tool_name: String,
-	pub result: Value,
+	pub result: rmcp::model::CallToolResult,
 	#[serde(default)]
 	pub tool_id: String,
 }
@@ -87,15 +87,7 @@ impl McpToolResult {
 		Self {
 			tool_name,
 			tool_id,
-			result: json!({
-				"content": [
-					{
-						"type": "text",
-						"text": content
-					}
-				],
-				"isError": false
-			}),
+			result: rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(content)]),
 		}
 	}
 
@@ -109,16 +101,12 @@ impl McpToolResult {
 		Self {
 			tool_name,
 			tool_id,
-			result: json!({
-				"content": [
-					{
-						"type": "text",
-						"text": content
-					}
-				],
-				"isError": false,
-				"metadata": metadata
-			}),
+			result: {
+				let mut r =
+					rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(content)]);
+				r.structured_content = Some(metadata);
+				r
+			},
 		}
 	}
 
@@ -127,24 +115,43 @@ impl McpToolResult {
 		Self {
 			tool_name,
 			tool_id,
-			result: json!({
-				"content": [
-					{
-						"type": "text",
-						"text": error_message
-					}
-				],
-				"isError": true
-			}),
+			result: rmcp::model::CallToolResult::error(vec![rmcp::model::Content::text(
+				error_message,
+			)]),
 		}
 	}
 
 	// Check if this result represents an error based on MCP protocol
 	pub fn is_error(&self) -> bool {
-		self.result
-			.get("isError")
-			.and_then(|v| v.as_bool())
-			.unwrap_or(false)
+		self.result.is_error.unwrap_or(false)
+	}
+
+	// Extract plain text content from all text items in the result
+	pub fn extract_content(&self) -> String {
+		use rmcp::model::RawContent;
+		let main_content = self
+			.result
+			.content
+			.iter()
+			.filter_map(|item| match &item.raw {
+				RawContent::Text(t) => Some(t.text.as_str()),
+				_ => None,
+			})
+			.collect::<Vec<_>>()
+			.join("\n");
+
+		// Include structured_content (metadata) if present
+		if let Some(metadata) = &self.result.structured_content {
+			if !metadata.is_null() {
+				return format!(
+					"{}\n\n[Metadata: {}]",
+					main_content,
+					serde_json::to_string_pretty(metadata).unwrap_or_default()
+				);
+			}
+		}
+
+		main_content
 	}
 }
 
@@ -720,7 +727,7 @@ pub async fn handle_large_response(
 	mode: crate::session::output::OutputMode,
 ) -> Result<McpToolResult> {
 	// Check if result is large - warn user if it exceeds threshold
-	let estimated_tokens = crate::session::estimate_tokens(&format!("{}", result.result));
+	let estimated_tokens = crate::session::estimate_tokens(&result.extract_content());
 	if config.mcp_response_warning_threshold > 0
 		&& estimated_tokens > config.mcp_response_warning_threshold
 	{
@@ -870,7 +877,6 @@ pub async fn execute_tool_calls(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use serde_json::json;
 
 	#[test]
 	fn test_mcp_tool_result_is_error() {
@@ -893,45 +899,10 @@ mod tests {
 		);
 		assert!(error_result.is_error(), "Error result should be an error");
 
-		// Test result with missing isError field (should default to false)
-		let manual_result = McpToolResult {
-			tool_name: "test_tool".to_string(),
-			tool_id: "test_id".to_string(),
-			result: json!({
-				"content": [{"type": "text", "text": "No isError field"}]
-			}),
-		};
-		assert!(
-			!manual_result.is_error(),
-			"Result without isError field should default to false"
-		);
+		// Test extract_content on success
+		assert_eq!(success_result.extract_content(), "Success message");
 
-		// Test result with explicit isError: false
-		let explicit_false_result = McpToolResult {
-			tool_name: "test_tool".to_string(),
-			tool_id: "test_id".to_string(),
-			result: json!({
-				"content": [{"type": "text", "text": "Explicit false"}],
-				"isError": false
-			}),
-		};
-		assert!(
-			!explicit_false_result.is_error(),
-			"Result with isError: false should not be an error"
-		);
-
-		// Test result with explicit isError: true
-		let explicit_true_result = McpToolResult {
-			tool_name: "test_tool".to_string(),
-			tool_id: "test_id".to_string(),
-			result: json!({
-				"content": [{"type": "text", "text": "Explicit true"}],
-				"isError": true
-			}),
-		};
-		assert!(
-			explicit_true_result.is_error(),
-			"Result with isError: true should be an error"
-		);
+		// Test extract_content on error
+		assert_eq!(error_result.extract_content(), "Error message");
 	}
 }

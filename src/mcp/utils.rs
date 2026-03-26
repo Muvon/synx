@@ -15,52 +15,8 @@
 //! Pure utility functions for MCP tool handling.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::{McpToolCall, McpToolResult};
-
-// Extract content from MCP-compliant result
-pub fn extract_mcp_content(result: &Value) -> String {
-	// MCP Standard: Extract from content array
-	if let Some(content_array) = result.get("content") {
-		if let Some(content_items) = content_array.as_array() {
-			let main_content = content_items
-				.iter()
-				.filter_map(|item| {
-					if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-						item.get("text").and_then(|t| t.as_str())
-					} else {
-						None
-					}
-				})
-				.collect::<Vec<_>>()
-				.join("\n");
-
-			// For debug mode, also include metadata if available
-			if let Some(metadata) = result.get("metadata") {
-				if !metadata.is_null() {
-					return format!(
-						"{}\n\n[Metadata: {}]",
-						main_content,
-						serde_json::to_string_pretty(metadata).unwrap_or_default()
-					);
-				}
-			}
-
-			return main_content;
-		}
-	}
-
-	// Fallback: Check for old "output" field for backward compatibility
-	if let Some(output) = result.get("output") {
-		if let Some(output_str) = output.as_str() {
-			return output_str.to_string();
-		}
-	}
-
-	// Last resort: serialize the whole result for debugging
-	serde_json::to_string_pretty(result).unwrap_or_default()
-}
 
 // Guess the category of a tool based on its name
 pub fn guess_tool_category(tool_name: &str) -> &'static str {
@@ -116,7 +72,7 @@ pub fn tool_results_to_messages(
 	let mut messages = Vec::new();
 
 	for result in results {
-		let content_str = serde_json::to_string(&result.result).unwrap_or_default();
+		let content_str = result.extract_content();
 
 		// Apply global MCP response truncation
 		let (final_content, was_truncated) = crate::utils::truncation::truncate_mcp_response_global(

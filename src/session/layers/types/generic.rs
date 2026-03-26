@@ -436,15 +436,7 @@ impl GenericLayer {
 	> {
 		// Add each tool result as a tool message
 		for tool_result in &tool_results {
-			let raw_content = if let Some(output) = tool_result.result.get("output") {
-				if let Some(output_str) = output.as_str() {
-					output_str.to_string()
-				} else {
-					serde_json::to_string(output).unwrap_or_default()
-				}
-			} else {
-				serde_json::to_string(&tool_result.result).unwrap_or_default()
-			};
+			let raw_content = tool_result.extract_content();
 
 			// Apply global MCP response token truncation (same as main session path)
 			let (tool_content, was_truncated) =

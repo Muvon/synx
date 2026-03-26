@@ -1141,11 +1141,11 @@ secondary context.\n\n",
 		let mut task_num = 0u32;
 		let mut tasks_block = String::from("\n<tasks>\n");
 		let mut has_tasks = false;
-		for idx in (end_idx + 1)..all_messages.len() {
-			if all_messages[idx].role == "user" && !all_messages[idx].content.trim().is_empty() {
+		for (idx, msg) in all_messages.iter().enumerate().skip(end_idx + 1) {
+			if msg.role == "user" && !msg.content.trim().is_empty() {
 				task_num += 1;
 				let task_id = format!("task{}", task_num);
-				let content = all_messages[idx].content.trim();
+				let content = msg.content.trim();
 				// Truncate to ~200 chars for the prompt
 				let truncated = if content.len() > 200 {
 					let end = content
@@ -1341,8 +1341,9 @@ async fn ask_ai_decision_and_summary(
 }
 
 /// Apply compression by replacing message range with compressed summary
-/// Also parses and injects file contexts if provided by AI
+/// Also parses and injects file contexts if given by AI
 /// `done_tasks` + `task_map` enable draining completed-task message chains from the preserved zone.
+#[allow(clippy::too_many_arguments)]
 async fn apply_compression(
 	session: &mut ChatSession,
 	start_idx: usize,
@@ -3426,25 +3427,25 @@ mod tests {
 		// [9] assistant (tool_calls)
 		// [10] tool
 		// [11] assistant (response)
-		// [12] assistant (tool_calls)
 		// [13] tool
 		// [14] assistant (response)
-		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0
-		messages.push(msg("assistant")); // 1 welcome
-		messages.push(msg("user")); // 2 instructions
-		messages.push(msg("user")); // 3 first prompt (anchor)
-		messages.push(msg("assistant")); // 4 compressed summary
-		messages.push(msg("user")); // 5 second prompt ← MUST survive
-		messages.push(msg("assistant")); // 6 tool_calls
-		messages.push(msg("tool")); // 7
-		messages.push(msg("tool")); // 8
-		messages.push(msg("assistant")); // 9 tool_calls
-		messages.push(msg("tool")); // 10
-		messages.push(msg("assistant")); // 11 response
-		messages.push(msg("assistant")); // 12 tool_calls
-		messages.push(msg("tool")); // 13
-		messages.push(msg("assistant")); // 14 response
+		let messages = vec![
+			msg("system"),    // 0
+			msg("assistant"), // 1 welcome
+			msg("user"),      // 2 instructions
+			msg("user"),      // 3 first prompt (anchor)
+			msg("assistant"), // 4 compressed summary
+			msg("user"),      // 5 second prompt ← MUST survive
+			msg("assistant"), // 6 tool_calls
+			msg("tool"),      // 7
+			msg("tool"),      // 8
+			msg("assistant"), // 9 tool_calls
+			msg("tool"),      // 10
+			msg("assistant"), // 11 response
+			msg("assistant"), // 12 tool_calls
+			msg("tool"),      // 13
+			msg("assistant"), // 14 response
+		];
 
 		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
 
@@ -3909,8 +3910,8 @@ mod tests {
 			"assistant",
 		];
 		let mut task_num = 0u32;
-		for idx in (end_idx + 1)..roles.len() {
-			if roles[idx] == "user" {
+		for (idx, &role) in roles.iter().enumerate().skip(end_idx + 1) {
+			if role == "user" {
 				task_num += 1;
 				task_map.insert(format!("task{}", task_num), idx);
 			}
@@ -3967,8 +3968,8 @@ mod tests {
 		let task_idx = 5usize;
 
 		let mut chain = vec![task_idx];
-		for i in (task_idx + 1)..roles.len() {
-			if roles[i] == "user" {
+		for (i, &role) in roles.iter().enumerate().skip(task_idx + 1) {
+			if role == "user" {
 				break;
 			}
 			chain.push(i);
@@ -3995,8 +3996,8 @@ mod tests {
 		let task_idx = 3usize;
 
 		let mut chain = vec![task_idx];
-		for i in (task_idx + 1)..roles.len() {
-			if roles[i] == "user" {
+		for (i, &role) in roles.iter().enumerate().skip(task_idx + 1) {
+			if role == "user" {
 				break;
 			}
 			chain.push(i);

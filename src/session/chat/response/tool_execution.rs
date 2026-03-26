@@ -356,7 +356,7 @@ async fn execute_tools_with_context(
 						}
 
 						// Extract error message from MCP result
-						let error_content = crate::mcp::extract_mcp_content(&res.result);
+						let error_content = res.extract_content();
 						let error = anyhow::anyhow!("{}", error_content);
 
 						// Display as error, not success
@@ -445,42 +445,32 @@ async fn execute_tools_with_context(
 							}
 
 							// Add a detailed error result for loop detection
-							let loop_error_result = crate::mcp::McpToolResult {
-								tool_name: tool_name.clone(),
-								tool_id: tool_id.clone(),
-								result: serde_json::json!({
-									"error": format!("LOOP DETECTED: Tool '{}' failed {} consecutive times. Last error: {}. Please try a completely different approach or ask the user for guidance.", tool_name, error_tracker.max_consecutive_errors(), e),
-									"tool_name": tool_name,
-									"consecutive_failures": error_tracker.max_consecutive_errors(),
-									"loop_detected": true,
-									"suggestion": "Try a different tool or approach, or ask user for clarification"
-								}),
-							};
+							let loop_error_result = crate::mcp::McpToolResult::error(
+								tool_name.clone(),
+								tool_id.clone(),
+								format!("LOOP DETECTED: Tool '{}' failed {} consecutive times. Last error: {}. Please try a completely different approach or ask the user for guidance.", tool_name, error_tracker.max_consecutive_errors(), e),
+							);
 							tool_results.push(loop_error_result);
 						}
 					} else {
 						// Regular error - add normal error result
 						let error_result = if let Some(error_tracker) = context.error_tracker() {
-							crate::mcp::McpToolResult {
-								tool_name: tool_name.clone(),
-								tool_id: tool_id.clone(),
-								result: serde_json::json!({
-									"error": format!("Tool execution failed: {}", e),
-									"tool_name": tool_name,
-									"attempt": error_tracker.get_error_count(&tool_name),
-									"max_attempts": error_tracker.max_consecutive_errors()
-								}),
-							}
+							crate::mcp::McpToolResult::error(
+								tool_name.clone(),
+								tool_id.clone(),
+								format!(
+									"Tool execution failed (attempt {}/{}): {}",
+									error_tracker.get_error_count(&tool_name),
+									error_tracker.max_consecutive_errors(),
+									e
+								),
+							)
 						} else {
-							// For layers without error tracking
-							crate::mcp::McpToolResult {
-								tool_name: tool_name.clone(),
-								tool_id: tool_id.clone(),
-								result: serde_json::json!({
-									"error": format!("Tool execution failed: {}", e),
-									"tool_name": tool_name,
-								}),
-							}
+							crate::mcp::McpToolResult::error(
+								tool_name.clone(),
+								tool_id.clone(),
+								format!("Tool execution failed: {}", e),
+							)
 						};
 						tool_results.push(error_result);
 
@@ -521,15 +511,11 @@ async fn execute_tools_with_context(
 				}
 
 				// ALWAYS add error result for task failures too (unless it was a user decline)
-				let error_result = crate::mcp::McpToolResult {
-					tool_name: tool_name.clone(),
-					tool_id: tool_id.clone(),
-					result: serde_json::json!({
-						"error": format!("Internal task error: {}", e),
-						"tool_name": tool_name,
-						"error_type": "task_failure"
-					}),
-				};
+				let error_result = crate::mcp::McpToolResult::error(
+					tool_name.clone(),
+					tool_id.clone(),
+					format!("Internal task error: {}", e),
+				);
 				tool_results.push(error_result);
 			}
 		}
@@ -555,13 +541,16 @@ async fn handle_large_tool_results(
 	let results: Vec<crate::mcp::McpToolResult> = results
 		.into_iter()
 		.map(|mut result| {
-			let content_str = format!("{}", result.result);
+			let content_str = result.extract_content();
 			let (truncated, was_truncated) = crate::utils::truncation::truncate_mcp_response_global(
 				&content_str,
 				config.mcp_response_tokens_threshold,
 			);
 			if was_truncated {
-				result.result = serde_json::Value::String(truncated);
+				result.result =
+					rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(
+						truncated,
+					)]);
 			}
 			result
 		})
@@ -572,7 +561,7 @@ async fn handle_large_tool_results(
 	let mut total_tokens = 0;
 
 	for (index, result) in results.iter().enumerate() {
-		let estimated_tokens = crate::session::estimate_tokens(&format!("{}", result.result));
+		let estimated_tokens = crate::session::estimate_tokens(&result.extract_content());
 		if config.mcp_response_warning_threshold > 0
 			&& estimated_tokens > config.mcp_response_warning_threshold
 		{
@@ -786,7 +775,7 @@ async fn display_tool_success(
 		&& (config.get_log_level().is_info_enabled() || config.get_log_level().is_debug_enabled())
 	{
 		// Extract content using MCP protocol
-		let content = crate::mcp::extract_mcp_content(&res.result);
+		let content = res.extract_content();
 
 		if !content.trim().is_empty() {
 			if config.get_log_level().is_debug_enabled() {
@@ -804,7 +793,7 @@ async fn display_tool_success(
 	// Always show completion status with timing and token count
 	// Skip in JSONL mode (output goes through callback instead)
 	if !mode.should_suppress_cli_output() {
-		let content = crate::mcp::extract_mcp_content(&res.result);
+		let content = res.extract_content();
 		let token_count = crate::session::token_counter::estimate_tokens(&content);
 		let formatted_tokens = crate::session::chat::format_number(token_count as u64);
 
@@ -819,7 +808,7 @@ async fn display_tool_success(
 	let _ = crate::session::logger::log_tool_result(
 		session_name,
 		params.tool_id,
-		&res.result,
+		&serde_json::to_value(&res.result).unwrap_or_default(),
 		tool_time_ms,
 	);
 }

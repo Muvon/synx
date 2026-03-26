@@ -178,28 +178,22 @@ fn parse_tools_from_jsonrpc_response(
 		return Err(anyhow::anyhow!("JSON-RPC error from MCP server: {}", error));
 	}
 
-	// Extract tools from result.tools
-	if let Some(result) = response.get("result") {
-		if let Some(tools) = result.get("tools").and_then(|t| t.as_array()) {
-			for tool in tools {
-				if let (Some(name), Some(description)) = (
-					tool.get("name").and_then(|n| n.as_str()),
-					tool.get("description").and_then(|d| d.as_str()),
-				) {
-					// Check if this tool is enabled
-					if server.tools().is_empty()
-						|| crate::mcp::is_tool_allowed_by_patterns(name, server.tools())
-					{
-						// Get the parameters from the inputSchema field if available
-						let parameters = tool.get("inputSchema").cloned().unwrap_or(json!({}));
-
-						functions.push(McpFunction {
-							name: name.to_string(),
-							description: description.to_string(),
-							parameters,
-						});
-					}
-				}
+	// Deserialize result into ListToolsResult for typed tool extraction
+	if let Some(result_value) = response.get("result").cloned() {
+		let list_result = serde_json::from_value::<rmcp::model::ListToolsResult>(result_value)
+			.map_err(|e| anyhow::anyhow!("Failed to deserialize ListToolsResult: {}", e))?;
+		for tool in list_result.tools {
+			let name = tool.name.as_ref();
+			if server.tools().is_empty()
+				|| crate::mcp::is_tool_allowed_by_patterns(name, server.tools())
+			{
+				let description = tool.description.as_deref().unwrap_or("").to_string();
+				let parameters = tool.schema_as_json_value();
+				functions.push(McpFunction {
+					name: name.to_string(),
+					description,
+					parameters,
+				});
 			}
 		}
 	} else {
@@ -982,17 +976,6 @@ async fn execute_tool_with_cancellation(
 			// Parse JSON-RPC response (handles both plain JSON and SSE format)
 			let result = parse_http_response_body(response).await?;
 
-			// Extract result or error from the JSON-RPC response
-			let output = if let Some(error) = result.get("error") {
-				json!({
-					"error": true,
-					"success": false,
-					"message": error.get("message").and_then(|m| m.as_str()).unwrap_or("Server error")
-				})
-			} else {
-				result.get("result").cloned().unwrap_or(json!("No result"))
-			};
-
 			// Create MCP-compliant tool result - check if external server returned an error
 			let tool_result = if result.get("error").is_some() {
 				// External server returned an error - create error result
@@ -1007,12 +990,21 @@ async fn execute_tool_with_cancellation(
 					error_message.to_string(),
 				)
 			} else {
-				// External server returned success
-				McpToolResult::success(
-					tool_name.clone(),
-					call.tool_id.clone(),
-					crate::mcp::extract_mcp_content(&output),
+				// External server returned success — deserialize CallToolResult directly
+				let output = result.get("result").cloned().unwrap_or_default();
+				let call_tool_result = serde_json::from_value::<rmcp::model::CallToolResult>(
+					output,
 				)
+				.unwrap_or_else(|_| {
+					rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(
+						"No result",
+					)])
+				});
+				McpToolResult {
+					tool_name: tool_name.clone(),
+					tool_id: call.tool_id.clone(),
+					result: call_tool_result,
+				}
 			};
 
 			Ok(tool_result)

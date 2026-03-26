@@ -473,12 +473,8 @@ pub async fn process_response<S: OutputSink>(
 				// Emit tool results through sink (WebSocket/JSONL)
 				let session_id = params.chat_session.session.info.name.clone();
 				for tool_result in &tool_results {
-					let actual_content = crate::mcp::extract_mcp_content(&tool_result.result);
-					let success = !tool_result
-						.result
-						.get("isError")
-						.and_then(|v| v.as_bool())
-						.unwrap_or(false);
+					let actual_content = tool_result.extract_content();
+					let success = !tool_result.is_error();
 					let tool_msg = ServerMessage::ToolResult(ToolResultPayload {
 						tool: tool_result.tool_name.clone(),
 						tool_id: tool_result.tool_id.clone(),

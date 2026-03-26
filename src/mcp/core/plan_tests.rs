@@ -21,7 +21,7 @@
 #[cfg(test)]
 mod tests {
 	use crate::mcp::core::plan::{clear_plan_data, execute_plan};
-	use crate::mcp::{extract_mcp_content, McpToolCall};
+	use crate::mcp::McpToolCall;
 	use serde_json::json;
 	use serial_test::serial;
 
@@ -64,10 +64,9 @@ mod tests {
 		);
 		let result = execute_plan(&call).await.unwrap();
 
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(false));
+		assert!(!result.is_error());
 
-		let content = extract_mcp_content(&result.result);
+		let content = result.extract_content();
 		assert!(content.contains("Test Plan"));
 		assert!(content.contains("Task 1"));
 		assert!(content.contains("Task 2"));
@@ -91,9 +90,11 @@ mod tests {
 			})),
 		);
 		let result = execute_plan(&call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(true));
-		assert!(extract_mcp_content(&result.result).contains("Missing required parameter 'tasks'"));
+
+		assert!(result.is_error());
+		assert!(result
+			.extract_content()
+			.contains("Missing required parameter 'tasks'"));
 
 		// Test empty tasks array
 		let call = create_plan_call(
@@ -104,9 +105,11 @@ mod tests {
 			})),
 		);
 		let result = execute_plan(&call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(true));
-		assert!(extract_mcp_content(&result.result).contains("Tasks array cannot be empty"));
+
+		assert!(result.is_error());
+		assert!(result
+			.extract_content()
+			.contains("Tasks array cannot be empty"));
 
 		// Test task missing title field
 		let call = create_plan_call(
@@ -117,9 +120,11 @@ mod tests {
 			})),
 		);
 		let result = execute_plan(&call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(true));
-		assert!(extract_mcp_content(&result.result).contains("missing required 'title' field"));
+
+		assert!(result.is_error());
+		assert!(result
+			.extract_content()
+			.contains("missing required 'title' field"));
 
 		// Test task missing description field
 		let call = create_plan_call(
@@ -130,11 +135,11 @@ mod tests {
 			})),
 		);
 		let result = execute_plan(&call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(true));
-		assert!(
-			extract_mcp_content(&result.result).contains("missing required 'description' field")
-		);
+
+		assert!(result.is_error());
+		assert!(result
+			.extract_content()
+			.contains("missing required 'description' field"));
 	}
 
 	#[serial]
@@ -162,16 +167,18 @@ mod tests {
 			})),
 		);
 		let result = execute_plan(&step_call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(false));
-		assert!(extract_mcp_content(&result.result).contains("Step details added to Task"));
+
+		assert!(!result.is_error());
+		assert!(result
+			.extract_content()
+			.contains("Step details added to Task"));
 
 		// Test getting step details (no content parameter)
 		let get_call = create_plan_call("step", None);
 		let result = execute_plan(&get_call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(false));
-		let content = extract_mcp_content(&result.result);
+
+		assert!(!result.is_error());
+		let content = result.extract_content();
 		assert!(content.contains("CURRENT TASK"));
 		assert!(content.contains("Working on authentication logic"));
 
@@ -183,9 +190,11 @@ mod tests {
 			})),
 		);
 		let result = execute_plan(&empty_call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(true));
-		assert!(extract_mcp_content(&result.result).contains("Content parameter cannot be empty"));
+
+		assert!(result.is_error());
+		assert!(result
+			.extract_content()
+			.contains("Content parameter cannot be empty"));
 
 		// Cleanup for test isolation
 		let _ = clear_plan_data().await;
@@ -222,10 +231,10 @@ mod tests {
 		// Test list command
 		let list_call = create_plan_call("list", None);
 		let result = execute_plan(&list_call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(false));
 
-		let content = extract_mcp_content(&result.result);
+		assert!(!result.is_error());
+
+		let content = result.extract_content();
 		assert!(content.contains("Development Tasks"));
 		assert!(content.contains("✅ 1. Design"));
 		assert!(content.contains("🔄 2. Implement (IN PROGRESS)"));
@@ -258,10 +267,10 @@ mod tests {
 			})),
 		);
 		let result = execute_plan(&done_call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(false));
 
-		let content = extract_mcp_content(&result.result);
+		assert!(!result.is_error());
+
+		let content = result.extract_content();
 		assert!(content.contains("PLAN COMPLETED"));
 		assert!(content.contains("Simple Task"));
 
@@ -286,16 +295,18 @@ mod tests {
 		// Test reset command
 		let reset_call = create_plan_call("reset", None);
 		let result = execute_plan(&reset_call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(false));
-		assert!(extract_mcp_content(&result.result).contains("Plan data cleared successfully"));
+
+		assert!(!result.is_error());
+		assert!(result
+			.extract_content()
+			.contains("Plan data cleared successfully"));
 
 		// Verify plan is cleared
 		let list_call = create_plan_call("list", None);
 		let result = execute_plan(&list_call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(true));
-		assert!(extract_mcp_content(&result.result).contains("No active plan"));
+
+		assert!(result.is_error());
+		assert!(result.extract_content().contains("No active plan"));
 	}
 
 	#[serial]
@@ -303,9 +314,11 @@ mod tests {
 	async fn test_plan_invalid_command() {
 		let call = create_plan_call("invalid_command", None);
 		let result = execute_plan(&call).await.unwrap();
-		let output = result.result.as_object().unwrap();
-		assert_eq!(output["isError"], json!(true));
-		assert!(extract_mcp_content(&result.result).contains("Unknown command 'invalid_command'"));
+
+		assert!(result.is_error());
+		assert!(result
+			.extract_content()
+			.contains("Unknown command 'invalid_command'"));
 	}
 
 	#[serial]
@@ -339,7 +352,7 @@ mod tests {
 		// Check that we're still on task 1
 		let list_call = create_plan_call("list", None);
 		let result = execute_plan(&list_call).await.unwrap();
-		let content = extract_mcp_content(&result.result);
+		let content = result.extract_content();
 		assert!(content.contains("🔄 1. Task 1 (IN PROGRESS)")); // Still in progress
 		assert!(content.contains("⏳ 2. Task 2")); // Still pending
 
@@ -355,7 +368,7 @@ mod tests {
 		// Check that task 1 is completed and we moved to task 2
 		let list_call = create_plan_call("list", None);
 		let result = execute_plan(&list_call).await.unwrap();
-		let content = extract_mcp_content(&result.result);
+		let content = result.extract_content();
 		assert!(content.contains("✅ 1. Task 1")); // Now completed
 		assert!(content.contains("🔄 2. Task 2 (IN PROGRESS)")); // Now current
 
@@ -381,9 +394,9 @@ mod tests {
 			})),
 		);
 		let result1 = execute_plan(&start_call1).await.unwrap();
-		let output1 = result1.result.as_object().unwrap();
-		assert_eq!(output1["isError"], json!(false));
-		let content1 = extract_mcp_content(&result1.result);
+
+		assert!(!result1.is_error());
+		let content1 = result1.extract_content();
 		assert!(content1.contains("First Plan"));
 		assert!(content1.contains("Task A"));
 
@@ -409,9 +422,9 @@ mod tests {
 			})),
 		);
 		let result2 = execute_plan(&start_call2).await.unwrap();
-		let output2 = result2.result.as_object().unwrap();
-		assert_eq!(output2["isError"], json!(true)); // Should fail
-		let error_content = extract_mcp_content(&result2.result);
+
+		assert!(result2.is_error()); // Should fail
+		let error_content = result2.extract_content();
 		assert!(error_content.contains("Active plan already exists"));
 		assert!(error_content.contains("'done' to complete current plan"));
 		assert!(error_content.contains("'reset' to clear it"));
@@ -420,7 +433,7 @@ mod tests {
 		// Verify the first plan is still intact
 		let list_call = create_plan_call("list", None);
 		let result = execute_plan(&list_call).await.unwrap();
-		let content = extract_mcp_content(&result.result);
+		let content = result.extract_content();
 		assert!(content.contains("First Plan"));
 		assert!(content.contains("Task A"));
 		assert!(!content.contains("Second Plan")); // Second plan was NOT created
@@ -466,9 +479,9 @@ mod tests {
 			})),
 		);
 		let result2 = execute_plan(&start_call2).await.unwrap();
-		let output2 = result2.result.as_object().unwrap();
-		assert_eq!(output2["isError"], json!(false)); // Should succeed
-		let content2 = extract_mcp_content(&result2.result);
+
+		assert!(!result2.is_error()); // Should succeed
+		let content2 = result2.extract_content();
 		assert!(content2.contains("Second Plan"));
 		assert!(content2.contains("Task X"));
 
@@ -519,9 +532,9 @@ mod tests {
 			})),
 		);
 		let result2 = execute_plan(&start_call2).await.unwrap();
-		let output2 = result2.result.as_object().unwrap();
-		assert_eq!(output2["isError"], json!(false)); // Should succeed
-		let content2 = extract_mcp_content(&result2.result);
+
+		assert!(!result2.is_error()); // Should succeed
+		let content2 = result2.extract_content();
 		assert!(content2.contains("Second Plan"));
 		assert!(content2.contains("Task X"));
 

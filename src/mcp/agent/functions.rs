@@ -600,15 +600,7 @@ fn run_dynamic_agent_in_process(
 
 				// Add tool result messages
 				for tool_result in &tool_results {
-					let raw_content = if let Some(output) = tool_result.result.get("output") {
-						if let Some(s) = output.as_str() {
-							s.to_string()
-						} else {
-							serde_json::to_string(output).unwrap_or_default()
-						}
-					} else {
-						serde_json::to_string(&tool_result.result).unwrap_or_default()
-					};
+					let raw_content = tool_result.extract_content();
 
 					let (tool_content, _) = crate::utils::truncation::truncate_mcp_response_global(
 						&raw_content,
