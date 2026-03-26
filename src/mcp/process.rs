@@ -247,7 +247,15 @@ pub fn send_notification_message(msg: crate::websocket::ServerMessage) {
 
 /// Emit a notification — structured if a sender is registered, buffered otherwise.
 /// Buffered notifications are flushed when set_notification_sender() is called.
-fn emit_notification(server_name: &str, method: &str, params: &serde_json::Value) {
+///
+/// `session_id` should be captured before entering `spawn_blocking` contexts,
+/// since task-local `CURRENT_SESSION_ID` is not available on blocking OS threads.
+fn emit_notification(
+	server_name: &str,
+	method: &str,
+	params: &serde_json::Value,
+	session_id: Option<&str>,
+) {
 	let msg = crate::websocket::ServerMessage::McpNotification(
 		crate::websocket::McpNotificationPayload {
 			server: server_name.to_string(),
@@ -256,9 +264,14 @@ fn emit_notification(server_name: &str, method: &str, params: &serde_json::Value
 		},
 	);
 
+	// Use explicit session_id if provided, otherwise try task-local
+	let effective_session_id = session_id
+		.map(|s| s.to_string())
+		.or_else(crate::session::context::current_session_id);
+
 	// Try session-scoped sender first
-	if let Some(session_id) = crate::session::context::current_session_id() {
-		if let Some(sender) = crate::session::context::get_notification_sender_by_id(&session_id) {
+	if let Some(sid) = effective_session_id {
+		if let Some(sender) = crate::session::context::get_notification_sender_by_id(&sid) {
 			let _ = sender.send(msg);
 			return;
 		}
@@ -1015,6 +1028,9 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 	let server_name_for_closure = server_name.to_string();
 	let final_message_clone = final_message.clone();
 	let request_id_clone = request_id;
+	// Capture session_id before spawn_blocking — task-local CURRENT_SESSION_ID
+	// is not available on blocking OS threads.
+	let session_id_for_closure = crate::session::context::current_session_id();
 
 	// Execute with timeout and cancellation
 	// Spawn the blocking I/O task and keep the JoinHandle separate from the timeout wrapper.
@@ -1143,7 +1159,12 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 							.get("params")
 							.cloned()
 							.unwrap_or(serde_json::Value::Null);
-						emit_notification(&server_name_for_closure, method, &params);
+						emit_notification(
+							&server_name_for_closure,
+							method,
+							&params,
+							session_id_for_closure.as_deref(),
+						);
 						continue;
 					}
 

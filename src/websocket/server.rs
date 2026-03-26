@@ -36,6 +36,9 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
+/// Per-session processing locks to prevent concurrent access to the same session.
+type SessionLocks = Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>;
+
 /// WebSocket server for handling AI sessions
 pub struct WebSocketServer {
 	addr: SocketAddr,
@@ -65,6 +68,10 @@ impl WebSocketServer {
 		let sessions: Arc<Mutex<HashMap<String, ChatSession>>> =
 			Arc::new(Mutex::new(HashMap::new()));
 
+		// Per-session processing locks — prevents concurrent access to the same session
+		// from different connections. The lock is held during the entire message processing.
+		let session_locks: SessionLocks = Arc::new(Mutex::new(HashMap::new()));
+
 		loop {
 			match listener.accept().await {
 				Ok((stream, peer_addr)) => {
@@ -73,10 +80,18 @@ impl WebSocketServer {
 					let config = Arc::clone(&self.config);
 					let role = self.role.clone();
 					let sessions = Arc::clone(&sessions);
+					let session_locks = Arc::clone(&session_locks);
 
 					tokio::spawn(async move {
-						if let Err(e) =
-							handle_connection(stream, peer_addr, config, role, sessions).await
+						if let Err(e) = handle_connection(
+							stream,
+							peer_addr,
+							config,
+							role,
+							sessions,
+							session_locks,
+						)
+						.await
 						{
 							log_error!("Connection handler failed for {}: {}", peer_addr, e);
 						}
@@ -97,6 +112,7 @@ async fn handle_connection(
 	config: Arc<Config>,
 	role: String,
 	sessions: Arc<Mutex<HashMap<String, ChatSession>>>,
+	session_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 ) -> Result<()> {
 	// Accept WebSocket connection with compression enabled
 	let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
@@ -154,6 +170,7 @@ async fn handle_connection(
 					&config,
 					&role,
 					&sessions,
+					&session_locks,
 					&mut active_session_ids,
 				)
 				.await
@@ -208,6 +225,7 @@ async fn process_client_message(
 	config: &Config,
 	role: &str,
 	sessions: &Arc<Mutex<HashMap<String, ChatSession>>>,
+	session_locks: &SessionLocks,
 	active_session_ids: &mut HashSet<String>,
 ) -> Result<()> {
 	match client_msg {
@@ -217,20 +235,68 @@ async fn process_client_message(
 		ClientMessage::Message(msg) => {
 			let session_id = msg.session_id.clone();
 			active_session_ids.insert(session_id.clone());
-			crate::session::context::with_session_id(session_id, async {
+
+			// Acquire per-session lock to prevent concurrent access
+			let lock = get_or_create_session_lock(&session_id, session_locks).await;
+			let guard = match lock.try_lock() {
+				Ok(guard) => guard,
+				Err(_) => {
+					let error = ServerMessage::error(format!(
+						"Session '{}' is busy processing another request. Please wait.",
+						session_id
+					));
+					send_message(ws_sender, &error).await?;
+					return Ok(());
+				}
+			};
+
+			let result = crate::session::context::with_session_id(session_id, async {
 				handle_user_message(msg, ws_sender, config, role, sessions).await
 			})
-			.await
+			.await;
+
+			drop(guard);
+			result
 		}
 		ClientMessage::Command(msg) => {
 			let session_id = msg.session_id.clone();
 			active_session_ids.insert(session_id.clone());
-			crate::session::context::with_session_id(session_id, async {
+
+			// Acquire per-session lock to prevent concurrent access
+			let lock = get_or_create_session_lock(&session_id, session_locks).await;
+			let guard = match lock.try_lock() {
+				Ok(guard) => guard,
+				Err(_) => {
+					let error = ServerMessage::error(format!(
+						"Session '{}' is busy processing another request. Please wait.",
+						session_id
+					));
+					send_message(ws_sender, &error).await?;
+					return Ok(());
+				}
+			};
+
+			let result = crate::session::context::with_session_id(session_id, async {
 				handle_command_message(msg, ws_sender, config, role, sessions).await
 			})
-			.await
+			.await;
+
+			drop(guard);
+			result
 		}
 	}
+}
+
+/// Get or create a per-session processing lock.
+async fn get_or_create_session_lock(
+	session_id: &str,
+	session_locks: &SessionLocks,
+) -> Arc<tokio::sync::Mutex<()>> {
+	let mut locks = session_locks.lock().await;
+	locks
+		.entry(session_id.to_string())
+		.or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+		.clone()
 }
 
 /// Handle a "session" type message: create new or resume existing session.
@@ -314,32 +380,36 @@ async fn handle_session_message(
 		}
 	};
 
-	setup_system_prompt_and_cache(&mut chat_session, &config_for_role, &session_role, false)
-		.await?;
-
 	let session_id = chat_session.session.info.name.clone();
 	active_session_ids.insert(session_id.clone());
 
-	let status_msg = if is_new {
-		format!("Session created: {}", session_id)
-	} else {
-		format!("Session resumed: {}", session_id)
-	};
+	// Wrap in session context so all session-scoped registries route correctly
+	crate::session::context::with_session_id(session_id.clone(), async {
+		setup_system_prompt_and_cache(&mut chat_session, &config_for_role, &session_role, false)
+			.await?;
 
-	log_info!("{}", status_msg);
+		let status_msg = if is_new {
+			format!("Session created: {}", session_id)
+		} else {
+			format!("Session resumed: {}", session_id)
+		};
 
-	chat_session.save()?;
-	sessions
-		.lock()
-		.await
-		.insert(session_id.clone(), chat_session);
+		log_info!("{}", status_msg);
 
-	send_message(
-		ws_sender,
-		&ServerMessage::status(status_msg, Some(session_id)),
-	)
-	.await?;
-	Ok(())
+		chat_session.save()?;
+		sessions
+			.lock()
+			.await
+			.insert(session_id.clone(), chat_session);
+
+		send_message(
+			ws_sender,
+			&ServerMessage::status(status_msg, Some(session_id)),
+		)
+		.await?;
+		Ok(())
+	})
+	.await
 }
 
 /// Look up an existing session: memory first, then disk. Never auto-create.

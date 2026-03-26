@@ -644,6 +644,43 @@ async fn execute_tool_without_cancellation(
 ) -> Result<McpToolResult> {
 	// STATIC ROUTING: Use pre-built tool map ONLY
 	if let Some(target_server) = tool_map::get_server_for_tool(&call.tool_name) {
+		// Session-ownership check: the global tool map may contain tools registered
+		// by other sessions. In a session context, verify dynamic tools belong to us.
+		if crate::session::context::current_session_id().is_some() {
+			// Dynamic agent tools (agent_* prefix): allow if config-defined or owned by this session
+			if let Some(agent_name) = call.tool_name.strip_prefix("agent_") {
+				let is_config_agent = config.agents.iter().any(|a| a.name == agent_name);
+				if !is_config_agent && !core::dynamic_agents::is_dynamic_by_tool(&call.tool_name) {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						format!(
+							"Tool '{}' not found (belongs to another session)",
+							call.tool_name
+						),
+					));
+				}
+			}
+			// Dynamic server tools: allow if from a config-defined server or owned by this session
+			if !core::dynamic::is_dynamic_by_tool(&call.tool_name) {
+				let is_config_server = config
+					.mcp
+					.servers
+					.iter()
+					.any(|s| s.name() == target_server.name());
+				if !is_config_server {
+					return Ok(McpToolResult::error(
+						call.tool_name.clone(),
+						call.tool_id.clone(),
+						format!(
+							"Tool '{}' not found (belongs to another session)",
+							call.tool_name
+						),
+					));
+				}
+			}
+		}
+
 		crate::log_debug!(
 			"Routing tool '{}' to server '{}' ({:?})",
 			call.tool_name,

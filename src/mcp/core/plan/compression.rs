@@ -22,18 +22,61 @@
 
 use super::storage::{MessageRange, PlanTask};
 use crate::session::chat::session::ChatSession;
+use crate::session::context::SessionId;
 use crate::session::estimate_tokens;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
 
-// Global state for pending compression requests
-// This allows the plan tool to signal that compression should happen
-// without needing to pass ChatSession through the MCP execution chain
+// ---------------------------------------------------------------------------
+// Session-scoped compression registries
+// ---------------------------------------------------------------------------
+// Each session gets its own pending compression state. CLI mode uses a
+// dedicated "cli" key. The pattern mirrors context.rs session-keyed registries.
+
+/// Session-keyed pending task compressions.
+static PENDING_COMPRESSIONS: RwLock<Option<HashMap<SessionId, PendingTaskCompression>>> =
+	RwLock::new(None);
+
+/// Session-keyed pending phase compressions.
+static PENDING_PHASE_COMPRESSIONS: RwLock<Option<HashMap<SessionId, PhaseCompressionRequest>>> =
+	RwLock::new(None);
+
+/// Session-keyed pending project compressions.
+static PENDING_PROJECT_COMPRESSIONS: RwLock<Option<HashMap<SessionId, ProjectCompressionRequest>>> =
+	RwLock::new(None);
+
+// CLI fallback globals — used only when not in a session context.
 lazy_static::lazy_static! {
-	static ref PENDING_COMPRESSION: Arc<Mutex<Option<PendingTaskCompression>>> = Arc::new(Mutex::new(None));
-	static ref PENDING_PHASE_COMPRESSION: Arc<Mutex<Option<PhaseCompressionRequest>>> = Arc::new(Mutex::new(None));
-	static ref PENDING_PROJECT_COMPRESSION: Arc<Mutex<Option<ProjectCompressionRequest>>> = Arc::new(Mutex::new(None));
+	static ref CLI_PENDING_COMPRESSION: Arc<Mutex<Option<PendingTaskCompression>>> = Arc::new(Mutex::new(None));
+	static ref CLI_PENDING_PHASE_COMPRESSION: Arc<Mutex<Option<PhaseCompressionRequest>>> = Arc::new(Mutex::new(None));
+	static ref CLI_PENDING_PROJECT_COMPRESSION: Arc<Mutex<Option<ProjectCompressionRequest>>> = Arc::new(Mutex::new(None));
+}
+
+/// Get the effective session key, or None for CLI fallback.
+fn effective_session_id() -> Option<SessionId> {
+	crate::session::context::current_session_id()
+}
+
+/// Clean up all pending compression state for a session.
+/// Called from context.rs cleanup_session().
+pub fn cleanup_compression_state(session_id: &SessionId) {
+	if let Ok(mut guard) = PENDING_COMPRESSIONS.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+	if let Ok(mut guard) = PENDING_PHASE_COMPRESSIONS.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+	if let Ok(mut guard) = PENDING_PROJECT_COMPRESSIONS.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
 }
 
 /// Wrapper for pending task compression with force flag
@@ -86,16 +129,30 @@ pub struct ProjectCompressionRequest {
 /// This is called by the plan tool when a task is completed via plan(next)
 pub fn request_compression(task: PlanTask) {
 	crate::log_debug!("Compression requested for task: {}", task.title);
-	let mut pending = PENDING_COMPRESSION.lock().unwrap();
-	*pending = Some(PendingTaskCompression { task, force: false });
+	let ptc = PendingTaskCompression { task, force: false };
+	if let Some(session_id) = effective_session_id() {
+		let mut guard = PENDING_COMPRESSIONS.write().unwrap();
+		let registry = guard.get_or_insert_with(HashMap::new);
+		registry.insert(session_id, ptc);
+	} else {
+		let mut pending = CLI_PENDING_COMPRESSION.lock().unwrap();
+		*pending = Some(ptc);
+	}
 }
 
 /// Request forced compression for a completed task (bypasses 20% threshold)
 /// Called by plan(done) to ensure the final task is compressed before project compression
 pub fn request_forced_compression(task: PlanTask) {
 	crate::log_debug!("Forced compression requested for task: {}", task.title);
-	let mut pending = PENDING_COMPRESSION.lock().unwrap();
-	*pending = Some(PendingTaskCompression { task, force: true });
+	let ptc = PendingTaskCompression { task, force: true };
+	if let Some(session_id) = effective_session_id() {
+		let mut guard = PENDING_COMPRESSIONS.write().unwrap();
+		let registry = guard.get_or_insert_with(HashMap::new);
+		registry.insert(session_id, ptc);
+	} else {
+		let mut pending = CLI_PENDING_COMPRESSION.lock().unwrap();
+		*pending = Some(ptc);
+	}
 }
 
 /// Set message range on the pending compression task
@@ -117,28 +174,48 @@ pub fn request_forced_compression(task: PlanTask) {
 /// For 93 messages (indices 0-92):
 /// - CORRECT: `set_pending_compression_range(10, 92);` // Compress to last message
 pub fn set_pending_compression_range(start_index: usize, end_index: usize) -> Result<()> {
-	let mut pending = PENDING_COMPRESSION.lock().unwrap();
-	if let Some(ref mut ptc) = *pending {
-		if start_index >= end_index {
-			return Err(anyhow!(
-				"Invalid compression range: start ({}) must be less than end ({})",
-				start_index,
-				end_index
-			));
+	if start_index >= end_index {
+		return Err(anyhow!(
+			"Invalid compression range: start ({}) must be less than end ({})",
+			start_index,
+			end_index
+		));
+	}
+
+	let range = MessageRange {
+		start_index,
+		end_index,
+	};
+
+	if let Some(session_id) = effective_session_id() {
+		let mut guard = PENDING_COMPRESSIONS.write().unwrap();
+		if let Some(registry) = guard.as_mut() {
+			if let Some(ptc) = registry.get_mut(&session_id) {
+				ptc.task.message_range = Some(range);
+				crate::log_debug!(
+					"Compression range set: {} to {} for task '{}'",
+					start_index,
+					end_index,
+					ptc.task.title
+				);
+				return Ok(());
+			}
 		}
-		ptc.task.message_range = Some(MessageRange {
-			start_index,
-			end_index,
-		});
-		crate::log_debug!(
-			"Compression range set: {} to {} for task '{}'",
-			start_index,
-			end_index,
-			ptc.task.title
-		);
-		Ok(())
-	} else {
 		Err(anyhow!("No pending compression to set range for"))
+	} else {
+		let mut pending = CLI_PENDING_COMPRESSION.lock().unwrap();
+		if let Some(ref mut ptc) = *pending {
+			ptc.task.message_range = Some(range);
+			crate::log_debug!(
+				"Compression range set: {} to {} for task '{}'",
+				start_index,
+				end_index,
+				ptc.task.title
+			);
+			Ok(())
+		} else {
+			Err(anyhow!("No pending compression to set range for"))
+		}
 	}
 }
 
@@ -147,8 +224,13 @@ pub fn set_pending_compression_range(start_index: usize, end_index: usize) -> Re
 pub async fn process_pending_compression(
 	session: &mut ChatSession,
 ) -> Result<Option<CompressionMetrics>> {
-	let ptc = {
-		let mut pending = PENDING_COMPRESSION.lock().unwrap();
+	let ptc = if let Some(session_id) = effective_session_id() {
+		let mut guard = PENDING_COMPRESSIONS.write().unwrap();
+		guard
+			.as_mut()
+			.and_then(|registry| registry.remove(&session_id))
+	} else {
+		let mut pending = CLI_PENDING_COMPRESSION.lock().unwrap();
 		pending.take()
 	};
 
@@ -166,7 +248,15 @@ pub async fn process_pending_compression(
 
 /// Check if there's a pending compression request
 pub fn has_pending_compression() -> bool {
-	PENDING_COMPRESSION.lock().unwrap().is_some()
+	if let Some(session_id) = effective_session_id() {
+		let guard = PENDING_COMPRESSIONS.read().unwrap();
+		guard
+			.as_ref()
+			.map(|r| r.contains_key(&session_id))
+			.unwrap_or(false)
+	} else {
+		CLI_PENDING_COMPRESSION.lock().unwrap().is_some()
+	}
 }
 
 /// Request phase compression
@@ -177,13 +267,20 @@ pub fn request_phase_compression(phase_name: String, task_range: (usize, usize),
 		task_range.0 + 1,
 		task_range.1 + 1
 	);
-	let mut pending = PENDING_PHASE_COMPRESSION.lock().unwrap();
-	*pending = Some(PhaseCompressionRequest {
+	let req = PhaseCompressionRequest {
 		phase_name,
 		task_range,
 		summary,
 		message_range: None,
-	});
+	};
+	if let Some(session_id) = effective_session_id() {
+		let mut guard = PENDING_PHASE_COMPRESSIONS.write().unwrap();
+		let registry = guard.get_or_insert_with(HashMap::new);
+		registry.insert(session_id, req);
+	} else {
+		let mut pending = CLI_PENDING_PHASE_COMPRESSION.lock().unwrap();
+		*pending = Some(req);
+	}
 }
 
 /// Request project compression
@@ -199,24 +296,47 @@ pub fn request_project_compression(
 		total_tasks,
 		total_phases
 	);
-	let mut pending = PENDING_PROJECT_COMPRESSION.lock().unwrap();
-	*pending = Some(ProjectCompressionRequest {
+	let req = ProjectCompressionRequest {
 		plan_title,
 		summary,
 		total_tasks,
 		total_phases,
 		message_range: None,
-	});
+	};
+	if let Some(session_id) = effective_session_id() {
+		let mut guard = PENDING_PROJECT_COMPRESSIONS.write().unwrap();
+		let registry = guard.get_or_insert_with(HashMap::new);
+		registry.insert(session_id, req);
+	} else {
+		let mut pending = CLI_PENDING_PROJECT_COMPRESSION.lock().unwrap();
+		*pending = Some(req);
+	}
 }
 
 /// Check if there's a pending phase compression request
 pub fn has_pending_phase_compression() -> bool {
-	PENDING_PHASE_COMPRESSION.lock().unwrap().is_some()
+	if let Some(session_id) = effective_session_id() {
+		let guard = PENDING_PHASE_COMPRESSIONS.read().unwrap();
+		guard
+			.as_ref()
+			.map(|r| r.contains_key(&session_id))
+			.unwrap_or(false)
+	} else {
+		CLI_PENDING_PHASE_COMPRESSION.lock().unwrap().is_some()
+	}
 }
 
 /// Check if there's a pending project compression request
 pub fn has_pending_project_compression() -> bool {
-	PENDING_PROJECT_COMPRESSION.lock().unwrap().is_some()
+	if let Some(session_id) = effective_session_id() {
+		let guard = PENDING_PROJECT_COMPRESSIONS.read().unwrap();
+		guard
+			.as_ref()
+			.map(|r| r.contains_key(&session_id))
+			.unwrap_or(false)
+	} else {
+		CLI_PENDING_PROJECT_COMPRESSION.lock().unwrap().is_some()
+	}
 }
 
 /// Get the current compression ID for logging/tracking
@@ -491,8 +611,13 @@ fn calculate_range_tokens(session: &ChatSession, range: &MessageRange) -> Result
 pub async fn process_pending_phase_compression(
 	session: &mut ChatSession,
 ) -> Result<Option<CompressionMetrics>> {
-	let request = {
-		let mut pending = PENDING_PHASE_COMPRESSION.lock().unwrap();
+	let request = if let Some(session_id) = effective_session_id() {
+		let mut guard = PENDING_PHASE_COMPRESSIONS.write().unwrap();
+		guard
+			.as_mut()
+			.and_then(|registry| registry.remove(&session_id))
+	} else {
+		let mut pending = CLI_PENDING_PHASE_COMPRESSION.lock().unwrap();
 		pending.take()
 	};
 
@@ -633,8 +758,13 @@ fn format_phase_summary(phase_name: &str, summary: &str, task_count: usize) -> S
 pub async fn process_pending_project_compression(
 	session: &mut ChatSession,
 ) -> Result<Option<CompressionMetrics>> {
-	let request = {
-		let mut pending = PENDING_PROJECT_COMPRESSION.lock().unwrap();
+	let request = if let Some(session_id) = effective_session_id() {
+		let mut guard = PENDING_PROJECT_COMPRESSIONS.write().unwrap();
+		guard
+			.as_mut()
+			.and_then(|registry| registry.remove(&session_id))
+	} else {
+		let mut pending = CLI_PENDING_PROJECT_COMPRESSION.lock().unwrap();
 		pending.take()
 	};
 

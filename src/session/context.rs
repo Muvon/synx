@@ -948,5 +948,6 @@ pub fn cleanup_session(session_id: &SessionId) {
 	clear_active_skills(session_id);
 	clear_skill_compress_requests(session_id);
 	crate::session::inbox::clear_inbox_for_session(session_id);
+	crate::mcp::core::plan::compression::cleanup_compression_state(session_id);
 	crate::log_debug!("Cleaned up session-scoped state for: {}", session_id);
 }
