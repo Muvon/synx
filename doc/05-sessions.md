@@ -422,7 +422,7 @@ echo "check the build status and report any failures" | octomind send --name mya
 
 ### Session Commands
 
-Octomind provides 25 built-in commands for session management:
+Octomind provides 24 built-in commands
 
 ### Session Management
 - `/help` - Show all available commands (also `/help`)
@@ -441,7 +441,6 @@ Octomind provides 25 built-in commands for session management:
 
 ### Context Management
 - `/context [filter]` - Display session context (all, assistant, user, tool, large)
-- `/cache` - Mark cache checkpoint for cost savings
 - `/summarize` - Generate conversation summary
 - `/truncate` - Truncate conversation history
 - `/done` - Complete task and clean up (finalize with memorization and auto-commit)
@@ -1002,7 +1001,6 @@ max_session_tokens_threshold = 50000  # Compression fallback threshold
 #### Manual Management
 ```bash
 # In session:
-/cache           # Mark cache point
 /info            # Check token usage
 /done            # Complete task with memorization & commit
 ```
@@ -1077,8 +1075,7 @@ knowledge_retention = 10
 1. **Monitor effectiveness**: Use `/info` to verify compression saves money
 2. **Use decision models**: Set cheaper model for compression decisions
 3. **Adjust thresholds**: Start conservative, adjust based on your workflow
-4. **Combine with caching**: Use `/cache` alongside compression for maximum savings
-5. **Preserve context**: Compression preserves last 4 turns for continuity
+4. **Preserve context**: Compression preserves last 4 turns for continuity
 This combination allows very long sessions with minimal cost.
 
 ## Context Management Commands

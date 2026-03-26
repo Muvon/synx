@@ -237,7 +237,6 @@ Octomind advertises its available slash commands to the editor. You can use them
 | `/copy` | Copy last response to clipboard |
 | `/clear` | Clear terminal screen |
 | `/loglevel <level>` | Change logging level |
-| `/cache [info|clear]` | Manage session cache |
 | `/list` | List saved sessions |
 | `/session <name>` | Switch to another session |
 | `/prompt <name>` | Execute a predefined prompt |

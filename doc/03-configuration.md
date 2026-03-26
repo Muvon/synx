@@ -896,7 +896,6 @@ max_session_tokens_threshold = 0
 ### Manual Token Management
 
 Use session commands to manage tokens:
-- `/cache` - Mark cache checkpoint
 - `/info` - Show token usage breakdown
 - `/done` - Optimize context
 
@@ -1108,24 +1107,24 @@ Octomind automatically migrates legacy configurations on load, but it's recommen
   ```
 
 5. **Legacy configuration fields**
-  ```
-  Unknown configuration field: enable_auto_truncation
-  Unknown configuration field: max_request_tokens_threshold
-  Solution: Update to max_session_tokens_threshold, remove enable_auto_truncation
-  ```
+   ```
+   Unknown configuration field: enable_auto_truncation
+   Unknown configuration field: max_request_tokens_threshold
+   Solution: Update to max_session_tokens_threshold, remove enable_auto_truncation
+   ```
 
-7. **Configuration validation failed**
+6. **Configuration validation failed**
   ```bash
   octomind config --validate
   ```
 
-8. **Role inheritance issues**
+7. **Role inheritance issues**
   ```
   Error: Custom role configuration invalid
   Solution: Ensure custom roles inherit from assistant base
   ```
 
-9. **MCP server registry issues**
+8. **MCP server registry issues**
   ```
   Failed to execute tool: No servers available to process tool
   Solution: Check server_refs and ensure servers are defined in registry

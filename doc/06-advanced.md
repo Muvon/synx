@@ -809,7 +809,6 @@ max_session_tokens_threshold = 50000
 - Integrates with existing cache and cost tracking systems
 - Maintains session state consistency
 
-- `/cache` - Mark cache checkpoint for cost savings
 - `/info` - Display token usage and cost breakdown
 
 ## Smart Adaptive Compression System
@@ -827,7 +826,6 @@ The compression system is implemented across multiple modules:
 
 **Supporting Systems:**
 - **`src/session/chat/semantic_chunking.rs`**: Discourse-aware semantic chunking for preserving conversation structure
-- **`src/session/chat/session/commands/cache.rs`**: `/cache` command implementation for manual cache checkpoints
 - **`src/session/chat/token_counter.rs`**: Unified token counting for all message fields (content, tool_calls, thinking, images)
 
 ### How Compression Works
@@ -1063,7 +1061,7 @@ Session Cost Report:
 2. **Use decision models**: Set `decision_model` to cheaper model for significant savings
 3. **Adjust thresholds**: Start conservative (50k), adjust based on your workflow
 4. **Preserve context**: Compression preserves last 4 turns for continuity
-5. **Combine with caching**: Use `/cache` alongside compression for maximum savings
+5. **Consider session length**: Disable compression if sessions are typically short
 
 ### Troubleshooting Compression
 **Compression not triggering:**
@@ -1244,8 +1242,6 @@ Through natural conversation:
 ### Tool Usage Optimization
 - **Batch operations**: Use `view` for reading multiple files, `batch_edit` for modifying multiple files
 - **Specific patterns**: Use `view` with patterns to filter results
-- **Smart caching**: Use `/cache` before large context operations
-
 
 ### Context Management
 - **Auto-truncation**: Enable for long sessions
@@ -1286,9 +1282,6 @@ octomind config --validate
 
 #### Token Limit Issues
 ```bash
-# Mark cache checkpoint
-/cache
-
 # Check current usage
 /info
 

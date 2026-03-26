@@ -488,9 +488,6 @@ But if 0 turns remain:
 # Show detailed token and cost breakdown
 /info
 
-# Add cache checkpoint (marks point for caching)
-/cache
-
 # Show current context with token estimates
 /context
 
@@ -512,11 +509,10 @@ export OCTOMIND_OPENROUTER__CACHE_TOKENS_PCT_THRESHOLD=40
 
 1. **Monitor `/info` regularly**: Track costs and identify expensive operations
 2. **Use compression**: Enable adaptive compression to reduce context size
-3. **Enable caching**: Use `/cache` to mark important context for caching
-4. **Choose models wisely**: Use cheaper models for simple tasks, expensive ones for complex reasoning
-5. **Set spending limits**: Configure `max_session_tokens_threshold` to prevent runaway costs
-6. **Use decision models**: Set cheaper model for compression decisions (e.g., Claude Haiku)
-7. **Review compression stats**: Check if compression is actually saving money in your workflow
+3. **Choose models wisely**: Use cheaper models for simple tasks, expensive ones for complex reasoning
+4. **Set spending limits**: Configure `max_session_tokens_threshold` to prevent runaway costs
+5. **Use decision models**: Set cheaper model for compression decisions (e.g., Claude Haiku)
+6. **Review compression stats**: Check if compression is actually saving money in your workflow
 
 ## Provider-Specific Features
 

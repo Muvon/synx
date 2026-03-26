@@ -245,7 +245,6 @@ Essential commands for session management:
 - `/image <path>` - Attach images for AI analysis
 - `/mcp info` - Check MCP server status
 - `/model <model>` - Switch AI models
-- `/cache` - Add cache checkpoint
 - `/done` - Finalize task with memorization
 
 ### Cost Management
