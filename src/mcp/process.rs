@@ -884,7 +884,12 @@ async fn initialize_stdin_server(server_name: &str) -> Result<()> {
 		"params": {}
 	});
 
-	let _ = try_communicate_with_stdin_server(server_name, &initialized_message, 0).await;
+	if let Err(e) = send_stdin_notification(server_name, &initialized_message).await {
+		crate::log_error!(
+			"Warning: Error sending initialized notification to MCP server: {}",
+			e
+		);
+	}
 
 	// If we reach here, initialization was successful
 	Ok(())
@@ -1717,14 +1722,60 @@ pub fn get_server_status_report() -> HashMap<String, (ServerHealth, ServerRestar
 	report
 }
 
-// Try to communicate with a stdin-based server, ignoring errors
-async fn try_communicate_with_stdin_server(
-	server_name: &str,
-	message: &Value,
-	override_id: u64,
-) -> Result<()> {
-	if let Err(e) = communicate_with_stdin_server(server_name, message, override_id, None).await {
-		crate::log_error!("Warning: Error sending notification to MCP server: {}", e);
-	}
-	Ok(())
+/// Send a JSON-RPC notification to a stdin server (fire-and-forget).
+/// Per JSON-RPC spec, notifications have no `id` and expect no response.
+/// This avoids the deadlock that occurs when `communicate_with_stdin_server`
+/// injects an `id` and blocks on `read_line()` for a response that never comes.
+async fn send_stdin_notification(server_name: &str, message: &Value) -> Result<()> {
+	let server_process = {
+		let processes = SERVER_PROCESSES
+			.read()
+			.map_err(|_| anyhow::anyhow!("Failed to acquire read lock on server processes"))?;
+		processes
+			.get(server_name)
+			.cloned()
+			.ok_or_else(|| anyhow::anyhow!("Server not found: {}", server_name))?
+	};
+
+	let server_name_owned = server_name.to_string();
+	let message_clone = message.clone();
+
+	tokio::task::spawn_blocking(move || {
+		let mut process = server_process
+			.lock()
+			.map_err(|_| anyhow::anyhow!("Failed to acquire lock on server process"))?;
+
+		match &mut *process {
+			ServerProcess::Stdin {
+				writer,
+				is_shutdown,
+				..
+			} => {
+				if is_shutdown.load(Ordering::SeqCst) {
+					return Err(anyhow::anyhow!("Server {} is shut down", server_name_owned));
+				}
+
+				// Serialize without injecting an id — notifications MUST NOT have one
+				let mut message_str = serde_json::to_string(&message_clone)?
+					.trim_end()
+					.to_string();
+				message_str.push('\n');
+
+				writer
+					.write_all(message_str.as_bytes())
+					.map_err(|e| anyhow::anyhow!("Failed to write notification: {}", e))?;
+				writer
+					.flush()
+					.map_err(|e| anyhow::anyhow!("Failed to flush notification: {}", e))?;
+
+				Ok(())
+			}
+			_ => Err(anyhow::anyhow!(
+				"Server {} is not a stdin-based server",
+				server_name_owned
+			)),
+		}
+	})
+	.await
+	.map_err(|e| anyhow::anyhow!("Blocking task failed: {}", e))?
 }
