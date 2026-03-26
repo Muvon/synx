@@ -84,6 +84,14 @@ lazy_static::lazy_static! {
 	// previous handle before trying to lock the process — preventing deadlock.
 	static ref SERVER_IN_FLIGHT: Arc<RwLock<HashMap<String, InFlightHandle>>> =
 		Arc::new(RwLock::new(HashMap::new()));
+
+	// Reference counts for shared MCP server processes.
+	// Each call to ensure_server_running() increments the count; release_server() decrements it.
+	// cleanup_server_process() only kills the OS process when the count reaches zero,
+	// preventing one session from tearing down a server that another session is still using.
+	// stop_all_servers() bypasses ref counts — it is only called on process shutdown.
+	static ref SERVER_REF_COUNTS: Arc<RwLock<HashMap<String, usize>>> =
+		Arc::new(RwLock::new(HashMap::new()));
 }
 // Global notification sender — set by the session when WebSocket or JSONL output is active.
 // When set, MCP server notifications are forwarded as structured ServerMessage::McpNotification.
@@ -468,6 +476,14 @@ pub async fn ensure_server_running(server: &McpServerConfig) -> Result<String> {
 	crate::log_debug!("Checking server '{}' status for potential start", server_id);
 
 	let result = start_server_once_if_needed(server).await;
+
+	// Increment ref count on success so cleanup_server_process() knows how many
+	// sessions are actively using this server.
+	if result.is_ok() {
+		let mut counts = SERVER_REF_COUNTS.write().unwrap();
+		*counts.entry(server_id.to_string()).or_insert(0) += 1;
+		crate::log_debug!("Server '{}' ref count: {}", server_id, counts[server_id]);
+	}
 
 	crate::log_debug!("Completed server '{}' check", server_id);
 
@@ -1463,11 +1479,35 @@ pub fn stop_all_servers() -> Result<()> {
 		crate::log_debug!("Cleared all server restart mutexes");
 	}
 
+	// Clear ref counts — process is shutting down, counts no longer meaningful
+	{
+		let mut counts = SERVER_REF_COUNTS.write().unwrap();
+		counts.clear();
+	}
+
 	Ok(())
 }
 
-// Cleanup a specific server process (helper function)
+// Cleanup a specific server process (helper function).
+// Respects reference counting: if other sessions are still using this server,
+// the OS process is kept alive and only the caller's ref is decremented.
+// Use release_server() for normal session teardown; this function is for
+// error recovery paths (init failure) where the ref was never fully established.
 pub fn cleanup_server_process(server_name: &str) -> Result<()> {
+	// Check ref count — skip kill if other sessions still hold references.
+	{
+		let counts = SERVER_REF_COUNTS.read().unwrap();
+		let refs = counts.get(server_name).copied().unwrap_or(0);
+		if refs > 0 {
+			crate::log_debug!(
+				"Skipping cleanup of server '{}': {} session(s) still using it",
+				server_name,
+				refs
+			);
+			return Ok(());
+		}
+	}
+
 	let mut processes = SERVER_PROCESSES.write().unwrap();
 
 	if let Some(process_arc) = processes.remove(server_name) {
@@ -1506,6 +1546,45 @@ pub fn cleanup_server_process(server_name: &str) -> Result<()> {
 			"Server '{}' not found in registry",
 			server_name
 		))
+	}
+}
+
+/// Decrement the ref count for a server and clean it up when the count reaches zero.
+///
+/// Call this when a session is done with a server (e.g., on dynamic server disable/remove
+/// or session teardown). The OS process is only killed when no sessions hold references.
+pub fn release_server(server_name: &str) {
+	let should_cleanup = {
+		let mut counts = SERVER_REF_COUNTS.write().unwrap();
+		if let Some(count) = counts.get_mut(server_name) {
+			if *count > 0 {
+				*count -= 1;
+			}
+			let remaining = *count;
+			crate::log_debug!(
+				"Server '{}' ref count after release: {}",
+				server_name,
+				remaining
+			);
+			if remaining == 0 {
+				counts.remove(server_name);
+				true
+			} else {
+				false
+			}
+		} else {
+			false
+		}
+	};
+
+	if should_cleanup {
+		if let Err(e) = cleanup_server_process(server_name) {
+			crate::log_debug!(
+				"Failed to cleanup server '{}' after release: {}",
+				server_name,
+				e
+			);
+		}
 	}
 }
 

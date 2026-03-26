@@ -186,6 +186,8 @@ pub fn disable_server(name: &str) -> Result<()> {
 				.unwrap_or_default();
 			// Unregister the tools from the global tool map
 			crate::mcp::tool_map::unregister_dynamic_server_tools(name, &tool_names);
+			// Clear the global function cache so stale definitions don't linger
+			crate::mcp::server::clear_function_cache_for_server(name);
 			return Ok(());
 		}
 		anyhow::bail!("Server '{}' not found", name);
@@ -207,6 +209,8 @@ pub fn disable_server(name: &str) -> Result<()> {
 	drop(state); // Release lock before calling tool_map
 
 	crate::mcp::tool_map::unregister_dynamic_server_tools(name, &tool_names);
+	// Clear the global function cache so stale definitions don't linger
+	crate::mcp::server::clear_function_cache_for_server(name);
 	Ok(())
 }
 
@@ -229,6 +233,8 @@ pub fn remove_server(name: &str) -> Option<McpServerConfig> {
 		if removed.is_some() {
 			// Unregister tools from the global tool map
 			crate::mcp::tool_map::unregister_dynamic_server_tools(name, &tool_names);
+			// Clear the global function cache so stale definitions don't linger
+			crate::mcp::server::clear_function_cache_for_server(name);
 		}
 		return removed;
 	}
@@ -249,6 +255,8 @@ pub fn remove_server(name: &str) -> Option<McpServerConfig> {
 	// Unregister tools from the global tool map
 	if removed.is_some() {
 		crate::mcp::tool_map::unregister_dynamic_server_tools(name, &tool_names);
+		// Clear the global function cache so stale definitions don't linger
+		crate::mcp::server::clear_function_cache_for_server(name);
 	}
 	removed
 }

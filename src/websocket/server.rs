@@ -204,6 +204,12 @@ async fn handle_connection(
 
 	// Clean up notification senders for sessions used on this connection.
 	// Sessions themselves persist (can be resumed on another connection).
+	//
+	// INVARIANT: Do NOT call stop_all_servers() here. MCP server processes are shared
+	// across all active sessions. Killing them on disconnect would break other sessions
+	// that are still using the same servers. stop_all_servers() is only called on
+	// process shutdown (main.rs) or role switch (CLI only). Use release_server() for
+	// per-session server teardown when reference counting is needed.
 	for sid in &active_session_ids {
 		crate::session::context::clear_notification_sender_for_session(sid);
 	}
