@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `octomind send` — send a message to a running session via its Unix Domain Socket.
+//! `octomind send` — send a message to a running session.
+//!
+//! On Unix this uses a Unix Domain Socket (`<run_dir>/<name>.sock`).
+//! On Windows this uses a Named Pipe (`\\.\pipe\octomind-<name>`).
 
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use std::io::{self, Read};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
 
 #[derive(Args, Debug)]
 pub struct SendArgs {
@@ -52,23 +54,31 @@ pub async fn execute(args: &SendArgs) -> Result<()> {
 		bail!("message must not be empty (pass as argument or pipe via stdin)");
 	}
 
+	send_message(&args.name, &message).await?;
+	println!("Sent to session '{}'.", args.name);
+	Ok(())
+}
+
+#[cfg(unix)]
+async fn send_message(session_name: &str, message: &str) -> Result<()> {
+	use tokio::net::UnixStream;
+
 	let sock_path = octomind::directories::get_run_dir()
 		.context("failed to resolve run directory")?
-		.join(format!("{}.sock", args.name));
+		.join(format!("{}.sock", session_name));
 
 	if !sock_path.exists() {
 		bail!(
 			"no running session named '{}' (socket not found at {:?})",
-			args.name,
+			session_name,
 			sock_path
 		);
 	}
 
 	let mut stream = UnixStream::connect(&sock_path)
 		.await
-		.with_context(|| format!("failed to connect to session '{}'", args.name))?;
+		.with_context(|| format!("failed to connect to session '{}'", session_name))?;
 
-	// Send message then shut down write half so the session knows we're done.
 	stream
 		.write_all(message.as_bytes())
 		.await
@@ -78,7 +88,57 @@ pub async fn execute(args: &SendArgs) -> Result<()> {
 		.await
 		.context("failed to shut down write half")?;
 
-	// Read the response: "ok\n" or "error: ...\n"
+	read_response(&mut stream, session_name).await
+}
+
+#[cfg(windows)]
+async fn send_message(session_name: &str, message: &str) -> Result<()> {
+	use std::time::Duration;
+	use tokio::net::windows::named_pipe::ClientOptions;
+
+	// ERROR_PIPE_BUSY (231) — server exists but isn't waiting for a connection yet.
+	const ERROR_PIPE_BUSY: i32 = 231;
+	// ERROR_FILE_NOT_FOUND (2) — pipe doesn't exist at all (no session running).
+	const ERROR_FILE_NOT_FOUND: i32 = 2;
+
+	let pipe_name = format!(r"\\.\pipe\octomind-{}", session_name);
+
+	let mut client = loop {
+		match ClientOptions::new().open(&pipe_name) {
+			Ok(c) => break c,
+			Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+				tokio::time::sleep(Duration::from_millis(50)).await;
+			}
+			Err(e) if e.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) => {
+				bail!(
+					"no running session named '{}' (named pipe not found: {})",
+					session_name,
+					pipe_name
+				);
+			}
+			Err(e) => {
+				return Err(e)
+					.with_context(|| format!("failed to connect to session '{}'", session_name));
+			}
+		}
+	};
+
+	client
+		.write_all(message.as_bytes())
+		.await
+		.context("failed to send message")?;
+	client
+		.shutdown()
+		.await
+		.context("failed to shut down write half")?;
+
+	read_response(&mut client, session_name).await
+}
+
+async fn read_response<S>(stream: &mut S, session_name: &str) -> Result<()>
+where
+	S: AsyncReadExt + Unpin,
+{
 	let mut response = String::new();
 	stream
 		.read_to_string(&mut response)
@@ -87,9 +147,8 @@ pub async fn execute(args: &SendArgs) -> Result<()> {
 
 	let response = response.trim();
 	if response == "ok" {
-		println!("Sent to session '{}'.", args.name);
 		Ok(())
 	} else {
-		bail!("session returned: {}", response);
+		bail!("session '{}' returned: {}", session_name, response);
 	}
 }
