@@ -53,567 +53,594 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	// uses the real session name — must happen after setup determines the actual name.
 	let session_id = chat_session.session.info.name.clone();
 	crate::session::context::with_session_id(session_id, async move {
-	// Initialize session-scoped inbox and background job manager now that session ID is set
-	crate::session::inbox::init_inbox_for_session();
-	crate::mcp::agent::functions::init_job_manager();
-	// Start inject listener so `octomind send` can push messages into this session
-	let _inject_listener = crate::session::inject_listener::start_inject_listener(&chat_session.session.info.name);
-	// Get current directory for file operations - use thread-local if set (ACP/WebSocket), otherwise process cwd
-	let current_dir = crate::mcp::get_thread_working_directory();
-	let mut chat_session = chat_session;
-	let mut first_message_processed = first_message_processed;
+		// Initialize session-scoped inbox and background job manager now that session ID is set
+		crate::session::inbox::init_inbox_for_session();
+		crate::mcp::agent::functions::init_job_manager();
+		// Start inject listener so `octomind send` can push messages into this session
+		let _inject_listener =
+			crate::session::inject_listener::start_inject_listener(&chat_session.session.info.name);
+		// Get current directory for file operations - use thread-local if set (ACP/WebSocket), otherwise process cwd
+		let current_dir = crate::mcp::get_thread_working_directory();
+		let mut chat_session = chat_session;
+		let mut first_message_processed = first_message_processed;
 
-	// Setup system prompt and cache using helper function (BEFORE showing interactive prompts)
-	setup_system_prompt_and_cache(&mut chat_session, &config_for_role, &role, true).await?;
+		// Setup system prompt and cache using helper function (BEFORE showing interactive prompts)
+		setup_system_prompt_and_cache(&mut chat_session, &config_for_role, &role, true).await?;
 
-	// Print the last few messages for context with colors if terminal supports them (for resumed sessions)
-	// Only show context for truly resumed sessions, not new sessions
-	if chat_session.was_resumed {
-		let last_messages = chat_session
-			.session
-			.messages
-			.iter()
-			.rev()
-			.take(3)
-			.collect::<Vec<_>>();
+		// Print the last few messages for context with colors if terminal supports them (for resumed sessions)
+		// Only show context for truly resumed sessions, not new sessions
+		if chat_session.was_resumed {
+			let last_messages = chat_session
+				.session
+				.messages
+				.iter()
+				.rev()
+				.take(3)
+				.collect::<Vec<_>>();
 
-		for msg in last_messages.iter().rev() {
-			if msg.role == "assistant" {
-				println!("{}", msg.content.bright_green());
-			} else if msg.role == "tool" {
-				log_debug!(msg.content);
-			} else if msg.role == "user" {
-				println!("> {}", msg.content.bright_blue());
-			}
-		}
-	}
-
-	// Set up advanced cancellation system for proper CTRL+C handling
-	// Enhanced processing state tracking for smart cancellation
-	#[derive(Debug, Clone, PartialEq)]
-	enum ProcessingState {
-		Idle,                 // No operation in progress
-		ReadingInput,         // Reading user input
-		CallingAPI,           // Making API call (includes layers, tools, response processing)
-		CompletedWithResults, // Completed successfully with results to keep
-	}
-
-	let processing_state = Arc::new(std::sync::Mutex::new(ProcessingState::Idle));
-	let _processing_state_clone = processing_state.clone();
-
-	// Smart operation tracking for surgical cleanup
-	#[derive(Debug, Clone)]
-	struct OperationContext {
-		user_message_index: Option<usize>,
-		assistant_message_index: Option<usize>, // Track when assistant message is added
-	}
-
-	let current_operation = Arc::new(std::sync::Mutex::new(None::<OperationContext>));
-
-	// Create the cancellation manager for this session
-	let mut cancellation = SessionCancellation::new();
-	let _ctrl_c_count = Arc::new(AtomicBool::new(false)); // Keep for now
-
-	// Start signal handler
-	let _signal_handler = cancellation.start_signal_handler();
-
-	// We need to handle configuration reloading, so keep our own copy that we can update
-	let mut current_config = config_for_role.clone();
-
-	// Apply runtime state from session log if this is a resumed session
-	if chat_session.was_resumed {
-		if let Some(session_file) = &chat_session.session.session_file {
-			if let Ok(runtime_state) = crate::session::extract_runtime_state_from_log(session_file)
-			{
-				// Workflow state is now stored in role config, not runtime state
-				// This section is kept for backward compatibility but does nothing
-				if let Some(_workflow_enabled) = runtime_state.layers_enabled {
-					log_info!("Legacy layers_enabled state ignored - using workflow configuration");
+			for msg in last_messages.iter().rev() {
+				if msg.role == "assistant" {
+					println!("{}", msg.content.bright_green());
+				} else if msg.role == "tool" {
+					log_debug!(msg.content);
+				} else if msg.role == "user" {
+					println!("> {}", msg.content.bright_blue());
 				}
 			}
 		}
-	}
 
-	// Set the thread-local config for logging macros
-	crate::config::set_thread_config(&current_config);
-	crate::config::set_thread_role(&role);
-	// Main interaction loop
-	loop {
-		// SMART CANCELLATION: Handle cancellation with surgical cleanup
-		// CRITICAL: Check cancellation BEFORE resetting processing state
-		// This ensures cleanup logic sees the correct state (e.g., CallingAPI)
-		if cancellation.is_cancelled() {
-			log_debug!("Ctrl+C detected - performing smart cleanup based on operation state");
+		// Set up advanced cancellation system for proper CTRL+C handling
+		// Enhanced processing state tracking for smart cancellation
+		#[derive(Debug, Clone, PartialEq)]
+		enum ProcessingState {
+			Idle,                 // No operation in progress
+			ReadingInput,         // Reading user input
+			CallingAPI,           // Making API call (includes layers, tools, response processing)
+			CompletedWithResults, // Completed successfully with results to keep
+		}
 
-			// CRITICAL FIX: Stop animation IMMEDIATELY before any cleanup
-			// This ensures the spinner stops instantly and user sees clean prompt
-			use crate::session::chat::get_animation_manager;
-			let animation_manager = get_animation_manager();
-			animation_manager.stop_current().await;
+		let processing_state = Arc::new(std::sync::Mutex::new(ProcessingState::Idle));
+		let _processing_state_clone = processing_state.clone();
 
-			// CRITICAL FIX: Use suspend to prevent ghost lines
-			// This ensures spinner is properly hidden before cost display
-			animation_manager.with_suspended_spinner(|| {
-				// Display cost information before cleanup
-				// This ensures users see the cost spent before cancellation
-				// Skip in JSONL mode
-				if !current_config.output_mode().should_suppress_cli_output() {
-					CostTracker::display_cost_line(&chat_session);
-				}
-			});
+		// Smart operation tracking for surgical cleanup
+		#[derive(Debug, Clone)]
+		struct OperationContext {
+			user_message_index: Option<usize>,
+			assistant_message_index: Option<usize>, // Track when assistant message is added
+		}
 
-			let current_state = processing_state.lock().unwrap().clone();
-			let operation = current_operation.lock().unwrap().clone();
+		let current_operation = Arc::new(std::sync::Mutex::new(None::<OperationContext>));
 
-			match current_state {
-				ProcessingState::Idle | ProcessingState::ReadingInput => {
-					// Nothing to clean up - just reset and continue
-					log_debug!("Cancelled during idle state - no cleanup needed");
-				}
-				ProcessingState::CallingAPI => {
-					// API call was interrupted - determine if we're in multi-turn conversation
-					// Multi-turn = tools were already executed and we're processing follow-up response
-					// Check: Are there ANY tool messages in the current operation's context?
-					if let Some(op) = operation {
-						// Check if there are tool messages AFTER the user message for this operation
-						// This indicates tools were executed and we're in a follow-up API call
-						let user_idx = op.user_message_index.unwrap_or(0);
-						let has_tool_messages = chat_session
-							.session
-							.messages
-							.iter()
-							.skip(user_idx)
-							.any(|msg| msg.role == "tool");
+		// Create the cancellation manager for this session
+		let mut cancellation = SessionCancellation::new();
+		let _ctrl_c_count = Arc::new(AtomicBool::new(false)); // Keep for now
 
-						if has_tool_messages {
-							// MULTI-TURN: Tools were executed, conversation state is valid
-							// Keep EVERYTHING - user message, assistant message, tool results
-							log_debug!("Ctrl+C during multi-turn (tools executed) - preserving all conversation state");
-						} else {
-							// FIRST CALL: No tools executed yet
-							// Remove user message (and assistant if added) for clean retry
-							if let Some(user_idx) = op.user_message_index {
-								if user_idx < chat_session.session.messages.len() {
-									chat_session.session.messages.truncate(user_idx);
-									log_debug!("Ctrl+C during first API call - removed user message for clean retry");
-								}
-							}
-						}
-					}
-				}
-				ProcessingState::CompletedWithResults => {
-					// Operation completed successfully - nothing to clean up
-					log_debug!("Cancelled after completion - all work preserved");
-				}
-			}
+		// Start signal handler
+		let _signal_handler = cancellation.start_signal_handler();
 
-			// Save the session after cleanup to persist changes
-			// PHASE 4: Robust save with retry and error reporting
-			// CRITICAL FIX: Write TRUNCATION_POINT marker to session file
-			// This tells the loader to discard messages after this point on resume
+		// We need to handle configuration reloading, so keep our own copy that we can update
+		let mut current_config = config_for_role.clone();
+
+		// Apply runtime state from session log if this is a resumed session
+		if chat_session.was_resumed {
 			if let Some(session_file) = &chat_session.session.session_file {
-				let truncation_entry = serde_json::json!({
-					"type": "TRUNCATION_POINT",
-					"timestamp": std::time::SystemTime::now()
-						.duration_since(std::time::UNIX_EPOCH)
-						.unwrap_or_default()
-						.as_secs(),
-					"message_count": chat_session.session.messages.len(),
-					"reason": "ctrl_c_cleanup"
-				});
-				if let Err(e) = crate::session::append_to_session_file(
-					session_file,
-					&serde_json::to_string(&truncation_entry).unwrap_or_default(),
-				) {
-					log_debug!("Failed to write TRUNCATION_POINT: {}", e);
-				}
-			}
-
-			if let Err(e) = chat_session.save() {
-				use colored::*;
-				eprintln!();
-				eprintln!(
-					"{}",
-					"⚠️  CRITICAL: Failed to save session after cleanup"
-						.bright_red()
-						.bold()
-				);
-				eprintln!("{} {}", "Error:".bright_yellow(), e);
-				eprintln!(
-					"{}",
-					"Session state may be inconsistent on resume.".bright_yellow()
-				);
-				eprintln!();
-
-				// Attempt one retry
-				log_debug!("Retrying session save after failure...");
-				if let Err(retry_err) = chat_session.save() {
-					eprintln!(
-						"{}",
-						"⚠️  Retry failed. Session may be corrupted.".bright_red()
-					);
-					log_debug!("Retry save failed: {}", retry_err);
-				} else {
-					eprintln!("{}", "✓ Retry succeeded - session saved.".bright_green());
-				}
-			}
-
-			// Clear operation context
-			*current_operation.lock().unwrap() = None;
-
-			// CRITICAL FIX: Reset cancellation state BEFORE continuing
-			// This prevents infinite loop where cancellation is always true
-			cancellation.reset();
-			log_debug!("Cancellation state reset - ready for new operation");
-
-			continue;
-		}
-
-		// CRITICAL: Reset processing state to Idle AFTER cancellation cleanup
-		// This ensures cleanup logic sees the correct state during cancellation
-		*processing_state.lock().unwrap() = ProcessingState::Idle;
-
-		// Set state to reading input
-		*processing_state.lock().unwrap() = ProcessingState::ReadingInput;
-
-		// Flush any due schedule entries into the inbox so all injection sources
-		// are unified — the loop only needs to drain the inbox from here on.
-		crate::mcp::core::flush_due_to_inbox();
-
-		// Pop the first pending inbox message (background agent, schedule, skill, /prompt).
-		// If one is ready, skip user input entirely and process it immediately.
-		let pending_msg = crate::session::inbox::try_pop_inbox_message();
-
-		// Get a new operation token for this iteration
-		let operation_rx = cancellation.new_operation();
-
-		// Calculate current context tokens for display
-		let current_context_tokens = calculate_current_context_tokens(
-			&chat_session.session.messages,
-			&current_config,
-			&role,
-		)
-		.await;
-
-		let input_result = if let Some(inbox_msg) = pending_msg {
-			// An inbox message is ready — inject it without waiting for user input.
-			log_debug!("Processing inbox message from {:?}", inbox_msg.source);
-			InputResult::Text(inbox_msg.content)
-		} else {
-			// Race blocking user input against inbox arrival.
-			// The inbox notify wakes us the moment any producer pushes a message,
-			// so we never miss an injection while the user is at the prompt.
-			let inbox_notify = crate::session::inbox::get_inbox_notify();
-			let estimated_cost = chat_session.estimated_cost;
-			let config_clone = current_config.clone();
-			let role_clone = role.clone();
-			let session_name = chat_session.session.info.name.clone();
-			let max_threshold = current_config.max_session_tokens_threshold;
-
-			let input_handle = tokio::task::spawn_blocking(move || {
-				read_user_input(
-					estimated_cost,
-					&config_clone,
-					&role_clone,
-					current_context_tokens,
-					max_threshold,
-					&session_name,
-					false, // Don't show status line after first interaction
-				)
-			});
-
-			tokio::select! {
-				// User typed something
-				join_result = input_handle => {
-					join_result.unwrap_or_else(|e| {
-						log_debug!("Input thread panicked: {}", e);
-						Ok(InputResult::Text(String::new()))
-					})?
-				}
-				// Inbox message arrived while user was at the prompt
-				_ = async {
-					if let Some(notify) = inbox_notify {
-						notify.notified().await;
-					} else {
-						std::future::pending::<()>().await;
-					}
-				} => {
-					// Pop the message that just arrived (or a schedule entry that fired).
-					crate::mcp::core::flush_due_to_inbox();
-					let msg = crate::session::inbox::try_pop_inbox_message()
-						.map(|m| m.content)
-						.unwrap_or_default();
-					// Unblock the reedline thread so it doesn't consume the next keypress.
-					#[cfg(unix)]
-					if !msg.is_empty() {
-						let mut stdin_write = unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(0) };
-						let _ = std::io::Write::write_all(&mut stdin_write, b"\n");
-						std::mem::forget(stdin_write);
-					}
-					InputResult::Text(msg)
-				}
-			}
-		};
-
-		// Handle the input result with proper error recovery
-		let input = match input_result {
-			InputResult::Text(text) => text,
-			InputResult::AddWithoutSending(text) => {
-				// Ctrl+G pressed - add message to context without sending
-
-				// Skip if input is empty
-				if text.trim().is_empty() {
-					continue;
-				}
-
-				// Add the message to session context
-				chat_session.add_user_message(&text)?;
-
-				// Save the session to persist the added message
-				if let Err(e) = chat_session.save() {
-					log_debug!(
-						"Warning: Failed to save session after adding message: {}",
-						e
-					);
-				}
-
-				// Provide feedback to user
-				println!("{}", "✓ Message added to context".bright_cyan());
-
-				// Continue to next input without sending to API
-				continue;
-			}
-			InputResult::Cancelled => {
-				// Ctrl+C pressed during input
-				log_debug!("Input cancelled by user - cleaning up");
-
-				// Kill any running async jobs
-				if let Some(manager) = crate::mcp::agent::functions::get_job_manager() {
-					manager.kill_all();
-				}
-
-				// Ensure session is saved
-				if let Err(e) = chat_session.save() {
-					log_debug!("Warning: Failed to save session after cancellation: {}", e);
-				}
-				continue;
-			}
-			InputResult::Exit => {
-				// Ctrl+D pressed - graceful exit handled in input.rs
-				// Kill any running async jobs
-				if let Some(manager) = crate::mcp::agent::functions::get_job_manager() {
-					manager.kill_all();
-				}
-				// Ensure session is saved
-				if let Err(e) = chat_session.save() {
-					log_debug!("Warning: Failed to save session: {}", e);
-				}
-				break;
-			}
-		};
-
-		// Check if the input is an exit command
-		if input == "/exit" || input == "/quit" {
-			// Kill any running async jobs before exiting
-			if let Some(manager) = crate::mcp::agent::functions::get_job_manager() {
-				manager.kill_all();
-			}
-			// Show resume command with session ID
-			let resume_cmd =
-				format!("octomind run --resume {}", chat_session.session.info.name).bright_cyan();
-			println!("\nTo continue this session, run: {}", resume_cmd);
-			break;
-		}
-
-		// Skip if input is empty
-		if input.trim().is_empty() {
-			continue;
-		}
-
-		// Initialize request spending tracking at the start of each request
-		chat_session.start_request_spending_tracking();
-
-		// Immediate feedback - show that we received the input
-		// This reduces perceived latency by giving instant visual feedback
-		if !input.starts_with('/') {
-			// Flush stdout to ensure prompt is cleared immediately
-			print!("\r\x1B[K");
-			std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
-		}
-
-		// Check if this is a command
-		if input.starts_with('/') {
-			// Handle special /done command separately
-			if input.trim() == "/done" {
-				// Handle /done command using dedicated handler
-				match super::commands::handle_done(
-					&mut chat_session,
-					&current_config,
-					operation_rx.clone(),
-				)
-				.await
+				if let Ok(runtime_state) =
+					crate::session::extract_runtime_state_from_log(session_file)
 				{
-					Ok((exit_flag, reset_first_message)) => {
-						if reset_first_message {
-							// Reset first_message_processed to false so that the next message goes through layers again
-							first_message_processed = false;
-						}
-						if exit_flag {
-							break;
-						}
-					}
-					Err(e) => {
-						println!("{}: {}", "❌ /done command failed".bright_red(), e);
+					// Workflow state is now stored in role config, not runtime state
+					// This section is kept for backward compatibility but does nothing
+					if let Some(_workflow_enabled) = runtime_state.layers_enabled {
+						log_info!(
+							"Legacy layers_enabled state ignored - using workflow configuration"
+						);
 					}
 				}
-				continue;
 			}
+		}
 
-			// Try to process as command
-			let command_result = chat_session
-				.process_command(&input, &mut current_config, &role, operation_rx.clone())
-				.await?;
+		// Set the thread-local config for logging macros
+		crate::config::set_thread_config(&current_config);
+		crate::config::set_thread_role(&role);
+		// Main interaction loop
+		loop {
+			// SMART CANCELLATION: Handle cancellation with surgical cleanup
+			// CRITICAL: Check cancellation BEFORE resetting processing state
+			// This ensures cleanup logic sees the correct state (e.g., CallingAPI)
+			if cancellation.is_cancelled() {
+				log_debug!("Ctrl+C detected - performing smart cleanup based on operation state");
 
-			match command_result {
-				CommandResult::TreatAsUserInput => {
-					// This input should be treated as user input, fall through to normal processing
-				}
-				CommandResult::Exit => {
-					// First check if it's a session switch command
-					if input.starts_with(SESSION_COMMAND) {
-						// We need to switch to another session
-						let new_session_name = chat_session.session.info.name.clone();
+				// CRITICAL FIX: Stop animation IMMEDIATELY before any cleanup
+				// This ensures the spinner stops instantly and user sees clean prompt
+				use crate::session::chat::get_animation_manager;
+				let animation_manager = get_animation_manager();
+				animation_manager.stop_current().await;
 
-						// Save current session before switching
-						chat_session.save()?;
+				// CRITICAL FIX: Use suspend to prevent ghost lines
+				// This ensures spinner is properly hidden before cost display
+				animation_manager.with_suspended_spinner(|| {
+					// Display cost information before cleanup
+					// This ensures users see the cost spent before cancellation
+					// Skip in JSONL mode
+					if !current_config.output_mode().should_suppress_cli_output() {
+						CostTracker::display_cost_line(&chat_session);
+					}
+				});
 
-						// Initialize the new session
-						let session_params = SessionInitParams::new(&current_config, &role)
-							.with_name(new_session_name)
-							.with_max_retries(current_config.max_retries);
-						let new_chat_session = ChatSession::initialize(session_params).await?;
+				let current_state = processing_state.lock().unwrap().clone();
+				let operation = current_operation.lock().unwrap().clone();
 
-						// Replace the current chat session
-						chat_session = new_chat_session;
-
-						// Reset first message flag for new session
-						first_message_processed = !chat_session.session.messages.is_empty();
-
-						// Print the last few messages for context with colors
-						if !chat_session.session.messages.is_empty() {
-							let last_messages = chat_session
+				match current_state {
+					ProcessingState::Idle | ProcessingState::ReadingInput => {
+						// Nothing to clean up - just reset and continue
+						log_debug!("Cancelled during idle state - no cleanup needed");
+					}
+					ProcessingState::CallingAPI => {
+						// API call was interrupted - determine if we're in multi-turn conversation
+						// Multi-turn = tools were already executed and we're processing follow-up response
+						// Check: Are there ANY tool messages in the current operation's context?
+						if let Some(op) = operation {
+							// Check if there are tool messages AFTER the user message for this operation
+							// This indicates tools were executed and we're in a follow-up API call
+							let user_idx = op.user_message_index.unwrap_or(0);
+							let has_tool_messages = chat_session
 								.session
 								.messages
 								.iter()
-								.rev()
-								.take(3)
-								.collect::<Vec<_>>();
+								.skip(user_idx)
+								.any(|msg| msg.role == "tool");
 
-							for msg in last_messages.iter().rev() {
-								if msg.role == "assistant" {
-									println!("{}", msg.content.bright_green());
-								} else if msg.role == "user" {
-									println!("> {}", msg.content.bright_blue());
+							if has_tool_messages {
+								// MULTI-TURN: Tools were executed, conversation state is valid
+								// Keep EVERYTHING - user message, assistant message, tool results
+								log_debug!("Ctrl+C during multi-turn (tools executed) - preserving all conversation state");
+							} else {
+								// FIRST CALL: No tools executed yet
+								// Remove user message (and assistant if added) for clean retry
+								if let Some(user_idx) = op.user_message_index {
+									if user_idx < chat_session.session.messages.len() {
+										chat_session.session.messages.truncate(user_idx);
+										log_debug!("Ctrl+C during first API call - removed user message for clean retry");
+									}
 								}
 							}
 						}
-
-						// Continue with the session
-						continue;
-					} else if input.starts_with(MODEL_COMMAND) || input.starts_with(ROLE_COMMAND) {
-						// This is a command that requires config reload
-						// Reload the configuration
-						match crate::config::Config::load() {
-							Ok(updated_config) => {
-								// Update our current config with the new role-specific config
-								current_config = updated_config.get_merged_config_for_role(&role);
-								// Update thread config for logging macros
-								crate::config::set_thread_config(&current_config);
-								crate::config::set_thread_role(&role);
-							}
-							Err(e) => {
-								log_info!("Error reloading configuration: {}", e);
-							}
-						}
-						// Continue with the session
-						continue;
-					} else {
-						// It's a regular exit command
-						break;
+					}
+					ProcessingState::CompletedWithResults => {
+						// Operation completed successfully - nothing to clean up
+						log_debug!("Cancelled after completion - all work preserved");
 					}
 				}
-				CommandResult::Handled => {
-					// Command was handled successfully, continue with session
+
+				// Save the session after cleanup to persist changes
+				// PHASE 4: Robust save with retry and error reporting
+				// CRITICAL FIX: Write TRUNCATION_POINT marker to session file
+				// This tells the loader to discard messages after this point on resume
+				if let Some(session_file) = &chat_session.session.session_file {
+					let truncation_entry = serde_json::json!({
+						"type": "TRUNCATION_POINT",
+						"timestamp": std::time::SystemTime::now()
+							.duration_since(std::time::UNIX_EPOCH)
+							.unwrap_or_default()
+							.as_secs(),
+						"message_count": chat_session.session.messages.len(),
+						"reason": "ctrl_c_cleanup"
+					});
+					if let Err(e) = crate::session::append_to_session_file(
+						session_file,
+						&serde_json::to_string(&truncation_entry).unwrap_or_default(),
+					) {
+						log_debug!("Failed to write TRUNCATION_POINT: {}", e);
+					}
+				}
+
+				if let Err(e) = chat_session.save() {
+					use colored::*;
+					eprintln!();
+					eprintln!(
+						"{}",
+						"⚠️  CRITICAL: Failed to save session after cleanup"
+							.bright_red()
+							.bold()
+					);
+					eprintln!("{} {}", "Error:".bright_yellow(), e);
+					eprintln!(
+						"{}",
+						"Session state may be inconsistent on resume.".bright_yellow()
+					);
+					eprintln!();
+
+					// Attempt one retry
+					log_debug!("Retrying session save after failure...");
+					if let Err(retry_err) = chat_session.save() {
+						eprintln!(
+							"{}",
+							"⚠️  Retry failed. Session may be corrupted.".bright_red()
+						);
+						log_debug!("Retry save failed: {}", retry_err);
+					} else {
+						eprintln!("{}", "✓ Retry succeeded - session saved.".bright_green());
+					}
+				}
+
+				// Clear operation context
+				*current_operation.lock().unwrap() = None;
+
+				// CRITICAL FIX: Reset cancellation state BEFORE continuing
+				// This prevents infinite loop where cancellation is always true
+				cancellation.reset();
+				log_debug!("Cancellation state reset - ready for new operation");
+
+				continue;
+			}
+
+			// CRITICAL: Reset processing state to Idle AFTER cancellation cleanup
+			// This ensures cleanup logic sees the correct state during cancellation
+			*processing_state.lock().unwrap() = ProcessingState::Idle;
+
+			// Set state to reading input
+			*processing_state.lock().unwrap() = ProcessingState::ReadingInput;
+
+			// Flush any due schedule entries into the inbox so all injection sources
+			// are unified — the loop only needs to drain the inbox from here on.
+			crate::mcp::core::flush_due_to_inbox();
+
+			// Pop the first pending inbox message (background agent, schedule, skill, /prompt).
+			// If one is ready, skip user input entirely and process it immediately.
+			let pending_msg = crate::session::inbox::try_pop_inbox_message();
+
+			// Get a new operation token for this iteration
+			let operation_rx = cancellation.new_operation();
+
+			// Calculate current context tokens for display
+			let current_context_tokens = calculate_current_context_tokens(
+				&chat_session.session.messages,
+				&current_config,
+				&role,
+			)
+			.await;
+
+			let input_result = if let Some(inbox_msg) = pending_msg {
+				// An inbox message is ready — inject it without waiting for user input.
+				log_debug!("Processing inbox message from {:?}", inbox_msg.source);
+				InputResult::Text(inbox_msg.content)
+			} else {
+				// Reedline blocks for user input. A shared slot lets the
+				// inbox-notification thread (inside read_user_input) show a
+				// preview above the prompt when an inbox entry arrives.  The
+				// user then presses Enter to accept it.
+				let inbox_pending: Arc<std::sync::Mutex<Option<String>>> =
+					Arc::new(std::sync::Mutex::new(None));
+
+				// Spawn a task that watches the inbox notify and sets the preview.
+				let inbox_notify = crate::session::inbox::get_inbox_notify();
+				let slot_for_notify = inbox_pending.clone();
+				let session_name_for_peek = chat_session.session.info.name.clone();
+				let notify_task = tokio::spawn(async move {
+					if let Some(notify) = inbox_notify {
+						loop {
+							notify.notified().await;
+							// Flush schedule entries so the inbox has the message ready.
+							crate::mcp::core::flush_due_to_inbox();
+							// Verify the inbox actually has a message — the permit
+							// may be stale from a previous iteration where
+							// try_pop_inbox_message() already consumed the entry.
+							if let Some(preview) =
+								crate::session::inbox::peek_inbox_preview(&session_name_for_peek)
+							{
+								if let Ok(mut guard) = slot_for_notify.lock() {
+									*guard = Some(preview);
+								}
+								break;
+							}
+							// Stale permit — go back to waiting for a real message.
+						}
+					}
+				});
+
+				let estimated_cost = chat_session.estimated_cost;
+				let config_clone = current_config.clone();
+				let role_clone = role.clone();
+				let session_name = chat_session.session.info.name.clone();
+				let max_threshold = current_config.max_session_tokens_threshold;
+				let inbox_pending_clone = inbox_pending.clone();
+
+				let result = tokio::task::spawn_blocking(move || {
+					read_user_input(
+						estimated_cost,
+						&config_clone,
+						&role_clone,
+						current_context_tokens,
+						max_threshold,
+						&session_name,
+						inbox_pending_clone,
+					)
+				})
+				.await
+				.unwrap_or_else(|e| {
+					log_debug!("Input thread panicked: {}", e);
+					Ok(InputResult::Text(String::new()))
+				})?;
+
+				// Clean up the notify watcher — no longer needed this iteration.
+				notify_task.abort();
+
+				result
+			};
+
+			// Handle the input result with proper error recovery
+			let mut input = match input_result {
+				InputResult::Text(text) => text,
+				InputResult::AddWithoutSending(text) => {
+					// Ctrl+G pressed - add message to context without sending
+
+					// Skip if input is empty
+					if text.trim().is_empty() {
+						continue;
+					}
+
+					// Add the message to session context
+					chat_session.add_user_message(&text)?;
+
+					// Save the session to persist the added message
+					if let Err(e) = chat_session.save() {
+						log_debug!(
+							"Warning: Failed to save session after adding message: {}",
+							e
+						);
+					}
+
+					// Provide feedback to user
+					println!("{}", "✓ Message added to context".bright_cyan());
+
+					// Continue to next input without sending to API
 					continue;
 				}
-				CommandResult::HandledWithOutput(mut json_output) => {
-					// Command was handled with output
-					// Print it for CLI using existing display functions
-					print_command_output(&mut json_output, &mut chat_session, &current_config)
-						.await;
+				InputResult::Cancelled => {
+					// Ctrl+C pressed during input
+					log_debug!("Input cancelled by user - cleaning up");
+
+					// Kill any running async jobs
+					if let Some(manager) = crate::mcp::agent::functions::get_job_manager() {
+						manager.kill_all();
+					}
+
+					// Ensure session is saved
+					if let Err(e) = chat_session.save() {
+						log_debug!("Warning: Failed to save session after cancellation: {}", e);
+					}
+					continue;
+				}
+				InputResult::Exit => {
+					// Ctrl+D pressed - graceful exit handled in input.rs
+					// Kill any running async jobs
+					if let Some(manager) = crate::mcp::agent::functions::get_job_manager() {
+						manager.kill_all();
+					}
+					// Ensure session is saved
+					if let Err(e) = chat_session.save() {
+						log_debug!("Warning: Failed to save session: {}", e);
+					}
+					break;
+				}
+			};
+
+			// Check if the input is an exit command
+			if input == "/exit" || input == "/quit" {
+				// Kill any running async jobs before exiting
+				if let Some(manager) = crate::mcp::agent::functions::get_job_manager() {
+					manager.kill_all();
+				}
+				// Show resume command with session ID
+				let resume_cmd =
+					format!("octomind run --resume {}", chat_session.session.info.name)
+						.bright_cyan();
+				println!("\nTo continue this session, run: {}", resume_cmd);
+				break;
+			}
+
+			// Skip if input is empty — unless an inbox message is waiting.
+			if input.trim().is_empty() {
+				// User pressed Enter on empty prompt. Check if an inbox
+				// message arrived while they were at the prompt.
+				crate::mcp::core::flush_due_to_inbox();
+				if crate::session::inbox::has_inbox_messages() {
+					if let Some(msg) = crate::session::inbox::try_pop_inbox_message() {
+						log_debug!("Processing inbox message from {:?}", msg.source);
+						input = msg.content;
+					}
+				}
+				if input.trim().is_empty() {
 					continue;
 				}
 			}
-		}
 
-		// Check for cancellation before starting layered processing
-		if cancellation.is_cancelled() {
-			continue;
-		}
+			// Initialize request spending tracking at the start of each request
+			chat_session.start_request_spending_tracking();
 
-		// Process layers if enabled using helper function
-		let (processed_input, workflow_modified_session, _layer_cancelled) =
-			process_layers_if_enabled(
-				&input,
-				&mut chat_session,
-				&current_config,
-				&role,
-				first_message_processed,
-				operation_rx.clone(),
-			)
-			.await?;
+			// Immediate feedback - show that we received the input
+			// This reduces perceived latency by giving instant visual feedback
+			if !input.starts_with('/') {
+				// Flush stdout to ensure prompt is cleared immediately
+				print!("\r\x1B[K");
+				std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
+			}
 
-		// Check for cancellation after layer processing
-		if cancellation.is_cancelled() {
-			continue;
-		}
+			// Check if this is a command
+			if input.starts_with('/') {
+				// Handle special /done command separately
+				if input.trim() == "/done" {
+					// Handle /done command using dedicated handler
+					match super::commands::handle_done(
+						&mut chat_session,
+						&current_config,
+						operation_rx.clone(),
+					)
+					.await
+					{
+						Ok((exit_flag, reset_first_message)) => {
+							if reset_first_message {
+								// Reset first_message_processed to false so that the next message goes through layers again
+								first_message_processed = false;
+							}
+							if exit_flag {
+								break;
+							}
+						}
+						Err(e) => {
+							println!("{}: {}", "❌ /done command failed".bright_red(), e);
+						}
+					}
+					continue;
+				}
 
-		let final_input = if workflow_modified_session {
-			// Layers used output_mode append/replace and added messages to session
-			// Skip adding user message to avoid duplicates and continue with the user message
-			// to guarantee that the output from layer next processed with the main loop
-			first_message_processed = true;
-			input // Use original input
-		} else {
-			// Use the processed input from layers (or original if layers not enabled)
-			// Mark that we've processed the first message through layers
-			first_message_processed = true;
-			processed_input
-		};
+				// Try to process as command
+				let command_result = chat_session
+					.process_command(&input, &mut current_config, &role, operation_rx.clone())
+					.await?;
 
-		// Initialize operation context for smart tracking
-		let operation_id = format!(
-			"op_{}",
-			std::time::SystemTime::now()
-				.duration_since(std::time::UNIX_EPOCH)
-				.unwrap_or_default()
-				.as_millis()
-		);
-		// CRITICAL: Set first_prompt_idx BEFORE compression runs so the anchor is always
-		// correct. Compression uses first_prompt_idx as the lower boundary — if it's None
-		// during the first compression, the system message index is used as fallback, which
-		// can allow compressing the very first user message.
-		// We use the current message count because that is exactly where the user message
-		// will be inserted after compression finishes (compression only removes/replaces
-		// older messages, never appends).
-		if !workflow_modified_session && chat_session.first_prompt_idx.is_none() {
-			chat_session.first_prompt_idx = Some(chat_session.session.messages.len());
-		}
+				match command_result {
+					CommandResult::TreatAsUserInput => {
+						// This input should be treated as user input, fall through to normal processing
+					}
+					CommandResult::Exit => {
+						// First check if it's a session switch command
+						if input.starts_with(SESSION_COMMAND) {
+							// We need to switch to another session
+							let new_session_name = chat_session.session.info.name.clone();
 
-		// CONVERSATION COMPRESSION: Check if AI should compress older exchanges
-		// This happens BEFORE user message is added to ensure user's new request is not broken by summarization
-		// AI decides if compression is beneficial based on conversation history
-		let _compression_occurred =
+							// Save current session before switching
+							chat_session.save()?;
+
+							// Initialize the new session
+							let session_params = SessionInitParams::new(&current_config, &role)
+								.with_name(new_session_name)
+								.with_max_retries(current_config.max_retries);
+							let new_chat_session = ChatSession::initialize(session_params).await?;
+
+							// Replace the current chat session
+							chat_session = new_chat_session;
+
+							// Reset first message flag for new session
+							first_message_processed = !chat_session.session.messages.is_empty();
+
+							// Print the last few messages for context with colors
+							if !chat_session.session.messages.is_empty() {
+								let last_messages = chat_session
+									.session
+									.messages
+									.iter()
+									.rev()
+									.take(3)
+									.collect::<Vec<_>>();
+
+								for msg in last_messages.iter().rev() {
+									if msg.role == "assistant" {
+										println!("{}", msg.content.bright_green());
+									} else if msg.role == "user" {
+										println!("> {}", msg.content.bright_blue());
+									}
+								}
+							}
+
+							// Continue with the session
+							continue;
+						} else if input.starts_with(MODEL_COMMAND)
+							|| input.starts_with(ROLE_COMMAND)
+						{
+							// This is a command that requires config reload
+							// Reload the configuration
+							match crate::config::Config::load() {
+								Ok(updated_config) => {
+									// Update our current config with the new role-specific config
+									current_config =
+										updated_config.get_merged_config_for_role(&role);
+									// Update thread config for logging macros
+									crate::config::set_thread_config(&current_config);
+									crate::config::set_thread_role(&role);
+								}
+								Err(e) => {
+									log_info!("Error reloading configuration: {}", e);
+								}
+							}
+							// Continue with the session
+							continue;
+						} else {
+							// It's a regular exit command
+							break;
+						}
+					}
+					CommandResult::Handled => {
+						// Command was handled successfully, continue with session
+						continue;
+					}
+					CommandResult::HandledWithOutput(mut json_output) => {
+						// Command was handled with output
+						// Print it for CLI using existing display functions
+						print_command_output(&mut json_output, &mut chat_session, &current_config)
+							.await;
+						continue;
+					}
+				}
+			}
+
+			// Check for cancellation before starting layered processing
+			if cancellation.is_cancelled() {
+				continue;
+			}
+
+			// Process layers if enabled using helper function
+			let (processed_input, workflow_modified_session, _layer_cancelled) =
+				process_layers_if_enabled(
+					&input,
+					&mut chat_session,
+					&current_config,
+					&role,
+					first_message_processed,
+					operation_rx.clone(),
+				)
+				.await?;
+
+			// Check for cancellation after layer processing
+			if cancellation.is_cancelled() {
+				continue;
+			}
+
+			let final_input = if workflow_modified_session {
+				// Layers used output_mode append/replace and added messages to session
+				// Skip adding user message to avoid duplicates and continue with the user message
+				// to guarantee that the output from layer next processed with the main loop
+				first_message_processed = true;
+				input // Use original input
+			} else {
+				// Use the processed input from layers (or original if layers not enabled)
+				// Mark that we've processed the first message through layers
+				first_message_processed = true;
+				processed_input
+			};
+
+			// Initialize operation context for smart tracking
+			let operation_id = format!(
+				"op_{}",
+				std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.unwrap_or_default()
+					.as_millis()
+			);
+			// CRITICAL: Set first_prompt_idx BEFORE compression runs so the anchor is always
+			// correct. Compression uses first_prompt_idx as the lower boundary — if it's None
+			// during the first compression, the system message index is used as fallback, which
+			// can allow compressing the very first user message.
+			// We use the current message count because that is exactly where the user message
+			// will be inserted after compression finishes (compression only removes/replaces
+			// older messages, never appends).
+			if !workflow_modified_session && chat_session.first_prompt_idx.is_none() {
+				chat_session.first_prompt_idx = Some(chat_session.session.messages.len());
+			}
+
+			// CONVERSATION COMPRESSION: Check if AI should compress older exchanges
+			// This happens BEFORE user message is added to ensure user's new request is not broken by summarization
+			// AI decides if compression is beneficial based on conversation history
+			let _compression_occurred =
 			match crate::session::chat::conversation_compression::check_and_compress_conversation(
 				&mut chat_session,
 				&current_config,
@@ -633,183 +660,186 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				}
 			};
 
-		// CRITICAL FIX: Set processing state BEFORE adding user message
-		// This ensures cancellation cleanup works correctly if Ctrl+C is pressed
-		// between adding the message and starting the API call
-		*processing_state.lock().unwrap() = ProcessingState::CallingAPI;
+			// CRITICAL FIX: Set processing state BEFORE adding user message
+			// This ensures cancellation cleanup works correctly if Ctrl+C is pressed
+			// between adding the message and starting the API call
+			*processing_state.lock().unwrap() = ProcessingState::CallingAPI;
 
-		// CRITICAL: Capture user message insertion index AFTER compression mutations.
-		// This keeps error rollback truncation aligned with current session layout.
+			// CRITICAL: Capture user message insertion index AFTER compression mutations.
+			// This keeps error rollback truncation aligned with current session layout.
 
-		let user_message_index = chat_session.session.messages.len();
+			let user_message_index = chat_session.session.messages.len();
 
-		// Add user message for standard processing flow
-		// Skip if layers already modified the session (to avoid duplicates)
-		if !workflow_modified_session {
-			// Append constraints if configured
-			let final_input_with_constraints = super::utils::append_constraints_if_exists(
-				&final_input,
-				&current_config.custom_constraints_file_name,
-				&current_dir,
-			);
-			chat_session.add_user_message(&final_input_with_constraints)?;
-		}
+			// Add user message for standard processing flow
+			// Skip if layers already modified the session (to avoid duplicates)
+			if !workflow_modified_session {
+				// Append constraints if configured
+				let final_input_with_constraints = super::utils::append_constraints_if_exists(
+					&final_input,
+					&current_config.custom_constraints_file_name,
+					&current_dir,
+				);
+				chat_session.add_user_message(&final_input_with_constraints)?;
+			}
 
-		// Create operation context for tracking
-		*current_operation.lock().unwrap() = Some(OperationContext {
-			user_message_index: Some(user_message_index),
-			assistant_message_index: None, // Will be set when assistant message is added
-		});
-
-		log_debug!(
-			"Started operation {} with user message at index {}",
-			operation_id,
-			user_message_index
-		);
-
-		// Prepare for API call using helper function
-		// Treat cancellation as a soft signal — continue the loop instead of exiting the session
-		match prepare_for_api_call(&mut chat_session, &current_config, operation_rx.clone()).await {
-			Ok(()) => {}
-			Err(e) if e.to_string().contains("Operation cancelled") => continue,
-			Err(e) => return Err(e),
-		}
-
-		// Capture message count BEFORE API call to detect if assistant message gets added
-		let messages_before_api = chat_session.session.messages.len();
-
-		// Check for Ctrl+C before making API call
-		if cancellation.is_cancelled() {
-			// Immediately stop and return to main loop
-			continue;
-		}
-
-		// Execute API call and process response using helper function
-		// CRITICAL FIX: Use tokio::select! to race API call against cancellation
-		// This allows INSTANT Ctrl+C response instead of waiting for API to complete
-		let user_message_index_for_error = user_message_index;
-		let model_for_error = chat_session.model.clone();
-
-		let api_result = {
-			// Set up notification forwarding for interactive terminal mode.
-			// Notifications (e.g. MCP server warnings) are printed to stderr so they
-			// don't interfere with the readline prompt on stdout.
-			let (notif_tx, mut notif_rx) =
-				tokio::sync::mpsc::unbounded_channel::<crate::websocket::ServerMessage>();
-			crate::mcp::process::set_notification_sender(None, notif_tx);
-
-			// Drain notifications to stderr in a background task
-			let notif_drain = tokio::spawn(async move {
-				while let Some(msg) = notif_rx.recv().await {
-					if let crate::websocket::ServerMessage::McpNotification(n) = msg {
-						use colored::Colorize;
-						eprintln!(
-							"{}",
-							format!(
-								"⚠ [{}] {}",
-								n.server,
-								n.params
-									.get("message")
-									.and_then(|m| m.as_str())
-									.unwrap_or(&n.method)
-							)
-							.yellow()
-						);
-					}
-				}
+			// Create operation context for tracking
+			*current_operation.lock().unwrap() = Some(OperationContext {
+				user_message_index: Some(user_message_index),
+				assistant_message_index: None, // Will be set when assistant message is added
 			});
 
-			let result = tokio::select! {
-				// API call branch
-				result = execute_api_call_and_process_response(
-					&mut chat_session,
-					&current_config,
-					&role,
-					operation_rx.clone(),
-					OutputMode::Interactive,
-					SilentSink,
-				) => result,
-				// Cancellation branch - INSTANT response
-				_ = async {
-					let mut cancel_rx = cancellation.operation_receiver();
-					while !*cancel_rx.borrow() {
-						if cancel_rx.changed().await.is_err() {
-							break;
+			log_debug!(
+				"Started operation {} with user message at index {}",
+				operation_id,
+				user_message_index
+			);
+
+			// Prepare for API call using helper function
+			// Treat cancellation as a soft signal — continue the loop instead of exiting the session
+			match prepare_for_api_call(&mut chat_session, &current_config, operation_rx.clone())
+				.await
+			{
+				Ok(()) => {}
+				Err(e) if e.to_string().contains("Operation cancelled") => continue,
+				Err(e) => return Err(e),
+			}
+
+			// Capture message count BEFORE API call to detect if assistant message gets added
+			let messages_before_api = chat_session.session.messages.len();
+
+			// Check for Ctrl+C before making API call
+			if cancellation.is_cancelled() {
+				// Immediately stop and return to main loop
+				continue;
+			}
+
+			// Execute API call and process response using helper function
+			// CRITICAL FIX: Use tokio::select! to race API call against cancellation
+			// This allows INSTANT Ctrl+C response instead of waiting for API to complete
+			let user_message_index_for_error = user_message_index;
+			let model_for_error = chat_session.model.clone();
+
+			let api_result = {
+				// Set up notification forwarding for interactive terminal mode.
+				// Notifications (e.g. MCP server warnings) are printed to stderr so they
+				// don't interfere with the readline prompt on stdout.
+				let (notif_tx, mut notif_rx) =
+					tokio::sync::mpsc::unbounded_channel::<crate::websocket::ServerMessage>();
+				crate::mcp::process::set_notification_sender(None, notif_tx);
+
+				// Drain notifications to stderr in a background task
+				let notif_drain = tokio::spawn(async move {
+					while let Some(msg) = notif_rx.recv().await {
+						if let crate::websocket::ServerMessage::McpNotification(n) = msg {
+							use colored::Colorize;
+							eprintln!(
+								"{}",
+								format!(
+									"⚠ [{}] {}",
+									n.server,
+									n.params
+										.get("message")
+										.and_then(|m| m.as_str())
+										.unwrap_or(&n.method)
+								)
+								.yellow()
+							);
 						}
 					}
-				} => {
-					// Ctrl+C pressed - stop animation and return to prompt immediately
-					use crate::session::chat::get_animation_manager;
-					get_animation_manager().stop_current().await;
-					log_debug!("API call cancelled by user - returning to prompt");
-					crate::mcp::process::clear_notification_sender(None);
-					notif_drain.abort();
-					continue;
-				}
-			}; // end tokio::select!
+				});
 
-			crate::mcp::process::clear_notification_sender(None);
-			let _ = notif_drain.await;
+				let result = tokio::select! {
+					// API call branch
+					result = execute_api_call_and_process_response(
+						&mut chat_session,
+						&current_config,
+						&role,
+						operation_rx.clone(),
+						OutputMode::Interactive,
+						SilentSink,
+					) => result,
+					// Cancellation branch - INSTANT response
+					_ = async {
+						let mut cancel_rx = cancellation.operation_receiver();
+						while !*cancel_rx.borrow() {
+							if cancel_rx.changed().await.is_err() {
+								break;
+							}
+						}
+					} => {
+						// Ctrl+C pressed - stop animation and return to prompt immediately
+						use crate::session::chat::get_animation_manager;
+						get_animation_manager().stop_current().await;
+						log_debug!("API call cancelled by user - returning to prompt");
+						crate::mcp::process::clear_notification_sender(None);
+						notif_drain.abort();
+						continue;
+					}
+				}; // end tokio::select!
 
-			result
-		}; // end notification wrapper block
+				crate::mcp::process::clear_notification_sender(None);
+				let _ = notif_drain.await;
 
-		match api_result {
-			Ok(_) => {
-				// CRITICAL FIX: Check for cancellation BEFORE marking as completed
-				// If cancelled during HTTP request, we need to remove the user message
-				if cancellation.is_cancelled() {
-					log_debug!(
+				result
+			}; // end notification wrapper block
+
+			match api_result {
+				Ok(_) => {
+					// CRITICAL FIX: Check for cancellation BEFORE marking as completed
+					// If cancelled during HTTP request, we need to remove the user message
+					if cancellation.is_cancelled() {
+						log_debug!(
 						"Operation cancelled during or after API call - cleaning up user message"
 					);
 
-					// Check if assistant message was added (response was processed)
-					let messages_after_api = chat_session.session.messages.len();
-					let assistant_message_added = messages_after_api > messages_before_api;
+						// Check if assistant message was added (response was processed)
+						let messages_after_api = chat_session.session.messages.len();
+						let assistant_message_added = messages_after_api > messages_before_api;
 
-					if !assistant_message_added {
-						// No assistant response was processed - remove the user message
-						if user_message_index < chat_session.session.messages.len() {
-							chat_session.session.messages.truncate(user_message_index);
-							log_debug!("Removed user message due to cancellation before assistant response");
+						if !assistant_message_added {
+							// No assistant response was processed - remove the user message
+							if user_message_index < chat_session.session.messages.len() {
+								chat_session.session.messages.truncate(user_message_index);
+								log_debug!("Removed user message due to cancellation before assistant response");
+							}
+						}
+						// If assistant message was added, keep everything (conversation state is valid)
+
+						continue; // Return to main loop for next user input
+					}
+
+					// Update processing state to completed when done (only if not cancelled)
+					*processing_state.lock().unwrap() = ProcessingState::CompletedWithResults;
+
+					// Update operation context with assistant message index if one was added
+					if let Some(ref mut op) = *current_operation.lock().unwrap() {
+						let messages_after_api = chat_session.session.messages.len();
+						if messages_after_api > messages_before_api {
+							// Assistant message was added - record its index
+							op.assistant_message_index = Some(messages_before_api);
+							log_debug!("Assistant message added at index {}", messages_before_api);
 						}
 					}
-					// If assistant message was added, keep everything (conversation state is valid)
-
-					continue; // Return to main loop for next user input
 				}
-
-				// Update processing state to completed when done (only if not cancelled)
-				*processing_state.lock().unwrap() = ProcessingState::CompletedWithResults;
-
-				// Update operation context with assistant message index if one was added
-				if let Some(ref mut op) = *current_operation.lock().unwrap() {
-					let messages_after_api = chat_session.session.messages.len();
-					if messages_after_api > messages_before_api {
-						// Assistant message was added - record its index
-						op.assistant_message_index = Some(messages_before_api);
-						log_debug!("Assistant message added at index {}", messages_before_api);
-					}
+				Err(e) => {
+					// Handle API error using helper function
+					handle_api_error(
+						&mut chat_session,
+						user_message_index_for_error,
+						&model_for_error,
+						&e,
+						OutputMode::Interactive,
+					);
 				}
 			}
-			Err(e) => {
-				// Handle API error using helper function
-				handle_api_error(
-					&mut chat_session,
-					user_message_index_for_error,
-					&model_for_error,
-					&e,
-					OutputMode::Interactive,
-				);
-			}
+
+			// Clear operation context at the end of each successful iteration
+			*current_operation.lock().unwrap() = None;
 		}
 
-		// Clear operation context at the end of each successful iteration
-		*current_operation.lock().unwrap() = None;
-	}
-
-	Ok(())
-	}).await
+		Ok(())
+	})
+	.await
 }
 
 // Run a single non-interactive session with provided input

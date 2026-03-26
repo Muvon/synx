@@ -152,7 +152,7 @@ pub fn read_user_input(
 	current_context_tokens: u64,
 	max_session_tokens_threshold: usize,
 	session_id: &str,
-	_show_status_line: bool,
+	inbox_pending: Arc<std::sync::Mutex<Option<String>>>,
 ) -> Result<InputResult> {
 	// Create reedline with in-memory history and preloaded role history
 	let mut history = FileBackedHistory::new(1000).expect("Error configuring history");
@@ -248,7 +248,7 @@ pub fn read_user_input(
 			.with_column_padding(2),
 	);
 
-	let mut line_editor = Reedline::create()
+	let line_editor = Reedline::create()
 		.with_history(history)
 		.with_completer(Box::new(
 			crate::session::chat::reedline_adapter::ReedlineAdapter::new(
@@ -281,6 +281,36 @@ pub fn read_user_input(
 		.with_quick_completions(true)
 		.use_bracketed_paste(true)
 		.with_edit_mode(edit_mode);
+
+	// Set up external printer for inbox notifications.
+	// A background thread polls the inbox_pending flag and sends a
+	// one-shot notification that reedline renders above the prompt.
+	let printer = reedline::ExternalPrinter::<String>::new(5);
+	let sender = printer.sender();
+	let inbox_slot = inbox_pending;
+	std::thread::spawn(move || {
+		let mut notified = false;
+		loop {
+			std::thread::sleep(std::time::Duration::from_millis(100));
+			let preview = inbox_slot.lock().ok().and_then(|g| g.clone());
+			if let Some(preview) = preview {
+				if !notified {
+					let msg = format!(
+						"\x1b[33m📨 Inbox message received ({preview}) — press Enter to process\x1b[0m"
+					);
+					if sender.send(msg).is_err() {
+						break; // receiver dropped, reedline is gone
+					}
+					notified = true;
+				}
+			} else {
+				notified = false;
+			}
+		}
+	});
+	let mut line_editor = line_editor
+		.with_external_printer(printer)
+		.with_poll_interval(std::time::Duration::from_millis(100));
 
 	// Set prompt with cost and context percentage
 	let prompt_text = if estimated_cost > 0.0 {

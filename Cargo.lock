@@ -2389,6 +2389,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe9e7c532bfc2759bc8a28902c04e8b993fc13ebd085ee4292eb1b230fa9beef"
 dependencies = [
  "chrono",
+ "crossbeam",
  "crossterm",
  "fd-lock",
  "itertools",

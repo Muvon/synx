@@ -165,6 +165,43 @@ pub fn has_inbox_messages() -> bool {
 		.unwrap_or(false)
 }
 
+/// Peek at the first inbox message for a specific session without consuming it.
+/// Returns a short preview (source + truncated content) suitable for display.
+/// Takes an explicit session_id so it works from any thread.
+pub fn peek_inbox_preview(session_id: &str) -> Option<String> {
+	let guard = INBOX.read().unwrap();
+	let msg = guard
+		.as_ref()
+		.and_then(|r| r.get(session_id))?
+		.messages
+		.front()?;
+	let source = match &msg.source {
+		InboxSource::Schedule { .. } => "scheduled message",
+		InboxSource::BackgroundAgent { name } => {
+			return Some(format!("background agent '{name}'"));
+		}
+		InboxSource::Skill { name } => {
+			return Some(format!("skill '{name}'"));
+		}
+		InboxSource::Inject => "external inject",
+	};
+	// Truncate content preview to first line, max 80 chars
+	let preview: String = msg
+		.content
+		.lines()
+		.next()
+		.unwrap_or("")
+		.chars()
+		.take(80)
+		.collect();
+	let ellipsis = if preview.len() < msg.content.len() {
+		"…"
+	} else {
+		""
+	};
+	Some(format!("{source}: {preview}{ellipsis}"))
+}
+
 /// Returns the `Arc<Notify>` for the current session's inbox, or `None`.
 ///
 /// The session loop holds this across `select!` iterations so it can
