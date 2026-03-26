@@ -722,7 +722,7 @@ fn restore_session_info(final_messages: Vec<Message>, session_file: &PathBuf) ->
 		predicted_turns_at_last_compression: 0.0,
 		api_calls_at_last_compression: 0,
 		output_tokens_at_last_compression: 0,
-		compression_level_index: 0,
+		consecutive_compressions: 0,
 	};
 
 	let runtime_state = extract_runtime_state_from_log(session_file)?;

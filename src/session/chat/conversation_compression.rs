@@ -78,155 +78,19 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 			.collect::<Vec<_>>()
 	);
 
-	// PROGRESSIVE COMPRESSION: Use the next level in sequence for this run.
-	// During a continuous tool-call chain we escalate: level 0 → 1 → 2 → ...
-	// This prevents the system from cycling at level 0 forever during long-running sessions.
-	// The index resets to 0 on every new user message (see main_loop.rs).
-	let level_index = session
-		.session
-		.info
-		.compression_level_index
-		.min(config.compression.pressure_levels.len().saturating_sub(1));
-	let current_level = &config.compression.pressure_levels[level_index];
+	// RATIO SELECTION: Pick the best matching pressure level by token count.
+	// Levels are used purely for ratio selection — the threshold determines which
+	// compression strength to use, NOT whether compression happens (cooldown does that).
+	let matched_level = config
+		.compression
+		.pressure_levels
+		.iter()
+		.filter(|l| current_tokens >= l.threshold)
+		.max_by(|a, b| a.threshold.cmp(&b.threshold));
 
-	// Only compress if we've actually exceeded this level's threshold
-	if current_tokens < current_level.threshold {
-		log_debug!(
-			"Progressive compression: level {} threshold not reached ({} < {}), skipping",
-			level_index,
-			current_tokens,
-			current_level.threshold
-		);
-		return (false, 2.0);
-	}
-
-	match Some(current_level) {
-		Some(level) => {
-			// ADAPTIVE COMPRESSION RATIO: Adjust based on session patterns
-			// If session has high growth rate, compress more aggressively
-			// If session is winding down, compress less aggressively
-			let adjusted_ratio = calculate_adaptive_compression_ratio(session, level.target_ratio);
-
-			log_debug!(
-				"✓ Threshold exceeded! Context tokens: {} → base compression: {:.1}x → adaptive: {:.1}x (threshold: {})",
-				current_tokens,
-				level.target_ratio,
-				adjusted_ratio,
-				level.threshold
-			);
-
-			// TOKEN-BASED COOLDOWN: Require meaningful token growth since last compression
-			// before allowing re-compression. This prevents futile loops while being
-			// responsive to actual context growth regardless of API call patterns.
-			let tokens_after_last = session.session.info.context_tokens_after_last_compression;
-
-			if tokens_after_last > 0 {
-				// Require at least 10% token growth since last compression
-				let min_tokens_for_recompression = (tokens_after_last as f64 * 1.1) as usize;
-				if current_tokens < min_tokens_for_recompression {
-					log_debug!(
-						"Compression cooldown active: current_tokens={} < min_required={} (need {}% growth since last compression at {})",
-						current_tokens,
-						min_tokens_for_recompression,
-						((current_tokens as f64 / tokens_after_last as f64 - 1.0) * 100.0) as i32,
-						tokens_after_last
-					);
-					return (false, 2.0);
-				}
-			}
-
-			log_debug!(
-				"Compression cooldown passed: current_tokens={}, tokens_after_last_compression={}",
-				current_tokens,
-				tokens_after_last
-			);
-
-			// CACHE-AWARE DECISION: Calculate if compression is profitable
-			let net_benefit = calculate_compression_net_benefit(
-				session,
-				config,
-				current_tokens,
-				adjusted_ratio, // Use adaptive ratio
-			)
-			.await;
-
-			if net_benefit > 0.0 {
-				// CRITICAL FIX: Verify compression will actually bring context below threshold
-				// Even if profitable, compression is futile if it won't solve the threshold problem
-				let (start_idx, end_idx) = match find_compression_range(
-					&session.session.messages,
-					session.first_prompt_idx,
-				) {
-					Ok(range) => range,
-					Err(e) => {
-						log_debug!("Failed to find compression range: {}", e);
-						return (false, 2.0);
-					}
-				};
-
-				if start_idx >= end_idx {
-					log_debug!(
-						"Invalid compression range ({} >= {}), setting cooldown to prevent re-analysis loop",
-						start_idx,
-						end_idx
-					);
-					// CRITICAL: Set cooldown to prevent expensive re-analysis every turn.
-					// Without this, the full cost analysis runs on every turn only to
-					// discover there aren't enough messages — an infinite waste loop.
-					session.session.info.context_tokens_after_last_compression = current_tokens;
-					return (false, 2.0);
-				}
-
-				// Count only start_idx+1..=end_idx — the anchor at start_idx is kept
-				let compressible_tokens =
-					match calculate_range_tokens(session, start_idx + 1, end_idx) {
-						Ok(tokens) => tokens,
-						Err(e) => {
-							log_debug!("Failed to calculate range tokens: {}", e);
-							return (false, 2.0);
-						}
-					};
-
-				let estimated_compressed_size =
-					(compressible_tokens as f64 / adjusted_ratio) as u64;
-				let estimated_after_compression = (current_tokens as u64)
-					.saturating_sub(compressible_tokens)
-					.saturating_add(estimated_compressed_size);
-
-				if estimated_after_compression >= level.threshold as u64 {
-					log_debug!(
-						"Compression won't bring context below threshold: {} → {} (threshold: {}). Compressible: {} → {}. Setting cooldown to avoid futile re-check every turn.",
-						current_tokens,
-						estimated_after_compression,
-						level.threshold,
-						compressible_tokens,
-						estimated_compressed_size
-					);
-					// Set token-based cooldown: record current tokens so we don't re-check
-					// every turn when compression can't solve the threshold problem.
-					// Next check requires 10% growth from current level.
-					session.session.info.context_tokens_after_last_compression = current_tokens;
-					return (false, 2.0);
-				}
-
-				log_debug!(
-					"Cache-aware analysis: Net benefit ${:.5} → COMPRESS (will reduce {} → {} tokens, below threshold {})",
-					net_benefit,
-					current_tokens,
-					estimated_after_compression,
-					level.threshold
-				);
-				(true, adjusted_ratio)
-			} else {
-				log_debug!(
-					"Cache-aware analysis: Net benefit ${:.5} → SKIP (would lose money)",
-					net_benefit
-				);
-				(false, 2.0)
-			}
-		}
+	let level = match matched_level {
+		Some(l) => l,
 		None => {
-			// Haven't reached any threshold yet
 			log_debug!(
 				"No threshold exceeded (current: {}, lowest threshold: {})",
 				current_tokens,
@@ -237,8 +101,122 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 					.map(|l| l.threshold)
 					.unwrap_or(0)
 			);
-			(false, 2.0)
+			return (false, 2.0);
 		}
+	};
+
+	// ADAPTIVE COMPRESSION RATIO: Adjust based on session patterns
+	let adjusted_ratio = calculate_adaptive_compression_ratio(session, level.target_ratio);
+
+	log_debug!(
+		"✓ Threshold exceeded! Context tokens: {} → base compression: {:.1}x → adaptive: {:.1}x (threshold: {})",
+		current_tokens,
+		level.target_ratio,
+		adjusted_ratio,
+		level.threshold
+	);
+
+	// EXPONENTIAL COOLDOWN: Each consecutive compression (without a user message)
+	// doubles the required token growth before re-compression is allowed.
+	// 1st: 10%, 2nd: 20%, 3rd: 40%, 4th+: 80-100%.
+	// This prevents futile loops while still allowing compression when context genuinely grows.
+	let tokens_after_last = session.session.info.context_tokens_after_last_compression;
+
+	if tokens_after_last > 0 {
+		let n = session.session.info.consecutive_compressions;
+		// 0.10 * 2^n, capped at 1.0 (i.e. require 100% growth = context must double)
+		let growth_factor = (0.10 * 2.0_f64.powi(n as i32)).min(1.0);
+		let min_tokens_for_recompression =
+			(tokens_after_last as f64 * (1.0 + growth_factor)) as usize;
+		if current_tokens < min_tokens_for_recompression {
+			let actual_growth_pct =
+				((current_tokens as f64 / tokens_after_last as f64 - 1.0) * 100.0) as i32;
+			log_debug!(
+				"Exponential cooldown active (n={}): need {:.0}% growth, have {}% (current={}, required={}, base={})",
+				n,
+				growth_factor * 100.0,
+				actual_growth_pct,
+				current_tokens,
+				min_tokens_for_recompression,
+				tokens_after_last
+			);
+			return (false, 2.0);
+		}
+	}
+
+	log_debug!(
+		"Compression cooldown passed: current_tokens={}, tokens_after_last_compression={}, consecutive={}",
+		current_tokens,
+		tokens_after_last,
+		session.session.info.consecutive_compressions
+	);
+
+	// CACHE-AWARE DECISION: Calculate if compression is profitable
+	let net_benefit =
+		calculate_compression_net_benefit(session, config, current_tokens, adjusted_ratio).await;
+
+	if net_benefit > 0.0 {
+		// Verify compression will actually reduce context meaningfully
+		let (start_idx, end_idx) =
+			match find_compression_range(&session.session.messages, session.first_prompt_idx) {
+				Ok(range) => range,
+				Err(e) => {
+					log_debug!("Failed to find compression range: {}", e);
+					return (false, 2.0);
+				}
+			};
+
+		if start_idx >= end_idx {
+			log_debug!(
+				"Invalid compression range ({} >= {}), setting cooldown to prevent re-analysis loop",
+				start_idx,
+				end_idx
+			);
+			session.session.info.context_tokens_after_last_compression = current_tokens;
+			return (false, 2.0);
+		}
+
+		// Count only start_idx+1..=end_idx — the anchor at start_idx is kept
+		let compressible_tokens = match calculate_range_tokens(session, start_idx + 1, end_idx) {
+			Ok(tokens) => tokens,
+			Err(e) => {
+				log_debug!("Failed to calculate range tokens: {}", e);
+				return (false, 2.0);
+			}
+		};
+
+		let estimated_compressed_size = (compressible_tokens as f64 / adjusted_ratio) as u64;
+		let estimated_after_compression = (current_tokens as u64)
+			.saturating_sub(compressible_tokens)
+			.saturating_add(estimated_compressed_size);
+
+		if estimated_after_compression >= level.threshold as u64 {
+			log_debug!(
+				"Compression won't bring context below threshold: {} → {} (threshold: {}). Compressible: {} → {}. Setting cooldown.",
+				current_tokens,
+				estimated_after_compression,
+				level.threshold,
+				compressible_tokens,
+				estimated_compressed_size
+			);
+			session.session.info.context_tokens_after_last_compression = current_tokens;
+			return (false, 2.0);
+		}
+
+		log_debug!(
+			"Cache-aware analysis: Net benefit ${:.5} → COMPRESS (will reduce {} → {} tokens, below threshold {})",
+			net_benefit,
+			current_tokens,
+			estimated_after_compression,
+			level.threshold
+		);
+		(true, adjusted_ratio)
+	} else {
+		log_debug!(
+			"Cache-aware analysis: Net benefit ${:.5} → SKIP (would lose money)",
+			net_benefit
+		);
+		(false, 2.0)
 	}
 }
 
@@ -777,17 +755,17 @@ pub async fn check_and_compress_conversation(
 	)
 	.await?;
 
-	// PROGRESSIVE COMPRESSION: Advance to the next level for the remainder of this run.
-	// Capped at the last configured level so we never go out of bounds.
+	// EXPONENTIAL COOLDOWN: Increment consecutive compressions counter.
+	// Each consecutive compression (without a user message) doubles the required
+	// token growth before the next compression is allowed.
 	// Resets to 0 on every new user message (see main_loop.rs).
-	let max_level = config.compression.pressure_levels.len().saturating_sub(1);
-	if session.session.info.compression_level_index < max_level {
-		session.session.info.compression_level_index += 1;
-		log_debug!(
-			"Progressive compression: advanced to level {} for next check in this run",
-			session.session.info.compression_level_index
-		);
-	}
+	session.session.info.consecutive_compressions += 1;
+	log_debug!(
+		"Exponential cooldown: consecutive_compressions now {} (next requires {:.0}% growth)",
+		session.session.info.consecutive_compressions,
+		(0.10 * 2.0_f64.powi(session.session.info.consecutive_compressions as i32)).min(1.0)
+			* 100.0
+	);
 
 	animation_manager.stop_current().await;
 	Ok(true)
@@ -1513,8 +1491,10 @@ async fn apply_compression(
 	session.session.info.output_tokens_at_last_compression = session.session.info.output_tokens;
 
 	log_debug!(
-		"Compression cooldown set: post_compression_tokens={}, requires ≥10% growth before next compression",
-		post_compression_tokens
+		"Compression cooldown set: post_compression_tokens={}, consecutive={}, requires ≥{:.0}% growth before next compression",
+		post_compression_tokens,
+		session.session.info.consecutive_compressions,
+		(0.10 * 2.0_f64.powi(session.session.info.consecutive_compressions as i32)).min(1.0) * 100.0
 	);
 
 	// CRITICAL: Log compression point to session file

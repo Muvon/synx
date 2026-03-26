@@ -171,10 +171,11 @@ pub struct SessionInfo {
 	pub api_calls_at_last_compression: usize, // API call count at last compression
 	#[serde(default)]
 	pub output_tokens_at_last_compression: u64, // Cumulative output tokens at last compression (for incremental growth rate)
-	// Progressive compression: tracks which pressure level to use next during a continuous tool-call run.
-	// Resets to 0 on every new user message so each turn starts from the lightest level.
+	// Exponential compression cooldown: tracks consecutive compressions without a user message.
+	// Required growth before re-compression = 10% × 2^consecutive_compressions (capped at 100%).
+	// Resets to 0 on every new user message so each turn starts fresh.
 	#[serde(default)]
-	pub compression_level_index: usize,
+	pub consecutive_compressions: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -290,7 +291,7 @@ impl Session {
 				predicted_turns_at_last_compression: 0.0,
 				api_calls_at_last_compression: 0,
 				output_tokens_at_last_compression: 0,
-				compression_level_index: 0,
+				consecutive_compressions: 0,
 			},
 
 			messages: Vec::new(),
