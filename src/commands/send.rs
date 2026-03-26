@@ -35,6 +35,11 @@ pub async fn execute(args: &SendArgs) -> Result<()> {
 	let message = match &args.message {
 		Some(m) => m.trim().to_string(),
 		None => {
+			// If stdin is a terminal, there's nothing to read — bail early
+			// instead of blocking forever waiting for EOF.
+			if io::IsTerminal::is_terminal(&io::stdin()) {
+				bail!("message must not be empty (pass as argument or pipe via stdin)");
+			}
 			let mut buf = String::new();
 			io::stdin()
 				.read_to_string(&mut buf)
