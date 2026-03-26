@@ -30,6 +30,10 @@ use std::sync::{Arc, RwLock};
 lazy_static::lazy_static! {
 	static ref FUNCTION_CACHE: Arc<RwLock<HashMap<String, Vec<McpFunction>>>> =
 		Arc::new(RwLock::new(HashMap::new()));
+
+	// Per-server MCP session IDs (assigned by server during initialize)
+	static ref HTTP_SESSION_IDS: Arc<RwLock<HashMap<String, String>>> =
+		Arc::new(RwLock::new(HashMap::new()));
 }
 
 // Shared JSON-RPC message builders for MCP protocol
@@ -142,6 +146,24 @@ fn create_tools_call_request(tool_name: &str, parameters: &Value) -> Value {
 			"arguments": parameters
 		}
 	})
+}
+
+/// Add Mcp-Session-Id header if one was stored for this server
+pub fn add_session_id_header(headers: &mut HeaderMap, server_name: &str) {
+	if let Ok(ids) = HTTP_SESSION_IDS.read() {
+		if let Some(sid) = ids.get(server_name) {
+			if let Ok(val) = HeaderValue::from_str(sid) {
+				headers.insert("mcp-session-id", val);
+			}
+		}
+	}
+}
+
+/// Clear stored session ID for a server (called on disconnect/cleanup)
+pub fn clear_http_session_id(server_name: &str) {
+	if let Ok(mut ids) = HTTP_SESSION_IDS.write() {
+		ids.remove(server_name);
+	}
 }
 
 // Shared function to parse tools from JSON-RPC response
@@ -271,17 +293,9 @@ pub async fn get_server_functions(server: &McpServerConfig) -> Result<Vec<McpFun
 
 					match oauth::get_access_token(oauth_config, server.name(), false).await {
 						Ok(Some(token)) => {
-							println!("🔍 HTTP: Got OAuth token for '{}', token_prefix='{}...', adding to headers",
-							server.name(),
-							token.chars().take(10).collect::<String>()
-						);
 							headers.insert(
 								AUTHORIZATION,
 								HeaderValue::from_str(&format!("Bearer {}", token))?,
-							);
-							println!(
-								"✅ HTTP: Authorization header set for server '{}'",
-								server.name()
 							);
 							crate::log_debug!(
 								"Using manual OAuth access token for HTTP server '{}'",
@@ -289,21 +303,12 @@ pub async fn get_server_functions(server: &McpServerConfig) -> Result<Vec<McpFun
 							);
 						}
 						Ok(None) => {
-							println!(
-								"❌ HTTP: OAuth returned None for server '{}'",
-								server.name()
-							);
 							crate::log_error!(
 								"OAuth authentication was cancelled for server '{}'",
 								server.name()
 							);
 						}
 						Err(e) => {
-							println!(
-								"❌ HTTP: OAuth failed for server '{}': {}",
-								server.name(),
-								e
-							);
 							crate::log_error!(
 								"Failed to get OAuth access token for server '{}': {}",
 								server.name(),
@@ -330,33 +335,78 @@ pub async fn get_server_functions(server: &McpServerConfig) -> Result<Vec<McpFun
 			// MCP uses JSON-RPC over HTTP with POST requests
 			let schema_url = server_url; // Use base URL for JSON-RPC
 
-			// Send initialize request with session context before listing tools
+			// MCP protocol: initialize → wait for response → send notifications/initialized → then tools/list
 			let init_request = create_session_initialize_request();
-			let _ = client
+			let init_response = client
 				.post(&schema_url)
 				.headers(headers.clone())
 				.json(&init_request)
 				.send()
+				.await?;
+
+			if !init_response.status().is_success() {
+				return Err(anyhow::anyhow!(
+					"Failed to initialize MCP server: {}",
+					init_response.status()
+				));
+			}
+
+			// Extract Mcp-Session-Id from response header (if server assigns one)
+			if let Some(session_id) = init_response.headers().get("mcp-session-id") {
+				if let Ok(sid) = session_id.to_str() {
+					crate::log_debug!(
+						"HTTP server '{}' assigned session ID: {}",
+						server.name(),
+						sid
+					);
+					if let Ok(mut ids) = HTTP_SESSION_IDS.write() {
+						ids.insert(server.name().to_string(), sid.to_string());
+					}
+				}
+			}
+
+			// Parse the initialize response to verify it's valid
+			let init_result = parse_http_response_body(init_response).await?;
+			if init_result.get("error").is_some() {
+				return Err(anyhow::anyhow!(
+					"Server returned error during initialization: {}",
+					init_result["error"]
+				));
+			}
+
+			// Send notifications/initialized (no id — it's a notification, not a request)
+			let initialized_notification = json!({
+				"jsonrpc": "2.0",
+				"method": "notifications/initialized"
+			});
+			let mut notif_headers = headers.clone();
+			add_session_id_header(&mut notif_headers, server.name());
+			let _ = client
+				.post(&schema_url)
+				.headers(notif_headers)
+				.json(&initialized_notification)
+				.send()
 				.await;
-			// Use shared JSON-RPC request builder
+
+			// Now list tools (with session ID if assigned)
 			let jsonrpc_request = create_tools_list_request();
 
-			// Debug output
 			crate::log_debug!(
 				"Making JSON-RPC tools/list request to HTTP server '{}' at URL: {}",
 				server.name(),
 				schema_url
 			);
 
-			// Make JSON-RPC POST request to get schema
+			let mut list_headers = headers.clone();
+			add_session_id_header(&mut list_headers, server.name());
+
 			let response = client
 				.post(&schema_url)
-				.headers(headers.clone())
+				.headers(list_headers)
 				.json(&jsonrpc_request)
 				.send()
 				.await?;
 
-			// Check if request was successful
 			if !response.status().is_success() {
 				return Err(anyhow::anyhow!(
 					"Failed to get schema from MCP server: {}",
@@ -905,6 +955,9 @@ async fn execute_tool_with_cancellation(
 					return Err(anyhow::anyhow!("External tool execution cancelled"));
 				}
 			}
+
+			// Include Mcp-Session-Id if server assigned one during initialization
+			add_session_id_header(&mut headers, server.name());
 
 			// Make request to execute tool
 			let response = client

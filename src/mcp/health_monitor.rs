@@ -578,6 +578,9 @@ async fn perform_http_health_check(
 		// Use tools/list for health check (same as main functionality)
 		let jsonrpc_request = crate::mcp::server::create_tools_list_request();
 
+		// Include Mcp-Session-Id if server has an active session
+		crate::mcp::server::add_session_id_header(&mut headers, server.name());
+
 		match client
 			.post(health_url)
 			.headers(headers)
