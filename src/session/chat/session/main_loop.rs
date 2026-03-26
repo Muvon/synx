@@ -640,6 +640,8 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			// CONVERSATION COMPRESSION: Check if AI should compress older exchanges
 			// This happens BEFORE user message is added to ensure user's new request is not broken by summarization
 			// AI decides if compression is beneficial based on conversation history
+			// PROGRESSIVE COMPRESSION: Reset level index so this turn always starts from the lightest level.
+			chat_session.session.info.compression_level_index = 0;
 			let _compression_occurred =
 			match crate::session::chat::conversation_compression::check_and_compress_conversation(
 				&mut chat_session,

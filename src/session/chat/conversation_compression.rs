@@ -78,16 +78,29 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 			.collect::<Vec<_>>()
 	);
 
-	// Find the highest threshold we've exceeded and its target ratio
-	// This determines both IF we should compress and HOW MUCH
-	let matching_level = config
-		.compression
-		.pressure_levels
-		.iter()
-		.rev() // Start from highest threshold
-		.find(|level| current_tokens >= level.threshold);
+	// PROGRESSIVE COMPRESSION: Use the next level in sequence for this run.
+	// During a continuous tool-call chain we escalate: level 0 → 1 → 2 → ...
+	// This prevents the system from cycling at level 0 forever during long-running sessions.
+	// The index resets to 0 on every new user message (see main_loop.rs).
+	let level_index = session
+		.session
+		.info
+		.compression_level_index
+		.min(config.compression.pressure_levels.len().saturating_sub(1));
+	let current_level = &config.compression.pressure_levels[level_index];
 
-	match matching_level {
+	// Only compress if we've actually exceeded this level's threshold
+	if current_tokens < current_level.threshold {
+		log_debug!(
+			"Progressive compression: level {} threshold not reached ({} < {}), skipping",
+			level_index,
+			current_tokens,
+			current_level.threshold
+		);
+		return (false, 2.0);
+	}
+
+	match Some(current_level) {
 		Some(level) => {
 			// ADAPTIVE COMPRESSION RATIO: Adjust based on session patterns
 			// If session has high growth rate, compress more aggressively
@@ -755,6 +768,18 @@ pub async fn check_and_compress_conversation(
 		current_context_tokens,
 	)
 	.await?;
+
+	// PROGRESSIVE COMPRESSION: Advance to the next level for the remainder of this run.
+	// Capped at the last configured level so we never go out of bounds.
+	// Resets to 0 on every new user message (see main_loop.rs).
+	let max_level = config.compression.pressure_levels.len().saturating_sub(1);
+	if session.session.info.compression_level_index < max_level {
+		session.session.info.compression_level_index += 1;
+		log_debug!(
+			"Progressive compression: advanced to level {} for next check in this run",
+			session.session.info.compression_level_index
+		);
+	}
 
 	animation_manager.stop_current().await;
 	Ok(true)

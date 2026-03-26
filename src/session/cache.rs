@@ -801,6 +801,7 @@ mod tests {
 				predicted_turns_at_last_compression: 0.0,
 				api_calls_at_last_compression: 0,
 				output_tokens_at_last_compression: 0,
+				compression_level_index: 0,
 			},
 
 			messages: Vec::new(),
