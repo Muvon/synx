@@ -108,7 +108,7 @@ pub fn create_initialize_request() -> Value {
 }
 
 fn create_session_initialize_request() -> Value {
-	let (role, project) = process::get_session_context();
+	let (role, spec, project) = process::get_session_context();
 	json!({
 		"jsonrpc": "2.0",
 		"id": 1,
@@ -123,6 +123,7 @@ fn create_session_initialize_request() -> Value {
 				"experimental": {
 					"session": {
 						"role": role,
+						"spec": spec,
 						"project": project
 					}
 				}
