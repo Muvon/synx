@@ -57,17 +57,14 @@ pub struct RunArgs {
 	pub sandbox: bool,
 }
 pub async fn execute(args: &RunArgs, config: &Config) -> Result<()> {
-	// Daemon mode requires non-interactive (piped stdin or --format).
-	if args.daemon && args.format.is_none() && std::io::stdin().is_terminal() {
-		anyhow::bail!("--daemon requires non-interactive mode (piped stdin or --format)");
-	}
-
-	// Daemon mode forces non-interactive (no TTY needed — waits for send commands).
-	let is_interactive = !args.daemon && args.format.is_none() && std::io::stdin().is_terminal();
+	// Daemon mode: no spinner, but still use readline if terminal input available.
+	// --format=jsonl always uses non-interactive mode (piped input).
+	let is_interactive_startup = !args.daemon && args.format.is_none() && std::io::stdin().is_terminal();
+	let is_interactive_session = args.format.is_none() && std::io::stdin().is_terminal();
 
 	// Full startup: tap/dep resolution + MCP init under one spinner
 	let (run_config, role) =
-		super::common::startup(args.tag.as_deref(), config, is_interactive).await?;
+		super::common::startup(args.tag.as_deref(), config, is_interactive_startup).await?;
 
 	let session_args = octomind::session::chat::session::GenericSessionArgs {
 		role: role.clone(),
@@ -80,15 +77,11 @@ pub async fn execute(args: &RunArgs, config: &Config) -> Result<()> {
 		..Default::default()
 	};
 
-	if is_interactive {
+	if is_interactive_session {
 		session::chat::run_interactive_session(&session_args, &run_config).await
 	} else {
-		// In daemon mode with no piped input, start with an empty message (just open the session).
-		let input = if args.daemon && std::io::stdin().is_terminal() {
-			String::new()
-		} else {
-			read_input()?
-		};
+		// Non-interactive: read input from stdin (piped)
+		let input = read_input()?;
 		session::chat::run_interactive_session_with_input(&session_args, &run_config, &input).await
 	}
 }

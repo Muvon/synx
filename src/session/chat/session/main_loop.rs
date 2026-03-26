@@ -1125,22 +1125,69 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 			chat_session.add_user_message(&inbox_msg.content)?;
 			prepare_for_api_call(&mut chat_session, &current_config, operation_rx.clone()).await?;
 
-			let output_mode = if current_config.runtime_output_mode.as_deref() == Some("jsonl") {
+			let is_jsonl = current_config.runtime_output_mode.as_deref() == Some("jsonl");
+			let output_mode = if is_jsonl {
 				OutputMode::Jsonl
 			} else {
 				OutputMode::NonInteractive
 			};
 
-			if let Err(e) = execute_api_call_and_process_response(
-				&mut chat_session,
-				&current_config,
-				&role,
-				operation_rx.clone(),
-				output_mode,
-				SilentSink,
-			)
-			.await
-			{
+			// Set up notification forwarding for this inbox message,
+			// matching the pattern used for the initial message processing.
+			let (notif_tx, mut notif_rx) =
+				tokio::sync::mpsc::unbounded_channel::<crate::websocket::ServerMessage>();
+			crate::mcp::process::set_notification_sender(None, notif_tx);
+
+			let drain_handle = tokio::spawn(async move {
+				while let Some(msg) = notif_rx.recv().await {
+					if is_jsonl {
+						if let Ok(json) = serde_json::to_string(&msg) {
+							println!("{}", json);
+						}
+					} else if let crate::websocket::ServerMessage::McpNotification(n) = msg {
+						use colored::Colorize;
+						eprintln!(
+							"{}",
+							format!(
+								"⚠ [{}] {}",
+								n.server,
+								n.params
+									.get("message")
+									.and_then(|m| m.as_str())
+									.unwrap_or(&n.method)
+							)
+							.yellow()
+						);
+					}
+				}
+			});
+
+			let api_result = if is_jsonl {
+				execute_api_call_and_process_response(
+					&mut chat_session,
+					&current_config,
+					&role,
+					operation_rx.clone(),
+					output_mode,
+					JsonlSink,
+				)
+				.await
+			} else {
+				execute_api_call_and_process_response(
+					&mut chat_session,
+					&current_config,
+					&role,
+					operation_rx.clone(),
+					output_mode,
+					SilentSink,
+				)
+				.await
+			};
+
+			crate::mcp::process::clear_notification_sender(None);
+			let _ = drain_handle.await;
+
+			if let Err(e) = api_result {
 				log_debug!("Error processing inbox message: {}", e);
 			}
 
