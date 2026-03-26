@@ -2,8 +2,8 @@
 
 **© 2026 Muvon Un Limited** | [Documentation](doc/README.md) | [Community Tap](https://github.com/muvon/octomind-tap) | [Website](https://muvon.io)
 
-> **Plug and play AI agents for any domain.**
-> Community-built specialists that self-configure, self-extend, and just work — no setup, no code, no vendor lock-in.
+> **Specialist AI agents that just work.**
+> The open-source runtime for community-built experts — any domain, zero setup, no vendor lock-in.
 
 ## The Problem
 
@@ -16,7 +16,7 @@ You want an AI that actually knows your domain. Instead you get:
 
 Every AI tool in 2026 is a coding assistant that lets you swap models. **That's it.**
 
-Octomind is different. It's a runtime for specialist agents — any domain — where the community has already done the hard work. You just run it.
+Octomind is different. It's not a framework you configure. It's a **runtime** for specialist agents — any domain — where the community has already done the hard work. You just run it.
 
 ---
 
@@ -44,7 +44,7 @@ What happens when you run `octomind run doctor:blood`:
 → Prompts once for any credentials → saves permanently, never asks again
 → Spins up the right MCP servers for this domain
 → Loads specialist model config, system prompt, tool permissions
-→ Ready in ~5 seconds
+→ Ready in ~5 seconds. Not 45 minutes.
 ```
 
 This isn't a prompt or a skill. It's **packaged expertise** — ready to run.
@@ -119,7 +119,7 @@ Agent:
 
 The tap gives the agent its starting configuration. The `mcp` and `agent` tools give it room to go beyond — acquiring exactly what it needs, when it needs it, and nothing more.
 
-**No other tool lets the AI extend its own capabilities at runtime.**
+**No other tool lets the AI extend its own capabilities at runtime.** This is the octopus advantage: eight arms, infinite domains, one coordinated mind.
 
 ---
 
@@ -235,7 +235,7 @@ octomind acp developer:rust
 | WebSocket server | IDE plugins, web dashboards, external integrations |
 | ACP protocol | Multi-agent orchestration, being called by other agents |
 
-One binary. Every workflow.
+One binary. Every workflow. Eight arms, infinite domains.
 
 ---
 
