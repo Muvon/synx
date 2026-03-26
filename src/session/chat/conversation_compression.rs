@@ -1520,23 +1520,6 @@ fn find_compression_range(
 		.position(|m| m.role == "system")
 		.unwrap_or(0);
 
-	// Collect conversation message indices (user + assistant only)
-	let conversation_indices: Vec<usize> = messages
-		.iter()
-		.enumerate()
-		.filter(|(_, m)| m.role == "user" || m.role == "assistant")
-		.map(|(idx, _)| idx)
-		.collect();
-
-	// Need at least 6 conversation messages to compress (keep 4, compress 2+)
-	if conversation_indices.len() <= 4 {
-		return Ok((0, 0)); // Not enough to compress
-	}
-
-	// Compress everything except last 4 conversation messages
-	let preserve_count = 4;
-	let mut compress_count = conversation_indices.len() - preserve_count;
-
 	// CRITICAL: Start boundary is first_prompt_idx (INCLUSIVE - never compress this or before)
 	// If not set (e.g. resumed sessions), detect bootstrap messages and skip past them.
 	// Bootstrap pattern: system[0] → assistant(welcome)[1] → optional user(instructions)[2]
@@ -1586,6 +1569,27 @@ fn find_compression_range(
 			}
 		}
 	}
+
+	// Collect conversation message indices (user + assistant only) AT OR AFTER start_idx.
+	// CRITICAL: Only messages in the compressible range count toward compress_count.
+	// Bootstrap messages before start_idx are protected and must NOT inflate the count,
+	// otherwise compress_count "uses up" slots on unreachable messages, leaving end_idx
+	// too low and compressing almost nothing.
+	let conversation_indices: Vec<usize> = messages
+		.iter()
+		.enumerate()
+		.filter(|(idx, m)| *idx >= start_idx && (m.role == "user" || m.role == "assistant"))
+		.map(|(idx, _)| idx)
+		.collect();
+
+	// Need at least 6 conversation messages to compress (keep 4, compress 2+)
+	if conversation_indices.len() <= 4 {
+		return Ok((0, 0)); // Not enough to compress
+	}
+
+	// Compress everything except last 4 conversation messages
+	let preserve_count = 4;
+	let mut compress_count = conversation_indices.len() - preserve_count;
 
 	// CRITICAL: The compressed summary is an assistant message. The first preserved
 	// message after it SHOULD be a user to maintain the alternating user/assistant
@@ -2787,6 +2791,115 @@ mod tests {
 				.any(|m| m.content.contains("OLD_SUMMARY_V1")),
 			"Old summary must be included in messages sent to AI for re-compression"
 		);
+	}
+
+	#[test]
+	fn bootstrap_messages_before_start_idx_dont_inflate_compress_count() {
+		// Reproduces the real-world bug: bootstrap messages (system, welcome, instructions)
+		// exist before first_prompt_idx. The old code collected ALL conversation messages
+		// including bootstrap ones, inflating compress_count and leaving end_idx too low.
+		//
+		// Layout from the log:
+		// 0: system
+		// 1: assistant (welcome)
+		// 2: user (instructions)
+		// 3: user (first real prompt) ← first_prompt_idx
+		// 4: assistant (compressed summary from prior cycle)
+		// 5: assistant (tool_calls)
+		// 6: tool
+		// 7: assistant (tool_calls)
+		// 8: tool
+		// 9: assistant (tool_calls)
+		// 10: tool
+		// 11: assistant (final response)
+		let mut comp = msg("assistant");
+		comp.name = Some("plan_compression".to_string());
+		let mut a5 = msg("assistant");
+		a5.tool_calls =
+			Some(json!([{"id": "c1", "type": "function", "function": {"name": "plan"}}]));
+		let mut t6 = msg("tool");
+		t6.tool_call_id = Some("c1".to_string());
+		let mut a7 = msg("assistant");
+		a7.tool_calls =
+			Some(json!([{"id": "c2", "type": "function", "function": {"name": "shell"}}]));
+		let mut t8 = msg("tool");
+		t8.tool_call_id = Some("c2".to_string());
+		let mut a9 = msg("assistant");
+		a9.tool_calls =
+			Some(json!([{"id": "c3", "type": "function", "function": {"name": "plan"}}]));
+		let mut t10 = msg("tool");
+		t10.tool_call_id = Some("c3".to_string());
+
+		let messages = vec![
+			msg("system"),    // 0
+			msg("assistant"), // 1 - welcome
+			msg("user"),      // 2 - instructions
+			msg("user"),      // 3 - first_prompt_idx
+			comp,             // 4 - old compressed summary
+			a5,               // 5 - tool_calls
+			t6,               // 6 - tool result
+			a7,               // 7 - tool_calls
+			t8,               // 8 - tool result
+			a9,               // 9 - tool_calls
+			t10,              // 10 - tool result
+			msg("assistant"), // 11 - final response
+		];
+
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
+
+		assert_eq!(start_idx, 3, "start at first_prompt_idx");
+		// Conversation indices at/after start_idx=3: [3, 4, 5, 7, 9, 11] (6 items)
+		// Keep last 4: [5, 7, 9, 11]
+		// compress_count = 2, first preserved = index 5
+		// end_idx = 5 - 1 = 4
+		// Drain range: [4..=4] — removes old summary
+		// BUT the old bug would have: conversation_indices = [1, 2, 3, 4, 5, 7, 9, 11] (8 items)
+		// compress_count = 4, first preserved = conversation_indices[4] = 5
+		// end_idx = 5 - 1 = 4 — same result by coincidence in THIS case.
+		// The real difference shows when preserve_count adjustment kicks in.
+		assert!(
+			end_idx >= 4,
+			"end_idx must cover at least the old summary at index 4, got {end_idx}"
+		);
+		// The drain range must actually remove messages
+		assert!(
+			end_idx > start_idx,
+			"drain range must be non-empty: start={start_idx}, end={end_idx}"
+		);
+	}
+
+	#[test]
+	fn bootstrap_with_many_messages_compresses_correctly() {
+		// More messages to make the bug clearly visible.
+		// With bootstrap messages [1, 2] before start_idx=3, the old code would
+		// count them toward compress_count, leaving fewer messages actually compressed.
+		let mut messages = vec![
+			msg("system"),    // 0
+			msg("assistant"), // 1 - welcome
+			msg("user"),      // 2 - instructions
+			msg("user"),      // 3 - first_prompt_idx
+		];
+		// 10 alternating assistant/user messages
+		for i in 0..10 {
+			messages.push(msg(if i % 2 == 0 { "assistant" } else { "user" }));
+		} // 4-13
+
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
+
+		assert_eq!(start_idx, 3);
+		// Conversation indices at/after 3: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] (11 items)
+		// Keep last 4: [10, 11, 12, 13]
+		// compress_count = 7, first preserved = conversation_indices[7] = 10 (assistant)
+		// "first preserved must be user" advances to conversation_indices[8] = 11 (user)
+		// compress_count = 8, end_idx = 11 - 1 = 10
+		assert_eq!(
+			end_idx, 10,
+			"Must compress up to index 10 (everything before preserved user at 11)"
+		);
+
+		// OLD BUG would have: conversation_indices includes [1, 2] → 13 items
+		// compress_count = 13 - 4 = 9, first preserved = conversation_indices[9] = 12
+		// end_idx = 12 - 1 = 11 — TOO HIGH, would compress messages that should be preserved!
 	}
 
 	#[test]
