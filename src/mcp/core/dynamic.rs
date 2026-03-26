@@ -109,10 +109,10 @@ pub async fn enable_server(
 
 	// Get the server config (from session or global)
 	let server = if let Some(ref sid) = session_id {
-		// Get from session registry
-		crate::session::context::get_all_dynamic_server_configs_for_session(sid)
-			.into_iter()
-			.find(|c| c.name() == name)
+		// Get from session registry - use get_dynamic_server_for_session which returns
+		// the server config regardless of enabled status (add registers with enabled=false)
+		crate::session::context::get_dynamic_server_for_session(sid, name)
+			.map(|(config, _enabled)| config)
 			.ok_or_else(|| anyhow::anyhow!("Server '{}' not registered. Use 'add' first.", name))?
 	} else {
 		// Fall back to global singleton for CLI mode
