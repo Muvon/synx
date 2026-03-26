@@ -1597,9 +1597,9 @@ fn find_compression_range(
 	// first user in the preserved zone and advance compress_count to it.
 	//
 	// If NO user exists in the preserved zone (tool-loop sessions where the AI
-	// calls tools continuously without user input), keep the original compress_count.
-	// The first preserved assistant will have tool_calls with matching tool results,
-	// which APIs accept after the summary.
+	// calls tools continuously without user input), the user's most recent prompt
+	// is in the compression range. Search BACKWARD to find it and pull it into
+	// the preserved zone so the active user request is never compressed away.
 	if messages[conversation_indices[compress_count]].role == "assistant" {
 		let mut found_user = None;
 		for i in compress_count..conversation_indices.len() {
@@ -1610,8 +1610,26 @@ fn find_compression_range(
 		}
 		if let Some(user_idx) = found_user {
 			compress_count = user_idx;
+		} else {
+			// CRITICAL FIX: No user in preserved zone means ALL preserved messages are
+			// assistant/tool messages from a tool-loop. The user's most recent prompt is
+			// somewhere in the compression range and would be compressed away, causing
+			// the AI to lose the active user request entirely.
+			//
+			// Fix: search backward from compress_count to find the last user message
+			// in the compression zone and pull it (and everything after) into the
+			// preserved zone. This guarantees the user's active request survives.
+			let mut last_user_in_compress = None;
+			for i in (1..compress_count).rev() {
+				if messages[conversation_indices[i]].role == "user" {
+					last_user_in_compress = Some(i);
+					break;
+				}
+			}
+			if let Some(user_idx) = last_user_in_compress {
+				compress_count = user_idx;
+			}
 		}
-		// No user in preserved zone → keep original compress_count (tool-loop session)
 	}
 
 	// CRITICAL FIX: The end_idx must be the last MESSAGE INDEX (not conversation index)
@@ -3223,6 +3241,58 @@ mod tests {
 			end_idx,
 			messages.len() - 1
 		);
+	}
+
+	#[test]
+	fn second_compression_preserves_last_user_prompt_in_tool_loop() {
+		// Reproduces the critical bug: after first compression + more tool calls,
+		// the preserved zone (last 4 conversation messages) is all assistant messages.
+		// The user's 2nd prompt (the active request) was in the compression range
+		// and got compressed away, causing the AI to lose all context about what
+		// the user asked for.
+		//
+		// Layout after first compression + continued tool calls:
+		// [0] system
+		// [1] assistant (welcome)
+		// [2] user (instructions)
+		// [3] user (1st prompt) ← first_prompt_idx
+		// [4] assistant (compressed summary from 1st pass)
+		// [5] user (2nd prompt) ← MUST be preserved
+		// [6] assistant (tool_calls)
+		// [7] tool
+		// [8] tool
+		// [9] assistant (tool_calls)
+		// [10] tool
+		// [11] assistant (response)
+		// [12] assistant (tool_calls)
+		// [13] tool
+		// [14] assistant (response)
+		let mut messages = Vec::new();
+		messages.push(msg("system")); // 0
+		messages.push(msg("assistant")); // 1 welcome
+		messages.push(msg("user")); // 2 instructions
+		messages.push(msg("user")); // 3 first prompt (anchor)
+		messages.push(msg("assistant")); // 4 compressed summary
+		messages.push(msg("user")); // 5 second prompt ← MUST survive
+		messages.push(msg("assistant")); // 6 tool_calls
+		messages.push(msg("tool")); // 7
+		messages.push(msg("tool")); // 8
+		messages.push(msg("assistant")); // 9 tool_calls
+		messages.push(msg("tool")); // 10
+		messages.push(msg("assistant")); // 11 response
+		messages.push(msg("assistant")); // 12 tool_calls
+		messages.push(msg("tool")); // 13
+		messages.push(msg("assistant")); // 14 response
+
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
+
+		// The 2nd user prompt at index 5 must NOT be in the drain range (start_idx+1..=end_idx)
+		assert!(
+			end_idx < 5,
+			"end_idx ({}) must be < 5 — the user's 2nd prompt at index 5 must never be compressed away",
+			end_idx
+		);
+		assert_eq!(start_idx, 3, "anchor must remain at first_prompt_idx");
 	}
 
 	#[test]
