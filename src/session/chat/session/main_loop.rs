@@ -900,6 +900,9 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		}
 	}
 
+	// Skip initial message processing when daemon starts with no input.
+	if !input.is_empty() {
+
 	// Check if this is a command (same logic as interactive session)
 	if input.starts_with('/') {
 		// Handle special /done command separately
@@ -1112,6 +1115,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 			);
 		}
 	}
+	} // end if !input.is_empty()
 
 	// Keep session alive while there are pending inbox messages, scheduled entries, or active jobs.
 	// All injection sources (schedule, background agents) push to the inbox — drain it here.

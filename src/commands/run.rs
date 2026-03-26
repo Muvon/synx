@@ -59,7 +59,8 @@ pub struct RunArgs {
 pub async fn execute(args: &RunArgs, config: &Config) -> Result<()> {
 	// Daemon mode: no spinner, but still use readline if terminal input available.
 	// --format=jsonl always uses non-interactive mode (piped input).
-	let is_interactive_startup = !args.daemon && args.format.is_none() && std::io::stdin().is_terminal();
+	let is_interactive_startup =
+		!args.daemon && args.format.is_none() && std::io::stdin().is_terminal();
 	let is_interactive_session = args.format.is_none() && std::io::stdin().is_terminal();
 
 	// Full startup: tap/dep resolution + MCP init under one spinner
@@ -80,8 +81,12 @@ pub async fn execute(args: &RunArgs, config: &Config) -> Result<()> {
 	if is_interactive_session {
 		session::chat::run_interactive_session(&session_args, &run_config).await
 	} else {
-		// Non-interactive: read input from stdin (piped)
-		let input = read_input()?;
+		// Daemon without piped stdin: start with no initial input, just wait for inbox.
+		let input = if args.daemon && std::io::stdin().is_terminal() {
+			String::new()
+		} else {
+			read_input()?
+		};
 		session::chat::run_interactive_session_with_input(&session_args, &run_config, &input).await
 	}
 }

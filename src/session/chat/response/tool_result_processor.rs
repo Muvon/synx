@@ -89,15 +89,20 @@ pub async fn process_tool_results(
 			config.mcp_response_tokens_threshold,
 		);
 		if was_truncated {
-			use colored::Colorize;
-			eprintln!(
-				"{}",
-				format!(
-					"⚠️  Tool '{}' response truncated to {} tokens (mcp_response_tokens_threshold)",
-					tool_result.tool_name, config.mcp_response_tokens_threshold
-				)
-				.bright_yellow()
-			);
+			let is_terminal = crate::config::with_thread_config(|c| c.output_mode())
+				.unwrap_or(crate::session::output::OutputMode::NonInteractive)
+				.is_terminal_mode();
+			if is_terminal {
+				use colored::Colorize;
+				eprintln!(
+					"{}",
+					format!(
+						"⚠️  Tool '{}' response truncated to {} tokens (mcp_response_tokens_threshold)",
+						tool_result.tool_name, config.mcp_response_tokens_threshold
+					)
+					.bright_yellow()
+				);
+			}
 		}
 
 		// PERFORMANCE OPTIMIZATION: Check size before moving content
