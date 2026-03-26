@@ -60,11 +60,14 @@ pub fn add_compression_hints_to_prompt(
 
 	prompt.push_str(&format!(
 		"\n\n## CONTEXT COMPRESSION ACTIVE\n\
-		- {} compressions performed\n\
-		- {} tokens saved ({:.1}% reduction)\n\
+		- {} compressions performed ({} tokens saved, {:.1}% reduction)\n\
 		- Compressed sections marked with [COMPRESSED: id]\n\
-		- Technical details preserved verbatim in TECHNICAL sections\n\
-		- Focus on recent uncompressed messages for current context",
+		- **ANALYSIS FINDINGS in compressed summaries are trustworthy** — they were extracted from real tool results. \
+		Do NOT re-read files or re-run searches just to verify what the summary already states.\n\
+		- **FILE CONTEXT sections contain real file content** auto-read from disk at compression time. \
+		Treat this content as current and accurate — do NOT re-read files that are already in FILE CONTEXT.\n\
+		- If you need a file NOT in FILE CONTEXT, read it normally. But for files already there, use the provided content.\n\
+		- Focus on recent uncompressed messages for current intent, compressed summaries for background knowledge.",
 		compression_stats.total_compressions(),
 		compression_stats.total_tokens_saved,
 		compression_stats.avg_compression_ratio() * 100.0

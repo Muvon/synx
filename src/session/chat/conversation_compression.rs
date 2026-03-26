@@ -801,6 +801,12 @@ Brief overview of the session — what brought us here. Keep it short.\n\n\
 What is the user working on RIGHT NOW? This is the most recent request — highlight it as the primary focus.\n\n\
 **PROGRESS** (2-4 sentences):\n\
 What was completed for the current task? What is in progress? What was the outcome?\n\n\
+**ANALYSIS FINDINGS** (preserve conclusions — this prevents re-doing work):\n\
+Capture key findings from code analysis, debugging, or investigation. Include:\n\
+- What was discovered (root causes, patterns, behaviors)\n\
+- Specific code locations and what was found there\n\
+- Conclusions drawn from tool results\n\
+This section is CRITICAL — without it, the AI will re-read the same files to rediscover the same things.\n\n\
 **RECENT EXCHANGES** (preserve with high fidelity — the most recent [RECENT] messages):\n\
 For each recent user/assistant pair: quote or closely paraphrase.\n\n\
 **KEY ENTITIES** (preserve exactly — copy values verbatim):\n\
@@ -810,17 +816,20 @@ For each recent user/assistant pair: quote or closely paraphrase.\n\n\
 - Decisions: choices made with reasoning\n\n\
 **NEXT STEPS** (1-2 sentences):\n\
 What needs to happen next to continue the current task?\n\n\
-**OPTIONAL — file contexts needed to continue:**\n\
-If specific file ranges are critical for the next step, include them:\n\
+**FILE CONTEXT — files to auto-inject after compression (IMPORTANT):**\n\
+Files listed in <context> tags will be AUTO-READ from disk and injected verbatim into the compressed summary. \
+This is how the session retains real file content across compressions without re-reading. \
+Include any file the session is actively working on or needs to continue.\n\
 <context>\n\
 filepath:startline:endline\n\
 </context>\n\
 Rules: <context> tags required; one entry per line as filepath:N:N (no spaces); \
-paths from project root; line numbers 1–10000; max 5 ranges; only truly critical files.\n\n\
-**OPTIONAL — critical knowledge to retain across compressions:**\n\
-If there is critical knowledge from this conversation that MUST survive future compressions \
-(e.g., a key architectural decision, a non-obvious constraint, a user preference that affects all future work), \
-write it in a <knowledge> tag. 2-3 sentences MAX. Only include if truly critical — not routine progress.\n\
+paths from project root; line numbers 1–10000; max 5 ranges; prioritize files being edited or analyzed.\n\n\
+**CRITICAL KNOWLEDGE — survives all future compressions:**\n\
+If there is critical knowledge that MUST survive future compressions \
+(e.g., a key architectural decision, a non-obvious constraint, a user preference, \
+analysis conclusions, root cause findings), write it in a <knowledge> tag. \
+2-3 sentences MAX. Only include if truly critical — not routine progress.\n\
 <knowledge>\n\
 Your critical insight here (2-3 sentences max).\n\
 </knowledge>"
@@ -847,6 +856,12 @@ Brief overview of the session — what brought us here. Keep it short.\n\n\
 What is the user working on RIGHT NOW? This is the most recent request — highlight it as the primary focus.\n\n\
 **PROGRESS** (2-4 sentences):\n\
 What was completed for the current task? What is in progress? What was the outcome?\n\n\
+**ANALYSIS FINDINGS** (preserve conclusions — this prevents re-doing work):\n\
+Capture key findings from code analysis, debugging, or investigation. Include:\n\
+- What was discovered (root causes, patterns, behaviors)\n\
+- Specific code locations and what was found there\n\
+- Conclusions drawn from tool results\n\
+This section is CRITICAL — without it, the AI will re-read the same files to rediscover the same things.\n\n\
 **RECENT EXCHANGES** (preserve with high fidelity — the most recent [RECENT] messages):\n\
 For each recent user/assistant pair: quote or closely paraphrase. Do not compress these.\n\n\
 **KEY ENTITIES** (preserve exactly — copy values verbatim):\n\
@@ -863,6 +878,9 @@ YES\n\
 **SESSION CONTEXT**: ...\n\
 **CURRENT TASK**: ...\n\
 **PROGRESS**: ...\n\
+**ANALYSIS FINDINGS**:\n\
+- [finding 1]\n\
+- [finding 2]\n\
 **RECENT EXCHANGES**:\n\
 - User: [question] → Assistant: [answer]\n\
 **KEY ENTITIES**:\n\
@@ -870,17 +888,20 @@ YES\n\
 - Errors/issues: ...\n\
 - Decisions: ...\n\
 **NEXT STEPS**: ...\n\n\
-**OPTIONAL — file contexts needed to continue:**\n\
-If specific file ranges are critical for the next step, include them:\n\
+**FILE CONTEXT — files to auto-inject after compression (IMPORTANT):**\n\
+Files listed in <context> tags will be AUTO-READ from disk and injected verbatim into the compressed summary. \
+This is how the session retains real file content across compressions without re-reading. \
+Include any file the session is actively working on or needs to continue.\n\
 <context>\n\
 filepath:startline:endline\n\
 </context>\n\
 Rules: <context> tags required; one entry per line as filepath:N:N (no spaces); \
-paths from project root; line numbers 1–10000; max 5 ranges; only truly critical files.\n\n\
-**OPTIONAL — critical knowledge to retain across compressions:**\n\
-If there is critical knowledge from this conversation that MUST survive future compressions \
-(e.g., a key architectural decision, a non-obvious constraint, a user preference that affects all future work), \
-write it in a <knowledge> tag. 2-3 sentences MAX. Only include if truly critical — not routine progress.\n\
+paths from project root; line numbers 1–10000; max 5 ranges; prioritize files being edited or analyzed.\n\n\
+**CRITICAL KNOWLEDGE — survives all future compressions:**\n\
+If there is critical knowledge that MUST survive future compressions \
+(e.g., a key architectural decision, a non-obvious constraint, a user preference, \
+analysis conclusions, root cause findings), write it in a <knowledge> tag. \
+2-3 sentences MAX. Only include if truly critical — not routine progress.\n\
 <knowledge>\n\
 Your critical insight here (2-3 sentences max).\n\
 </knowledge>\n\n\
@@ -1024,18 +1045,18 @@ secondary context.\n\n",
 				let content = msg.content.trim();
 				// Preserve both the start (tool name/context) and the end (errors/results).
 				// Errors typically appear at the tail — head-only truncation hides them.
-				let truncated = if content.len() > 500 {
+				let truncated = if content.len() > 1500 {
 					let head_end = content
 						.char_indices()
 						.map(|(i, _)| i)
-						.take_while(|&i| i <= 200)
+						.take_while(|&i| i <= 600)
 						.last()
 						.unwrap_or(0);
 					let tail_start = content
 						.char_indices()
 						.rev()
 						.map(|(i, _)| i)
-						.take_while(|&i| content.len() - i <= 300)
+						.take_while(|&i| content.len() - i <= 900)
 						.last()
 						.unwrap_or(content.len());
 					if head_end < tail_start {
