@@ -1,9 +1,18 @@
-# Octomind 🐙
+<div align="center">
+  <img src="doc/assets/banner.png" width="720" alt="Octomind — AI Agent Runtime" />
+  <br /><br />
+  <strong>Specialist AI agents that just work.</strong><br />
+  The open-source runtime for community-built experts — any domain, zero setup, no vendor lock-in.
+  <br /><br />
 
-**© 2026 Muvon Un Limited** | [Documentation](doc/README.md) | [Community Tap](https://github.com/muvon/octomind-tap) | [Website](https://muvon.io)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-7c3aed?style=flat-square)](LICENSE)
+  [![GitHub stars](https://img.shields.io/github/stars/muvon/octomind?style=flat-square&color=7c3aed)](https://github.com/muvon/octomind/stargazers)
+  [![Website](https://img.shields.io/badge/website-octomind.run-7c3aed?style=flat-square)](https://octomind.run)
 
-> **Specialist AI agents that just work.**
-> The open-source runtime for community-built experts — any domain, zero setup, no vendor lock-in.
+  [Documentation](https://octomind.run/docs/) · [Community Tap](https://github.com/muvon/octomind-tap) · [Website](https://octomind.run)
+</div>
+
+---
 
 ## The Problem
 
@@ -176,7 +185,7 @@ Work on a hard problem for 4 hours. The agent still knows what it decided in hou
 
 ---
 
-## 7 Providers. Switch Instantly. Zero Lock-in.
+## 13+ Providers. Switch Instantly. Zero Lock-in.
 
 ```bash
 # Hit a rate limit? Switch mid-session — no restart, no lost context
@@ -290,6 +299,6 @@ Every domain expert who publishes a specialist makes Octomind useful for an enti
 
 ---
 
-**Muvon Un Limited** (Hong Kong) | [Website](https://muvon.io) | [Issues](https://github.com/muvon/octomind/issues)
+**Octomind** by [Muvon](https://muvon.io) | [Website](https://octomind.run) | [Issues](https://github.com/muvon/octomind/issues)
 
-**License:** Apache 2.0
+**License:** Apache 2.0 — © 2025–2026 Muvon Un Limited
