@@ -1,0 +1,448 @@
+# Configuration Reference
+
+Complete field-by-field reference for `~/.local/share/octomind/config/config.toml`.
+
+All values shown match `config-templates/default.toml`. Fields marked **(required)** have no fallback default.
+
+## Root-Level Settings
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `version` | u32 | `1` | Config version. Do not modify. Used for automatic upgrades. |
+| `log_level` | string | `"none"` | Logging verbosity: `"none"`, `"info"`, `"debug"` |
+| `model` | string | `"openrouter:anthropic/claude-sonnet-4"` | Default model in `provider:model` format |
+| `default` | string | `"octomind:assistant"` | Default tag when no TAG passed to `octomind run` |
+| `max_tokens` | u32 | `16384` | Global max tokens for all operations |
+| `custom_instructions_file_name` | string | `"INSTRUCTIONS.md"` | File auto-loaded as user message in new sessions. Empty string to disable. |
+| `custom_constraints_file_name` | string | `"CONSTRAINTS.md"` | File appended to each request in `<constraints>` tags. Empty string to disable. |
+| `sandbox` | bool | `false` | Restrict filesystem writes to working directory. Also available as `--sandbox` CLI flag. |
+
+## Performance & Limits
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mcp_response_warning_threshold` | u32 | `10000` | Warn when MCP tool response exceeds this token count. `0` = disable. |
+| `mcp_response_tokens_threshold` | u32 | `0` | Hard limit on MCP response tokens. Responses truncated when exceeded. `0` = unlimited. |
+| `max_session_tokens_threshold` | u32 | `0` | Max tokens per session before truncation. `0` = disabled. |
+| `cache_tokens_threshold` | u32 | `2048` | Cache responses exceeding this token count. `0` = no caching. |
+| `cache_timeout_seconds` | u32 | `240` | Cache lifetime in seconds. |
+| `use_long_system_cache` | bool | `true` | Use longer cache lifetime for system messages. |
+| `max_retries` | u32 | `1` | Retry attempts for API calls. |
+| `retry_timeout` | u32 | `30` | Base timeout in seconds for exponential backoff. |
+
+## User Interface
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enable_markdown_rendering` | bool | `true` | Pretty-print AI responses with markdown rendering. |
+| `markdown_theme` | string | `"default"` | Theme: `"default"`, `"dark"`, `"light"`, `"ocean"`, `"solarized"`, `"monokai"` |
+| `max_session_spending_threshold` | f64 | `0.0` | USD limit per session. Prompts before continuing when exceeded. `0.0` = no limit. |
+| `max_request_spending_threshold` | f64 | `0.0` | USD limit per request. Stops execution when exceeded. `0.0` = no limit. |
+
+## `[capabilities]`
+
+Map of capability name to provider override. Used by tap agents to route specific capabilities to different providers.
+
+```toml
+[capabilities]
+codesearch = "octocode"  # uses capabilities/codesearch/octocode.toml
+```
+
+Empty by default. Each key maps to a provider TOML file within the tap's `capabilities/` directory.
+
+## `[[roles]]`
+
+Define custom roles that override or extend tap-provided agents.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Role identifier (e.g., `"developer"`, `"assistant"`) |
+| `model` | string | no | Model override for this role (`provider:model` format) |
+| `system` | string | no | System prompt. Supports template variables. |
+| `welcome` | string | no | Welcome message shown on session start. Supports template variables. |
+| `temperature` | f64 | no | Sampling temperature (0.0-2.0) |
+| `top_p` | f64 | no | Nucleus sampling (0.0-1.0) |
+| `top_k` | u32 | no | Top-k token limit (1-1000) |
+| `workflow` | string | no | Workflow name to activate for this role |
+
+### `[roles.mcp]`
+
+MCP configuration for the role.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server_refs` | string[] | `[]` | MCP server names to enable for this role |
+| `allowed_tools` | string[] | `[]` | Tool access patterns. Empty = all tools. Supports wildcards: `"core:*"`, `"filesystem:view"` |
+
+```toml
+[[roles]]
+name = "assistant"
+temperature = 0.3
+top_p = 0.7
+top_k = 20
+system = """
+You are helpful and knowledgeable assistant.
+Working directory: {{CWD}}
+"""
+welcome = "Hello! Ready to help. Working in {{CWD}} (Role: {{ROLE}})"
+
+[roles.mcp]
+server_refs = ["core", "filesystem", "agent"]
+allowed_tools = ["core:*", "filesystem:*", "agent:*"]
+```
+
+## `[mcp]`
+
+Global MCP (Model Context Protocol) configuration.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allowed_tools` | string[] | `[]` | Global tool restrictions. Empty = no restrictions. Fallback when role doesn't specify. |
+
+### `[[mcp.servers]]`
+
+MCP server definitions. Three types supported: `builtin`, `http`, `stdio`.
+
+#### Common Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Unique server identifier |
+| `type` | string | yes | `"builtin"`, `"http"`, or `"stdio"` |
+| `timeout_seconds` | u32 | no | Response timeout (default: 30) |
+| `tools` | string[] | no | Tool filter. Empty = all tools. Supports wildcards: `"github_*"` |
+| `auto_bind` | string[] | no | Role names to auto-include this server for |
+
+#### HTTP-Specific Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | yes | Server endpoint URL |
+| `auth_token` | string | no | Static bearer token |
+
+#### Stdio-Specific Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `command` | string | yes | Executable to run |
+| `args` | string[] | no | Command arguments |
+
+#### `[mcp.servers.oauth]`
+
+OAuth 2.1 + PKCE authentication for HTTP servers.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | string | yes | OAuth client ID |
+| `client_secret` | string | yes | OAuth client secret |
+| `authorization_url` | string | yes | Authorization endpoint (must be HTTPS or localhost) |
+| `token_url` | string | yes | Token exchange endpoint (must be HTTPS or localhost) |
+| `callback_url` | string | no | Local callback URL (default: `http://localhost:34567/oauth/callback`) |
+| `scopes` | string[] | no | OAuth scopes to request |
+| `refresh_buffer_seconds` | u32 | no | Seconds before expiry to refresh token (default: 300, min: 60) |
+
+```toml
+[mcp]
+allowed_tools = []
+
+[[mcp.servers]]
+name = "core"
+type = "builtin"
+timeout_seconds = 30
+tools = []
+
+[[mcp.servers]]
+name = "agent"
+type = "builtin"
+timeout_seconds = 30
+tools = []
+
+# External stdio server
+[[mcp.servers]]
+name = "octocode"
+type = "stdio"
+command = "octocode"
+args = ["mcp", "--path=."]
+timeout_seconds = 240
+tools = []
+
+# External HTTP server with OAuth
+[[mcp.servers]]
+name = "github_mcp"
+type = "http"
+url = "https://api.github.com/mcp"
+timeout_seconds = 30
+tools = []
+
+[mcp.servers.oauth]
+client_id = "your-oauth-client-id"
+client_secret = "your-oauth-client-secret"
+authorization_url = "https://github.com/login/oauth/authorize"
+token_url = "https://github.com/login/oauth/access_token"
+callback_url = "http://localhost:34567/oauth/callback"
+scopes = ["repo", "read:org"]
+```
+
+## `[[hooks]]`
+
+Webhook HTTP listeners that pipe payloads through scripts and inject output into sessions.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | required | Unique hook identifier |
+| `bind` | string | required | HTTP server address (e.g., `"0.0.0.0:9876"`) |
+| `script` | string | required | Path to executable script |
+| `timeout` | u32 | `30` | Script timeout in seconds (1-3600) |
+
+```toml
+[[hooks]]
+name = "github-push"
+bind = "0.0.0.0:9876"
+script = "/path/to/process-github-push.sh"
+timeout = 30
+```
+
+## `[[workflows]]`
+
+Multi-step AI processing workflows.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Workflow identifier |
+| `description` | string | yes | Human-readable description |
+
+### `[[workflows.steps]]`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Step identifier |
+| `type` | string | yes | `"once"`, `"loop"`, `"foreach"`, `"conditional"`, `"parallel"` |
+| `layer` | string | conditional | Layer name (required for `once`, `conditional`) |
+| `exit_pattern` | string | conditional | Regex to stop loop (required for `loop`) |
+| `parse_pattern` | string | conditional | Regex to extract items (required for `foreach`) |
+| `max_iterations` | u32 | no | Max loop iterations |
+| `condition_pattern` | string | conditional | Regex for conditional branching |
+
+Substeps are nested as `[[workflows.steps.substeps]]` with the same schema.
+
+```toml
+[[workflows]]
+name = "developer_workflow"
+description = "Two-stage workflow: refine task, then research context"
+
+[[workflows.steps]]
+name = "refine"
+type = "once"
+layer = "task_refiner"
+
+[[workflows.steps]]
+name = "research"
+type = "once"
+layer = "task_researcher"
+```
+
+## `[[layers]]`
+
+AI processing layers used by workflows, commands, and agents.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | required | Layer identifier |
+| `description` | string | required | Human-readable description (used in help, MCP) |
+| `model` | string | required | Model in `provider:model` format |
+| `max_tokens` | u32 | required | Max response tokens. `0` = use model default. |
+| `system_prompt` | string | no | System prompt for this layer. Supports `{{CONTEXT}}`, `{{SYSTEM}}`. |
+| `temperature` | f64 | no | Sampling temperature (0.0-2.0) |
+| `top_p` | f64 | no | Nucleus sampling (0.0-1.0) |
+| `top_k` | u32 | no | Top-k token limit (1-200) |
+| `input_mode` | string | no | How input is fed: `"first"`, `"last"`, `"all"` |
+| `output_mode` | string | no | How output affects session: `"none"`, `"append"`, `"replace"` |
+| `output_role` | string | no | Role for output messages: `"assistant"`, `"user"` |
+
+### `[layers.mcp]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server_refs` | string[] | `[]` | MCP servers available to this layer |
+| `allowed_tools` | string[] | `[]` | Allowed tools for this layer |
+
+### `[layers.parameters]`
+
+Custom key-value parameters. Accessible in system prompts via `{{PARAM:key}}`.
+
+```toml
+[[layers]]
+name = "task_refiner"
+description = "Refines and clarifies user requests"
+model = "openrouter:openai/gpt-4.1-mini"
+max_tokens = 2048
+system_prompt = "You are a query processor..."
+temperature = 0.3
+top_p = 0.7
+top_k = 20
+input_mode = "last"
+output_mode = "none"
+output_role = "assistant"
+
+[layers.mcp]
+server_refs = []
+allowed_tools = []
+
+[layers.parameters]
+```
+
+## `[[commands]]`
+
+Custom commands triggered with `/run <command_name>`. Same schema as `[[layers]]`.
+
+```toml
+[[commands]]
+name = "reduce"
+description = "Compress session history for cost optimization"
+model = "openrouter:openai/o4-mini"
+max_tokens = 0
+system_prompt = "You are a Session History Reducer..."
+temperature = 0.3
+top_p = 0.7
+top_k = 20
+input_mode = "all"
+output_mode = "replace"
+output_role = "assistant"
+
+[commands.mcp]
+server_refs = []
+allowed_tools = []
+
+[commands.parameters]
+```
+
+## `[[agents]]`
+
+Specialized AI agents using ACP protocol. Each becomes an MCP tool (`agent_<name>`).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | required | Agent identifier. Tool becomes `agent_<name>`. |
+| `description` | string | required | MCP tool description shown to the AI |
+| `command` | string | required | Shell command starting an ACP server over stdio |
+| `workdir` | string | `"."` | Working directory for subprocess |
+
+```toml
+[[agents]]
+name = "context_gatherer"
+description = "Gather detailed context from files and codebase."
+command = "octomind acp context_gatherer"
+workdir = "."
+```
+
+## `[[prompts]]`
+
+Reusable prompt templates accessible via `/prompt <name>`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Prompt identifier |
+| `description` | string | yes | Shown in `/prompt` list |
+| `prompt` | string | yes | Prompt text injected into session |
+
+```toml
+[[prompts]]
+name = "review"
+description = "Request code review with focus on best practices"
+prompt = """Please review the code above focusing on:
+- Code quality and best practices
+- Security considerations
+- Performance implications"""
+```
+
+## `[compression]`
+
+Automatic context compression system.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `hints_enabled` | bool | `true` | Enable compression system |
+| `hints_pressure_threshold` | f64 | `0.7` | Context pressure threshold (0.0-1.0) to start showing hints |
+| `hints_min_interval` | u32 | `5` | Minimum tool executions between hints |
+| `knowledge_retention` | u32 | `10` | Max critical knowledge entries retained across compressions |
+
+### `[[compression.pressure_levels]]`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `threshold` | u64 | Token count threshold to trigger compression |
+| `target_ratio` | f64 | Compression strength (2.0 = 50% reduction, 4.0 = 75%, 8.0 = 87.5%) |
+
+### `[compression.decision]`
+
+Model used for compression decisions and summary generation.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `model` | string | `"anthropic:claude-haiku-4-5"` | Fast, cheap model recommended |
+| `max_tokens` | u32 | `16000` | Max tokens for decision + summary |
+| `temperature` | f64 | `0.3` | Lower = more consistent decisions |
+| `top_p` | f64 | `1.0` | Nucleus sampling |
+| `top_k` | u32 | `0` | Top-k (0 = disabled) |
+| `max_retries` | u32 | `1` | Retry attempts |
+| `retry_timeout` | u32 | `30` | Retry backoff base |
+| `ignore_cost` | bool | `false` | When true, compression cost is not tracked |
+
+```toml
+[compression]
+hints_enabled = true
+hints_pressure_threshold = 0.7
+hints_min_interval = 5
+knowledge_retention = 10
+
+[[compression.pressure_levels]]
+threshold = 50000
+target_ratio = 2.0
+
+[[compression.pressure_levels]]
+threshold = 100000
+target_ratio = 4.0
+
+[[compression.pressure_levels]]
+threshold = 150000
+target_ratio = 8.0
+
+[compression.decision]
+model = "anthropic:claude-haiku-4-5"
+max_tokens = 16000
+temperature = 0.3
+top_p = 1.0
+top_k = 0
+max_retries = 1
+retry_timeout = 30
+ignore_cost = false
+```
+
+## Multi-File Configuration
+
+Octomind supports split-file configuration. All `*.toml` files in the config directory are merged:
+
+1. `config.toml` is loaded first
+2. Other `*.toml` files are loaded alphabetically
+3. Arrays of tables (e.g., `[[mcp.servers]]`) are concatenated
+4. Same-name entries are deduplicated (last wins)
+5. Scalar values are overridden by later files
+
+This allows organizing config by concern (e.g., `mcp-github.toml`, `layers-custom.toml`).
+
+## Template Variables
+
+Available in `system`, `welcome`, and `system_prompt` fields:
+
+| Variable | Description |
+|----------|-------------|
+| `{{CWD}}` | Current working directory |
+| `{{ROLE}}` | Active role name |
+| `{{DATE}}` | Current date |
+| `{{SHELL}}` | User's shell |
+| `{{OS}}` | Operating system |
+| `{{BINARIES}}` | Available binary tools |
+| `{{GIT_STATUS}}` | Git repository status |
+| `{{README}}` | Contents of README.md in project root |
+| `{{CONTEXT}}` | Session context (for layers) |
+| `{{SYSTEM}}` | Parent system prompt (for layers) |
