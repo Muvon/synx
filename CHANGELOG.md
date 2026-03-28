@@ -1,5 +1,77 @@
 # Changelog
 
+## [0.23.0] - 2026-03-28
+
+### 📋 Release Summary
+
+This release migrates Octomind to a layered architecture, introducing event-driven agents with dynamic MCP server support and daemon mode for background operation. New capabilities include per-agent model overrides, HTTP webhook system for external integrations, shell completion for the run command, and Windows named pipe support for cross-platform messaging. The compression system now uses exponential cooldown for better context retention, while numerous bug fixes improve process management, session isolation, and overall system stability.
+
+
+### 🚨 Breaking Changes
+
+⚠️ **Important**: This release contains breaking changes that may require code updates.
+
+- migrate to layered architecture and remove legacy docs `f6a95722`
+
+### ✨ New Features & Enhancements
+
+- **config**: allow model overrides per tap agent `888923e3`
+- add event-driven agents, dynamic MCP servers, and comprehensive use case docs `9cbda1aa`
+- **mcp**: add stderr capture, server capabilities and tools pagination `d2558a85`
+- **cli**: add shell completion for run command and refactor installer `72daf678`
+- **webhooks**: add HTTP webhook system for external integrations `04a27df1`
+- **mcp**: add session ID support for HTTP MCP servers `b5437843`
+- **chat**: add task-aware compression to drain completed user requests `ce29944d`
+- **mcp**: split role into domain and spec in session context `449eb46b`
+- **compression**: add progressive compression levels for tool-call chains `a6786325`
+- **compression**: expand context retention and add analysis findings `eab85ed2`
+- **platform**: add Windows named pipe support for cross-platform messaging `8ae10fb1`
+- **chat**: add inbox notification banner and improve handling `9a91c367`
+- **inbox**: add push_inbox_message_for_session for external tasks `63b53eaf`
+- **docs**: add daemon mode documentation for background agents `baea6480`
+- **cli**: add daemon mode and external message injection `80afd364`
+
+### 🔧 Improvements & Optimizations
+
+- **webhook_listener**: add comprehensive unit tests `15c58c7c`
+- **mcp**: migrate to rmcp SDK for tool handling `069aaf4d`
+- **cli**: rename inject command to send `b40fb70a`
+
+### 🐛 Bug Fixes & Stability
+
+- **config**: use octomind.run for OpenRouter referer `dd079efd`
+- **mcp**: correct unix-only pgid lazy static `d8cae8a8`
+- **mcp**: use PGID to kill busy server processes `e36083a8`
+- **session**: resolve cancellation race conditions `6bb53981`
+- **mcp**: pass cancellation token to HTTP/stdin tool calls `66d67f09`
+- **tests**: prevent ETXTBSY error in webhook listener tests `96b1f9a0`
+- **mcp**: replace blocking stdin notification with fire-and-forget method `1485dd73`
+- **compression**: replace progressive levels with exponential cooldown `d54b09f0`
+- **compression**: preserve last user prompt in tool-loop sessions `2575c408`
+- **mcp**: use get_dynamic_server_for_session to retrieve config `58a383d9`
+- **mcp**: add reference counting for shared server processes `ee5d8da0`
+- **compression**: exclude bootstrap messages from compress_count calculation `848ed9da`
+- **session**: enforce session isolation for compression and tools `5bd3b155`
+- **run**: suppress tool truncation warnings in non-terminal mode `30a6b6d0`
+- **run**: allow daemon mode with terminal input and forward notifications `2eeaa74c`
+- **send**: prevent blocking on empty stdin when terminal `5fd594cd`
+
+### 📚 Documentation & Examples
+
+- **readme**: link banner image to website `e747c4d8`
+- **config**: document tap agent model overrides `afc1cb4a`
+- **readme**: add banner and expand provider list `66357a2b`
+- add custom hooks documentation and integration guide `0054704b`
+- **use-cases**: add scheduled tasks and long-running development guides `091a74e2`
+- **config**: add exponential cooldown and webhook hooks docs `6049f7a2`
+- **readme**: refine tagline and messaging `f1604955`
+- remove deprecated /cache command references `0ee50d8e`
+- **readme**: restructure content and add new agent examples `46b6fa88`
+
+### 🔄 Other Changes
+
+2 maintenance, dependency, and tooling updates not listed individually.
+
 ## [0.22.0] - 2026-03-25
 
 ### 📋 Release Summary
