@@ -48,6 +48,19 @@ For contributors to Octomind itself.
 | [Architecture](dev/02-architecture.md) | Source modules, internals, patterns |
 | [MCP Server Development](dev/03-mcp-server-development.md) | Building new MCP servers |
 
+## Use Cases
+
+Real-world examples showing how to solve practical problems with Octomind.
+
+| Document | Description |
+|----------|-------------|
+| [CI/CD Code Review](use-cases/01-ci-cd-code-review.md) | Automated code review in pipelines with structured output |
+| [Event-Driven Agent](use-cases/02-event-driven-agent.md) | Daemon + webhooks for GitHub, Slack, monitoring |
+| [Custom Workflow](use-cases/03-custom-development-workflow.md) | Multi-stage refine-research-validate pipeline |
+| [Web Dashboard](use-cases/04-web-dashboard-integration.md) | Embed AI assistant via WebSocket server |
+| [Multi-Agent Delegation](use-cases/05-multi-agent-delegation.md) | Parallel specialized agents for complex tasks |
+| [Dynamic MCP Servers](use-cases/06-dynamic-mcp-servers.md) | AI self-configuring tools at runtime |
+
 ## Troubleshooting
 
 | Document | Description |
