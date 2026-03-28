@@ -60,6 +60,8 @@ Real-world examples showing how to solve practical problems with Octomind.
 | [Web Dashboard](use-cases/04-web-dashboard-integration.md) | Embed AI assistant via WebSocket server |
 | [Multi-Agent Delegation](use-cases/05-multi-agent-delegation.md) | Parallel specialized agents for complex tasks |
 | [Dynamic MCP Servers](use-cases/06-dynamic-mcp-servers.md) | AI self-configuring tools at runtime |
+| [Scheduled Tasks](use-cases/07-scheduled-tasks.md) | Timed automation, reminders, periodic checks |
+| [Long-Running Development](use-cases/08-long-running-development.md) | Multi-day tasks with session resume |
 
 ## Troubleshooting
 
