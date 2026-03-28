@@ -101,13 +101,6 @@ lazy_static::lazy_static! {
 	static ref SERVER_REF_COUNTS: Arc<RwLock<HashMap<String, usize>>> =
 		Arc::new(RwLock::new(HashMap::new()));
 
-	// Process group IDs for SIGKILL fallback when ServerProcess mutex is locked.
-	// Stored OUTSIDE ServerProcess so we can kill processes even when busy.
-	// Unix-only: used to send SIGKILL to -pgid when try_lock() fails.
-	#[cfg(unix)]
-	static ref SERVER_PGIDS: Arc<RwLock<HashMap<String, libc::pid_t>>> =
-		Arc::new(RwLock::new(HashMap::new()));
-
 	/// Recent stderr lines per server — background reader threads push lines here
 	/// so that initialization/runtime errors can be surfaced to the user.
 	static ref SERVER_STDERR: Arc<RwLock<HashMap<String, StderrBuffer>>> =
@@ -118,6 +111,16 @@ lazy_static::lazy_static! {
 	static ref SERVER_CAPABILITIES: Arc<RwLock<HashMap<String, rmcp::model::InitializeResult>>> =
 		Arc::new(RwLock::new(HashMap::new()));
 }
+
+// Process group IDs for SIGKILL fallback when ServerProcess mutex is locked.
+// Stored OUTSIDE ServerProcess so we can kill processes even when busy.
+// Unix-only: used to send SIGKILL to -pgid when try_lock() fails.
+#[cfg(unix)]
+lazy_static::lazy_static! {
+	static ref SERVER_PGIDS: Arc<RwLock<HashMap<String, libc::pid_t>>> =
+		Arc::new(RwLock::new(HashMap::new()));
+}
+
 // Global notification sender — set by the session when WebSocket or JSONL output is active.
 // When set, MCP server notifications are forwarded as structured ServerMessage::McpNotification.
 // When not set, notifications are buffered and flushed when a sender is registered.
