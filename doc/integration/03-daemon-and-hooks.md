@@ -142,3 +142,7 @@ octomind run --name reviewer --daemon --hook github-pr
 # Script extracts PR details
 # AI reviews code and posts comments
 ```
+
+## Further Reading
+
+See [Custom Hooks](../use-cases/09-custom-hooks.md) for comprehensive hook development guide with examples in Python, Node.js, Bash, Ruby, and Go -- including signature validation, event filtering, and multi-hook architecture patterns.

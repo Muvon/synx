@@ -62,6 +62,7 @@ Real-world examples showing how to solve practical problems with Octomind.
 | [Dynamic MCP Servers](use-cases/06-dynamic-mcp-servers.md) | AI self-configuring tools at runtime |
 | [Scheduled Tasks](use-cases/07-scheduled-tasks.md) | Timed automation, reminders, periodic checks |
 | [Long-Running Development](use-cases/08-long-running-development.md) | Multi-day tasks with session resume |
+| [Custom Hooks](use-cases/09-custom-hooks.md) | Write hooks in any language for any integration |
 
 ## Troubleshooting
 
