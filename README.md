@@ -1,5 +1,7 @@
 <div align="center">
-  <img src="doc/assets/banner.png" width="720" alt="Octomind — AI Agent Runtime" />
+  <a href="https://octomind.run" target="_blank">
+    <img src="doc/assets/banner.png" width="720" alt="Octomind — AI Agent Runtime" />
+  </a>
   <br /><br />
   <strong>Specialist AI agents that just work.</strong><br />
   The open-source runtime for community-built experts — any domain, zero setup, no vendor lock-in.
