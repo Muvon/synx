@@ -93,7 +93,19 @@ lazy_static::lazy_static! {
 	// cleanup_server_process() only kills the OS process when the count reaches zero,
 	// preventing one session from tearing down a server that another session is still using.
 	// stop_all_servers() bypasses ref counts — it is only called on process shutdown.
+	// Reference counts for shared MCP server processes.
+	// Each call to ensure_server_running() increments the count; release_server() decrements it.
+	// cleanup_server_process() only kills the OS process when the count reaches zero,
+	// preventing one session from tearing down a server that another session is still using.
+	// stop_all_servers() bypasses ref counts — it is only called on process shutdown.
 	static ref SERVER_REF_COUNTS: Arc<RwLock<HashMap<String, usize>>> =
+		Arc::new(RwLock::new(HashMap::new()));
+
+	// Process group IDs for SIGKILL fallback when ServerProcess mutex is locked.
+	// Stored OUTSIDE ServerProcess so we can kill processes even when busy.
+	// Unix-only: used to send SIGKILL to -pgid when try_lock() fails.
+	#[cfg(unix)]
+	static ref SERVER_PGIDS: Arc<RwLock<HashMap<String, libc::pid_t>>> =
 		Arc::new(RwLock::new(HashMap::new()));
 
 	/// Recent stderr lines per server — background reader threads push lines here
@@ -699,6 +711,13 @@ async fn start_server_process(server: &McpServerConfig) -> Result<String> {
 				anyhow::anyhow!("Failed to start MCP server '{}': {}", server.name(), e)
 			})?;
 
+			// Store PGID for SIGKILL fallback when mutex is locked
+			#[cfg(unix)]
+			{
+				let mut pgids = SERVER_PGIDS.write().unwrap();
+				pgids.insert(server.name().to_string(), child.id() as libc::pid_t);
+			}
+
 			// Add to the registry
 			{
 				let mut processes = SERVER_PROCESSES.write().unwrap();
@@ -755,6 +774,13 @@ async fn start_server_process(server: &McpServerConfig) -> Result<String> {
 			let mut child = cmd.spawn().map_err(|e| {
 				anyhow::anyhow!("Failed to start MCP server '{}': {}", server.name(), e)
 			})?;
+
+			// Store PGID for SIGKILL fallback when mutex is locked
+			#[cfg(unix)]
+			{
+				let mut pgids = SERVER_PGIDS.write().unwrap();
+				pgids.insert(server.name().to_string(), child.id() as libc::pid_t);
+			}
 
 			// Get the stdin/stdout handles
 			let child_stdin = child.stdin.take().ok_or_else(|| {
@@ -1603,14 +1629,43 @@ pub fn stop_all_servers() -> Result<()> {
 				}
 			}
 			Err(_) => {
-				crate::log_debug!("Could not acquire lock for server '{}', may be busy", name);
-				// For busy processes, we'll just remove them from registry
-				// The process cleanup will happen when the lock is released
+				crate::log_debug!(
+					"Could not acquire lock for server '{}', using PGID for SIGKILL",
+					name
+				);
+				// For busy processes, use PGID to send SIGKILL directly
+				#[cfg(unix)]
+				{
+					let pgids = SERVER_PGIDS.read().unwrap();
+					if let Some(pgid) = pgids.get(name) {
+						crate::log_debug!(
+							"Sending SIGKILL to process group {} for server '{}'",
+							pgid,
+							name
+						);
+						unsafe {
+							libc::kill(-*pgid, libc::SIGKILL);
+						}
+					} else {
+						crate::log_debug!("No PGID found for server '{}', process may leak", name);
+					}
+				}
+				#[cfg(not(unix))]
+				{
+					crate::log_debug!("No PGID fallback on non-Unix for server '{}'", name);
+				}
 			}
 		}
 	}
 
 	processes.clear();
+
+	// Clear PGIDs (Unix only)
+	#[cfg(unix)]
+	{
+		let mut pgids = SERVER_PGIDS.write().unwrap();
+		pgids.clear();
+	}
 
 	// Clear all in-flight handles
 	{
@@ -1682,14 +1737,48 @@ pub fn cleanup_server_process(server_name: &str) -> Result<()> {
 			}
 			Err(_) => {
 				crate::log_debug!(
-					"Could not acquire lock for server '{}' during cleanup",
+					"Could not acquire lock for server '{}' during cleanup, using PGID for SIGKILL",
 					server_name
 				);
+				// For busy processes, use PGID to send SIGKILL directly
+				#[cfg(unix)]
+				{
+					let pgids = SERVER_PGIDS.read().unwrap();
+					if let Some(pgid) = pgids.get(server_name) {
+						crate::log_debug!(
+							"Sending SIGKILL to process group {} for server '{}' during cleanup",
+							pgid,
+							server_name
+						);
+						unsafe {
+							libc::kill(-*pgid, libc::SIGKILL);
+						}
+					} else {
+						crate::log_debug!(
+							"No PGID found for server '{}' during cleanup, process may leak",
+							server_name
+						);
+					}
+				}
+				#[cfg(not(unix))]
+				{
+					crate::log_debug!(
+						"No PGID fallback on non-Unix for server '{}' during cleanup",
+						server_name
+					);
+				}
 			}
 		}
 
 		// Clear function cache for this server
 		crate::mcp::server::clear_function_cache_for_server(server_name);
+
+		// Clean up PGID (Unix only)
+		#[cfg(unix)]
+		{
+			let mut pgids = SERVER_PGIDS.write().unwrap();
+			pgids.remove(server_name);
+		}
 
 		// Clean up in-flight handle slot
 		{
