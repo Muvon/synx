@@ -18,17 +18,23 @@
 //! tokio's watch channel for proper async cancellation semantics.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::signal;
 use tokio::sync::watch;
 
-/// Manages cancellation state for a session with proper signal handling
+/// Manages cancellation state for a session with proper signal handling.
+///
+/// Uses per-operation watch channels to avoid a race where `reset()` sends
+/// `false` before spawned tasks see the `true` — making Ctrl+C invisible.
+/// Each `new_operation()` / `reset()` creates a fresh channel; old receivers
+/// keep their `true` value forever so orphaned tasks always see cancellation.
 pub struct SessionCancellation {
-	/// Sender for cancellation events
-	cancel_tx: watch::Sender<bool>,
-	/// Receiver for cancellation events
-	cancel_rx: watch::Receiver<bool>,
+	/// Arc-wrapped sender so the signal handler always sends on the
+	/// **current** operation's channel (swapped on each new_operation/reset).
+	current_op_tx: Arc<Mutex<watch::Sender<bool>>>,
+	/// Receiver for the current operation's channel.
+	current_op_rx: watch::Receiver<bool>,
 	/// Tracks if we've seen the first Ctrl+C
 	first_interrupt: Arc<AtomicBool>,
 }
@@ -42,23 +48,23 @@ impl Default for SessionCancellation {
 impl SessionCancellation {
 	/// Create a new cancellation manager
 	pub fn new() -> Self {
-		let (cancel_tx, cancel_rx) = watch::channel(false);
+		let (tx, rx) = watch::channel(false);
 
 		Self {
-			cancel_tx,
-			cancel_rx,
+			current_op_tx: Arc::new(Mutex::new(tx)),
+			current_op_rx: rx,
 			first_interrupt: Arc::new(AtomicBool::new(false)),
 		}
 	}
 
 	/// Get current operation receiver
 	pub fn operation_receiver(&self) -> watch::Receiver<bool> {
-		self.cancel_rx.clone()
+		self.current_op_rx.clone()
 	}
 
 	/// Start signal handling for this session with error recovery
 	pub fn start_signal_handler(&self) -> tokio::task::JoinHandle<()> {
-		let cancel_tx = self.cancel_tx.clone();
+		let op_tx = self.current_op_tx.clone();
 		let first_interrupt = self.first_interrupt.clone();
 
 		tokio::spawn(async move {
@@ -90,7 +96,7 @@ impl SessionCancellation {
 					_ = async {
 						loop {
 							sigint.recv().await;
-							if !handle_interrupt(&first_interrupt, &cancel_tx) {
+							if !handle_interrupt(&first_interrupt, &op_tx) {
 								break;
 							}
 						}
@@ -109,7 +115,7 @@ impl SessionCancellation {
 				loop {
 					match signal::ctrl_c().await {
 						Ok(()) => {
-							if !handle_interrupt(&first_interrupt, &cancel_tx) {
+							if !handle_interrupt(&first_interrupt, &op_tx) {
 								break;
 							}
 						}
@@ -123,44 +129,58 @@ impl SessionCancellation {
 		})
 	}
 
-	/// Get a new operation receiver
+	/// Create a fresh per-operation channel and return the receiver.
+	///
+	/// Old receivers from previous operations keep their state — if the
+	/// previous operation was cancelled, its receivers still read `true`,
+	/// so orphaned `tokio::spawn` tasks always see the cancellation.
 	pub fn new_operation(&mut self) -> watch::Receiver<bool> {
-		// Clone and mark current value as seen to avoid spurious wakeups from old changes
-		let mut rx = self.cancel_rx.clone();
-		rx.mark_unchanged();
+		let (tx, rx) = watch::channel(false);
+		*self.current_op_tx.lock().unwrap() = tx;
+		self.current_op_rx = rx.clone();
 		rx
 	}
 
 	/// Check if the current operation is cancelled
 	pub fn is_cancelled(&self) -> bool {
-		*self.cancel_rx.borrow()
+		*self.current_op_rx.borrow()
 	}
 
 	/// Wait for cancellation (async)
 	pub async fn cancelled(&mut self) {
 		// Wait for the value to become true
-		while !*self.cancel_rx.borrow() {
-			if self.cancel_rx.changed().await.is_err() {
+		while !*self.current_op_rx.borrow() {
+			if self.current_op_rx.changed().await.is_err() {
 				break;
 			}
 		}
 	}
 
-	/// Reset the cancellation state
+	/// Reset the cancellation state for the next operation.
+	///
+	/// Creates a fresh channel so `is_cancelled()` returns `false`.
+	/// Old receivers keep their `true` value — no race with spawned tasks.
 	pub fn reset(&mut self) {
 		self.first_interrupt.store(false, Ordering::SeqCst);
-		// Reset the watch channel
-		let _ = self.cancel_tx.send(false);
+		let (tx, rx) = watch::channel(false);
+		*self.current_op_tx.lock().unwrap() = tx;
+		self.current_op_rx = rx;
 	}
 
 	/// Cancel all operations and shutdown
 	pub fn shutdown(&self) {
-		let _ = self.cancel_tx.send(true);
+		let _ = self.current_op_tx.lock().unwrap().send(true);
 	}
 }
 
-/// Handle interrupt signal with double-Ctrl+C detection
-fn handle_interrupt(first_interrupt: &Arc<AtomicBool>, cancel_tx: &watch::Sender<bool>) -> bool {
+/// Handle interrupt signal with double-Ctrl+C detection.
+///
+/// Takes `Arc<Mutex<watch::Sender<bool>>>` so it always sends on the
+/// **current** operation's channel (swapped by `new_operation()`/`reset()`).
+fn handle_interrupt(
+	first_interrupt: &Arc<AtomicBool>,
+	op_tx: &Arc<Mutex<watch::Sender<bool>>>,
+) -> bool {
 	if first_interrupt.load(Ordering::SeqCst) {
 		// Second Ctrl+C - force exit (always visible)
 		// Use std::println! directly to avoid with_suspended_spinner which could deadlock
@@ -177,7 +197,7 @@ fn handle_interrupt(first_interrupt: &Arc<AtomicBool>, cancel_tx: &watch::Sender
 		// signal handler blocks and cancel_tx.send() never fires — making Ctrl+C
 		// appear completely unresponsive.
 		first_interrupt.store(true, Ordering::SeqCst);
-		let _ = cancel_tx.send(true);
+		let _ = op_tx.lock().unwrap().send(true);
 
 		// Now safe to log — even if this blocks briefly, cancellation is already sent
 		crate::log_debug!("Ctrl+C: Interrupting current operation...");

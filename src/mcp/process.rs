@@ -1411,18 +1411,17 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 					pgid,
 					server_name_for_error
 				);
-				// Brief grace period for the server to shut down cleanly.
-				std::thread::sleep(std::time::Duration::from_millis(200));
-				// SIGKILL to guarantee termination — the server may have ignored SIGTERM
-				// or still be cleaning up. This is the final backstop.
-				unsafe {
-					libc::kill(-pgid, libc::SIGKILL);
-				}
-				crate::log_debug!(
-					"Sent SIGKILL to process group {} (server '{}') on cancellation",
-					pgid,
-					server_name_for_error
-				);
+				// Fire-and-forget SIGKILL after a brief grace period.
+				// Using tokio::spawn avoids blocking a Tokio worker thread with
+				// std::thread::sleep, which delays Ctrl+C responsiveness.
+				tokio::spawn(async move {
+					tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+					// SIGKILL to guarantee termination — the server may have ignored
+					// SIGTERM or still be cleaning up.
+					unsafe {
+						libc::kill(-pgid, libc::SIGKILL);
+					}
+				});
 			}
 
 			// Mark the server dead so the next call triggers a restart instead of trying
