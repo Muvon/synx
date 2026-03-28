@@ -283,6 +283,13 @@ pub struct Config {
 	#[serde(default)]
 	pub capabilities: HashMap<String, String>,
 
+	// Tap model overrides (tap_tag → model)
+	// Allows setting preferred model for specific tap agents.
+	// Example: taps = { "developer:rust" = "ollama:glm-5" }
+	// When running `octomind run developer:rust`, uses ollama:glm-5 instead of default.
+	#[serde(default)]
+	pub taps: HashMap<String, String>,
+
 	// Webhook hook configurations
 	#[serde(default)]
 	pub hooks: Vec<HookConfig>,

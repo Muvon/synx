@@ -105,6 +105,17 @@ max_request_spending_threshold = 0.0
 # Leave empty to use default providers for all capabilities
 [capabilities]
 
+# Tap model overrides for specific agents
+# Each key is a tap agent tag (e.g., "developer:rust"), value is the model to use
+# This allows setting a preferred model for specific tap agents.
+# Priority: CLI --model > taps override > role.model > config.model
+# Example:
+# [taps]
+# "developer:rust" = "ollama:glm-5"
+# "octomind:assistant" = "openai:gpt-4o"
+# Leave empty to use default model for all tap agents
+[taps]
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # API KEYS AND AUTHENTICATION
 # All API keys are read from environment variables for security
