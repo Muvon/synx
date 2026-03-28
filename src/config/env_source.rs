@@ -66,7 +66,7 @@ impl EnvTracker {
 		}
 
 		if std::env::var("OPENROUTER_HTTP_REFERER").is_err() {
-			std::env::set_var("OPENROUTER_HTTP_REFERER", "https://octomind.muvon.io");
+			std::env::set_var("OPENROUTER_HTTP_REFERER", "https://octomind.run");
 		}
 
 		Ok(())
