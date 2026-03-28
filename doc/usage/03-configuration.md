@@ -225,6 +225,24 @@ codesearch = "octocode"
 
 This maps to `capabilities/codesearch/octocode.toml` within the tap.
 
+## Tap Model Overrides
+
+Set preferred models for specific tap agents:
+
+```toml
+[taps]
+"developer:rust" = "ollama:glm-5"
+"octomind:assistant" = "openai:gpt-4o"
+```
+
+**Model resolution priority:**
+1. CLI `--model` flag
+2. `[taps]` override (for tap agents only)
+3. Role's `model` field
+4. Global `model` in config
+
+Only applies to tap agents (tags with `:` like `developer:rust`). Plain role names use role.model or config.model.
+
 ## Template Variables
 
 System prompts and welcome messages support variables:

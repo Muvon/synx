@@ -73,7 +73,21 @@ When you specify a tag with `:`, Octomind:
 3. Merges the manifest into config
 4. Starts the session with the agent's role
 
+### Model Overrides
+
+Set a preferred model for specific tap agents in your config:
+
+```toml
+[taps]
+"developer:rust" = "ollama:glm-5"
+```
+
+This overrides the model for `octomind run developer:rust` while leaving other agents unchanged.
+
+**Priority:** CLI `--model` > `[taps]` override > role.model > config.model
+
 ## Agent Manifests
+
 
 Agent manifests are TOML files in `agents/<category>/<variant>.toml`:
 

@@ -50,6 +50,26 @@ codesearch = "octocode"  # uses capabilities/codesearch/octocode.toml
 
 Empty by default. Each key maps to a provider TOML file within the tap's `capabilities/` directory.
 
+## `[taps]`
+
+Map of tap agent tag to model override. Set a preferred model for specific tap agents.
+
+```toml
+[taps]
+"developer:rust" = "ollama:glm-5"
+"octomind:assistant" = "openai:gpt-4o"
+```
+
+**Priority:** CLI `--model` > taps override > role.model > config.model
+
+When you run `octomind run developer:rust`, the model is resolved in this order:
+1. `--model` CLI flag (if provided)
+2. `[taps]` override for `"developer:rust"` (if configured)
+3. Role's `model` field (if defined in manifest)
+4. Global `model` in config
+
+Empty by default. Only applies to tap agents (tags with `:`). Plain role names use role.model or config.model.
+
 ## `[[roles]]`
 
 Define custom roles that override or extend tap-provided agents.
