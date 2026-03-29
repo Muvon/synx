@@ -50,9 +50,9 @@ pub struct Role {
 	#[serde(default)]
 	pub mcp: RoleMcpConfig,
 
-	// Workflow reference - name of workflow to use for this role
+	// Workflow pipeline - ordered sequence of steps where "" = main model, non-empty = named workflow
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub workflow: Option<String>,
+	pub workflow: Option<Vec<String>>,
 }
 
 // REMOVED: Default implementations - all config must be explicit

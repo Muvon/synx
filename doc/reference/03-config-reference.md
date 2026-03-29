@@ -83,7 +83,7 @@ Define custom roles that override or extend tap-provided agents.
 | `temperature` | f64 | no | Sampling temperature (0.0-2.0) |
 | `top_p` | f64 | no | Nucleus sampling (0.0-1.0) |
 | `top_k` | u32 | no | Top-k token limit (1-1000) |
-| `workflow` | string | no | Workflow name to activate for this role |
+| `workflow` | string[] | no | Workflow pipeline. Array of step names where `""` = main model, non-empty = named workflow |
 
 ### `[roles.mcp]`
 

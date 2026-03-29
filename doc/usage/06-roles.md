@@ -52,7 +52,7 @@ allowed_tools = ["core:*", "filesystem:*", "agent:*"]
 | `temperature` | f64 | no | Sampling temperature (0.0-2.0) |
 | `top_p` | f64 | no | Nucleus sampling (0.0-1.0) |
 | `top_k` | u32 | no | Top-k token limit (1-1000) |
-| `workflow` | string | no | Workflow to activate for this role |
+| `workflow` | string[] | no | Workflow pipeline for this role. `""` = main model, non-empty = named workflow. Example: `["clarify", "", "validate"]` |
 
 ## Tool Permissions
 
@@ -145,7 +145,7 @@ allowed_tools = ["filesystem:view", "filesystem:text_editor"]
 ```toml
 [[roles]]
 name = "planner"
-workflow = "developer_workflow"
+workflow = ["developer_workflow", ""]
 system = "You are a planning assistant."
 
 [roles.mcp]

@@ -22,7 +22,6 @@ use super::api_prep::prepare_for_api_call;
 use super::commands::CommandResult;
 use super::core::{ChatSession, SessionInitParams};
 use super::error_utils::handle_api_error;
-use super::layer_processor::process_layers_if_enabled;
 use super::prompt_setup::setup_system_prompt_and_cache;
 use super::setup::setup_and_initialize_session;
 use crate::config::Config;
@@ -645,35 +644,114 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				continue;
 			}
 
-			// Process layers if enabled using helper function
-			let (processed_input, workflow_modified_session, _layer_cancelled) =
-				process_layers_if_enabled(
-					&input,
-					&mut chat_session,
-					&current_config,
-					&role,
-					first_message_processed,
-					operation_rx.clone(),
-				)
-				.await?;
+			// Workflow pipeline execution: if role has a workflow pipeline and this is the first message,
+			// execute the full pipeline (workflow steps + main model steps) and skip normal flow
+			let pipeline = current_config
+				.role_map
+				.get(&role)
+				.and_then(|r| r.workflow.clone());
+			if let Some(ref steps) = pipeline {
+				if !first_message_processed && !steps.is_empty() {
+					// Set first_prompt_idx before pipeline
+					if chat_session.first_prompt_idx.is_none() {
+						chat_session.first_prompt_idx = Some(chat_session.session.messages.len());
+					}
 
-			// Check for cancellation after layer processing
-			if cancellation.is_cancelled() {
-				continue;
+					// Add user message to session
+					let input_with_constraints = super::utils::append_constraints_if_exists(
+						&input,
+						&current_config.custom_constraints_file_name,
+						&current_dir,
+					);
+					chat_session.add_user_message(&input_with_constraints)?;
+
+					// Execute pipeline steps
+					for step in steps {
+						if cancellation.is_cancelled() {
+							break;
+						}
+
+						if step.is_empty() {
+							// "" = run main model
+							*processing_state.lock().unwrap() = ProcessingState::CallingAPI;
+							match prepare_for_api_call(
+								&mut chat_session,
+								&current_config,
+								operation_rx.clone(),
+							)
+							.await
+							{
+								Ok(()) => {}
+								Err(e) if e.to_string().contains("Operation cancelled") => break,
+								Err(e) => return Err(e),
+							}
+							match execute_api_call_and_process_response(
+								&mut chat_session,
+								&current_config,
+								&role,
+								operation_rx.clone(),
+								OutputMode::Interactive,
+								SilentSink,
+							)
+							.await
+							{
+								Ok(_) => {}
+								Err(e) => {
+									let model = chat_session.model.clone();
+									handle_api_error(
+										&mut chat_session,
+										0,
+										&model,
+										&e,
+										OutputMode::Interactive,
+									);
+									break;
+								}
+							}
+						} else {
+							// Named workflow = run it, inject output into session
+							let last_msg = chat_session
+								.session
+								.messages
+								.iter()
+								.rev()
+								.find(|m| m.role == "user" || m.role == "assistant")
+								.map(|m| m.content.clone())
+								.unwrap_or_else(|| input.clone());
+
+							match crate::session::chat::layered_response::run_workflow_by_name(
+								step,
+								&last_msg,
+								&mut chat_session,
+								&current_config,
+								operation_rx.clone(),
+							)
+							.await
+							{
+								Ok(output) => {
+									chat_session.add_user_message(&output)?;
+								}
+								Err(e) => {
+									println!("\n{}: {}", "Pipeline workflow error".bright_red(), e);
+									break;
+								}
+							}
+						}
+					}
+
+					first_message_processed = true;
+					*processing_state.lock().unwrap() = ProcessingState::CompletedWithResults;
+					*current_operation.lock().unwrap() = None;
+
+					// Save session after pipeline completes
+					let _ = chat_session.save();
+					continue;
+				}
 			}
 
-			let final_input = if workflow_modified_session {
-				// Layers used output_mode append/replace and added messages to session
-				// Skip adding user message to avoid duplicates and continue with the user message
-				// to guarantee that the output from layer next processed with the main loop
-				first_message_processed = true;
-				input // Use original input
-			} else {
-				// Use the processed input from layers (or original if layers not enabled)
-				// Mark that we've processed the first message through layers
-				first_message_processed = true;
-				processed_input
-			};
+			// Normal flow (no pipeline or subsequent messages)
+			first_message_processed = true;
+			let final_input = input;
 
 			// Initialize operation context for smart tracking
 			let operation_id = format!(
@@ -690,7 +768,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			// We use the current message count because that is exactly where the user message
 			// will be inserted after compression finishes (compression only removes/replaces
 			// older messages, never appends).
-			if !workflow_modified_session && chat_session.first_prompt_idx.is_none() {
+			if chat_session.first_prompt_idx.is_none() {
 				chat_session.first_prompt_idx = Some(chat_session.session.messages.len());
 			}
 
@@ -730,8 +808,7 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 			let user_message_index = chat_session.session.messages.len();
 
 			// Add user message for standard processing flow
-			// Skip if layers already modified the session (to avoid duplicates)
-			if !workflow_modified_session {
+			{
 				// Append constraints if configured
 				let final_input_with_constraints = super::utils::append_constraints_if_exists(
 					&final_input,
@@ -940,9 +1017,8 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	let mut current_config = config_for_role.clone();
 	crate::config::set_thread_config(&current_config);
 	crate::config::set_thread_role(&role);
-	// Use initial_input as the input for this session (convert to owned String for mutability)
-	// Use initial_input as the input for this session (convert to owned String for mutability)
-	let mut input = initial_input.to_string();
+	// Use initial_input as the input for this session
+	let input = initial_input.to_string();
 	// Get current directory - use thread-local if set (ACP/WebSocket), otherwise process cwd
 	let current_dir = crate::mcp::get_thread_working_directory();
 	let mut operation_rx = cancellation.new_operation();
@@ -1018,52 +1094,99 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		}
 	}
 
-	// Layer processing if enabled and first message using helper function
-	let (processed_input, workflow_modified_session, layer_cancelled) = process_layers_if_enabled(
-		&input,
-		&mut chat_session,
-		&current_config,
-		&role,
-		first_message_processed,
-		operation_rx.clone(),
-	)
-	.await?;
-
-	// CRITICAL FIX: Reset cancellation state after layer cancellation
-	// This prevents subsequent operations from failing due to stale cancellation signal
-	if layer_cancelled {
-		cancellation.reset();
-		log_info!(
-			"Cancellation state reset after layer cancellation - ready for main model processing"
-		);
-
-		// Save session after layer cancellation cleanup to persist the cleaned state
-		let _ = chat_session.save();
-		log_info!("Session saved after layer cancellation cleanup");
-
-		// Create new operation receiver with reset cancellation state
-		operation_rx = cancellation.new_operation();
-	}
-
-	if workflow_modified_session {
-		// Layers used output_mode append/replace and added messages to session
-		// Continue processing to ensure main model gets called (same as interactive mode)
-		log_info!("Layers modified session. Continuing with main model processing.");
-		// Use processed input from layers for main model
-		input = processed_input;
-	} else {
-		// Use processed input from layers (or original if layers not enabled)
-		input = processed_input;
-	}
-
-	// Add user message - same as interactive
-	let user_message_index = chat_session.session.messages.len();
-	let has_workflow = current_config
+	// Workflow pipeline execution for non-interactive mode
+	let pipeline = current_config
 		.role_map
 		.get(&role)
-		.and_then(|r| r.workflow.as_ref())
-		.is_some();
-	if !has_workflow {
+		.and_then(|r| r.workflow.clone());
+	if let Some(ref steps) = pipeline {
+		if !first_message_processed && !steps.is_empty() {
+			// Add user message to session
+			let input_with_constraints = super::utils::append_constraints_if_exists(
+				&input,
+				&current_config.custom_constraints_file_name,
+				&current_dir,
+			);
+			chat_session.add_user_message(&input_with_constraints)?;
+
+			// Determine output mode for non-interactive
+			let is_jsonl = current_config.runtime_output_mode.as_deref() == Some("jsonl");
+			let output_mode = if is_jsonl {
+				OutputMode::Jsonl
+			} else {
+				OutputMode::NonInteractive
+			};
+
+			// Execute pipeline steps
+			for step in steps {
+				if step.is_empty() {
+					// "" = run main model
+					prepare_for_api_call(
+						&mut chat_session,
+						&current_config,
+						operation_rx.clone(),
+					)
+					.await?;
+					if is_jsonl {
+						execute_api_call_and_process_response(
+							&mut chat_session,
+							&current_config,
+							&role,
+							operation_rx.clone(),
+							output_mode,
+							JsonlSink,
+						)
+						.await?;
+					} else {
+						execute_api_call_and_process_response(
+							&mut chat_session,
+							&current_config,
+							&role,
+							operation_rx.clone(),
+							output_mode,
+							SilentSink,
+						)
+						.await?;
+					}
+				} else {
+					// Named workflow = run it, inject output into session
+					let last_msg = chat_session
+						.session
+						.messages
+						.iter()
+						.rev()
+						.find(|m| m.role == "user" || m.role == "assistant")
+						.map(|m| m.content.clone())
+						.unwrap_or_else(|| input.clone());
+
+					let output =
+						crate::session::chat::layered_response::run_workflow_by_name(
+							step,
+							&last_msg,
+							&mut chat_session,
+							&current_config,
+							operation_rx.clone(),
+						)
+						.await?;
+					chat_session.add_user_message(&output)?;
+				}
+			}
+
+			// Save and continue to inbox processing
+			let _ = chat_session.save();
+		}
+	}
+
+	// If no pipeline, run normal single-message flow
+	if pipeline
+		.as_ref()
+		.map(|v| v.is_empty())
+		.unwrap_or(true)
+		|| first_message_processed
+	{
+	// Add user message
+	let user_message_index = chat_session.session.messages.len();
+	{
 		// Append constraints if configured
 		let input_with_constraints = super::utils::append_constraints_if_exists(
 			&input,
@@ -1176,6 +1299,7 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 			);
 		}
 	}
+	} // end if block for non-pipeline path
 	} // end if !input.is_empty()
 
 	// Keep session alive while there are pending inbox messages, scheduled entries, or active jobs.

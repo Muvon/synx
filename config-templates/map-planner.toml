@@ -86,7 +86,7 @@ name = "developer"
 temperature = 0.1
 top_p = 1.0
 top_k = 20
-workflow = "map_planner"
+workflow = ["map_planner", ""]
 welcome = "Hello! MAP-enhanced developer ready. Working dir: {{CWD}} (Role: {{ROLE}})"
 system = """You are an elite senior developer.
 

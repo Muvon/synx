@@ -123,7 +123,7 @@ layer = "context_researcher"
 ```toml
 [[roles]]
 name = "developer"
-workflow = "dev_workflow"
+workflow = ["dev_workflow", ""]
 temperature = 0.3
 system = """
 You are an expert developer.
@@ -224,6 +224,6 @@ Total pipeline overhead: ~$0.004 per task for much better results.
 - `output_mode = "none"` for intermediate layers that don't show output
 - `output_mode = "append"` for layers that add context to the session
 - Each layer can have different models, tools, and prompts
-- Workflows run automatically when bound to a role via `workflow = "..."`
+- Workflows run automatically when bound to a role via `workflow = ["workflow_name", ""]`
 - Use `/workflow` to trigger manually
 - Use cheap models for simple tasks, powerful models where it matters
