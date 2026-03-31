@@ -34,15 +34,12 @@ type = "once"
 layer = "task_researcher"
 ```
 
-Activate a workflow pipeline for a role. Each entry in the array is a step: `""` runs the main model, a non-empty string runs the named workflow. Steps execute in order on the first message, then the session continues normally.
+Activate a workflow for a role:
 
 ```toml
 [[roles]]
 name = "developer"
-workflow = ["developer_workflow", ""]  # run workflow, then main model
-
-# Full pipeline example: pre-process, implement, validate twice
-# workflow = ["clarify", "", "validate", "", "validate"]
+workflow = "developer_workflow"
 ```
 
 ## Step Types
@@ -149,7 +146,7 @@ MAP templates are available in `config-templates/map-planner.toml` and `config-t
 
 ### Via Role Binding
 
-When a role has `workflow = ["developer_workflow", ""]`, the pipeline runs on the first user message. Each `""` entry runs the main model, each non-empty entry runs the named workflow. Use `/done` to reset the pipeline for the next task.
+When a role has `workflow = "developer_workflow"`, the workflow runs automatically on each user message before the AI processes it.
 
 ## Layer Requirements
 

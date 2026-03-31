@@ -36,8 +36,7 @@ pub async fn process_layers_if_enabled(
 		.role_map
 		.get(role)
 		.and_then(|r| r.workflow.as_ref())
-		.map(|v| !v.is_empty())
-		.unwrap_or(false);
+		.is_some();
 
 	if has_workflow && !first_message_processed {
 		// Track session message count before workflow processing

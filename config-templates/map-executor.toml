@@ -88,7 +88,7 @@ name = "developer"
 temperature = 0.1
 top_p = 1.0
 top_k = 20
-workflow = ["map_executor", ""]
+workflow = "map_executor"
 welcome = "Hello! MAP-enhanced executor ready. Working dir: {{CWD}} (Role: {{ROLE}})"
 system = """You are an elite senior code reviewer.
 

@@ -282,17 +282,15 @@ impl Config {
 				.map_err(|e| anyhow!("Workflow validation failed: {}", e))?;
 		}
 
-		// Validate role workflow pipeline references
+		// Validate role workflow references
 		for role in &self.roles {
-			if let Some(pipeline) = &role.workflow {
-				for workflow_name in pipeline.iter().filter(|s| !s.is_empty()) {
-					if !self.workflows.iter().any(|w| &w.name == workflow_name) {
-						return Err(anyhow!(
-							"Role '{}' references undefined workflow '{}'",
-							role.name,
-							workflow_name
-						));
-					}
+			if let Some(workflow_name) = &role.workflow {
+				if !self.workflows.iter().any(|w| &w.name == workflow_name) {
+					return Err(anyhow!(
+						"Role '{}' references undefined workflow '{}'",
+						role.name,
+						workflow_name
+					));
 				}
 			}
 		}

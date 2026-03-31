@@ -52,6 +52,5 @@ pub async fn handle_done(
 	crate::log_debug!("/done: compression={}", compressed);
 
 	// Returns (exit_flag, reset_first_message_processed)
-	// Reset so workflow pipeline fires again on next input
-	Ok((false, true))
+	Ok((false, false))
 }

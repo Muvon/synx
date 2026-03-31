@@ -666,10 +666,7 @@ fn show_configuration(config: &Config) -> Result<(), anyhow::Error> {
 	println!();
 
 	// Layer configurations (used by workflows)
-	let has_any_workflow = config
-		.role_map
-		.values()
-		.any(|r| r.workflow.as_ref().map(|v| !v.is_empty()).unwrap_or(false));
+	let has_any_workflow = config.role_map.values().any(|r| r.workflow.is_some());
 	if has_any_workflow {
 		println!("📚 Layer Configurations (used by workflows)");
 
@@ -681,23 +678,11 @@ fn show_configuration(config: &Config) -> Result<(), anyhow::Error> {
 			}
 		}
 
-		// Show workflow pipeline assignments per role
-		println!("\n  Workflow Pipelines:");
+		// Show workflow assignments per role
+		println!("\n  Workflow Assignments:");
 		for (role_name, role_data) in &config.role_map {
-			if let Some(pipeline) = &role_data.workflow {
-				if !pipeline.is_empty() {
-					let display: Vec<&str> = pipeline
-						.iter()
-						.map(|s| {
-							if s.is_empty() {
-								"(session)"
-							} else {
-								s.as_str()
-							}
-						})
-						.collect();
-					println!("    {} → [{}]", role_name, display.join(" → "));
-				}
+			if let Some(workflow) = &role_data.workflow {
+				println!("    {} → {}", role_name, workflow);
 			}
 		}
 
