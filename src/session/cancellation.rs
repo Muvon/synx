@@ -76,7 +76,7 @@ impl SessionCancellation {
 				let sigint = match signal(SignalKind::interrupt()) {
 					Ok(sig) => sig,
 					Err(e) => {
-						eprintln!("Warning: Failed to register SIGINT handler: {}", e);
+						crate::log_error!("Warning: Failed to register SIGINT handler: {}", e);
 						return;
 					}
 				};
@@ -84,7 +84,7 @@ impl SessionCancellation {
 				let sigterm = match signal(SignalKind::terminate()) {
 					Ok(sig) => sig,
 					Err(e) => {
-						eprintln!("Warning: Failed to register SIGTERM handler: {}", e);
+						crate::log_error!("Warning: Failed to register SIGTERM handler: {}", e);
 						return;
 					}
 				};
@@ -120,7 +120,7 @@ impl SessionCancellation {
 							}
 						}
 						Err(e) => {
-							eprintln!("Warning: Failed to listen for Ctrl+C: {}", e);
+							crate::log_error!("Warning: Failed to listen for Ctrl+C: {}", e);
 							break;
 						}
 					}

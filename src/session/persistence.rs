@@ -241,9 +241,10 @@ pub fn clean_interrupted_tool_calls(
 		let removed_count = original_len - messages.len();
 
 		if removed_count > 0 {
-			eprintln!(
+			crate::log_debug!(
 				"🔧 {}: Truncated {} messages from incomplete tool sequence",
-				context, removed_count
+				context,
+				removed_count
 			);
 
 			// Log the cleanup

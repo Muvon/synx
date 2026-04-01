@@ -163,7 +163,7 @@ pub fn derive_project_id() -> String {
 				.into_owned()
 		});
 	let hash = Sha256::digest(source.as_bytes());
-	format!("{:x}", hash)[..16].to_string()
+	hex::encode(hash)[..16].to_string()
 }
 
 /// Derive project ID from a specific path (for session-scoped context).
@@ -180,7 +180,7 @@ pub fn derive_project_id_from_path(path: &std::path::Path) -> String {
 		.filter(|s| !s.is_empty())
 		.unwrap_or_else(|| path.to_string_lossy().into_owned());
 	let hash = Sha256::digest(source.as_bytes());
-	format!("{:x}", hash)[..16].to_string()
+	hex::encode(hash)[..16].to_string()
 }
 /// Set the session context (role + project) that will be sent to MCP servers on initialization.
 /// Call this before starting MCP servers for a session.

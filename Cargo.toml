@@ -77,7 +77,8 @@ futures-util = "0.3"
 # OAuth 2.1 + PKCE authentication
 oauth2 = { version = "5.0", features = ["reqwest", "rustls-tls"] }
 keyring = { version = "3" }
-sha2 = "0.10"
+sha2 = "0.11.0"
+hex = "0.4"
 serde_urlencoded = "0.7"
 thiserror = "2.0"
 open = "5"

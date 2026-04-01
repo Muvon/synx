@@ -50,6 +50,11 @@ impl ChatSession {
 
 		// Check if we've exceeded the threshold since last checkpoint
 		if cost_since_checkpoint >= threshold {
+			// In ACP/WebSocket mode stdout/stderr are reserved for protocol — auto-decline silently
+			if crate::logging::tracing_setup::is_structured_output_mode() {
+				return Ok(false);
+			}
+
 			use colored::*;
 			use std::io::{self, Write};
 
@@ -78,9 +83,9 @@ impl ChatSession {
 			// Auto-decline in non-interactive mode (run command, piped input, etc.)
 			if !std::io::stdin().is_terminal() {
 				println!(
-				"{}",
-				"Spending threshold reached but automatically declining in non-interactive mode. Stopping execution.".bright_red()
-			);
+					"{}",
+					"Spending threshold reached but automatically declining in non-interactive mode. Stopping execution.".bright_red()
+				);
 				return Ok(false);
 			}
 
@@ -129,32 +134,35 @@ impl ChatSession {
 
 		// Check if we've exceeded the threshold since request start
 		if cost_since_request_start >= threshold {
-			use colored::*;
+			// In ACP/WebSocket mode stdout/stderr are reserved for protocol — suppress UI output
+			if !crate::logging::tracing_setup::is_structured_output_mode() {
+				use colored::*;
 
-			println!();
-			println!(
-				"{}",
-				"⚠️  REQUEST SPENDING THRESHOLD EXCEEDED ⚠️"
-					.bright_red()
-					.bold()
-			);
-			println!(
-				"{} ${:.5}",
-				"Current request cost:".bright_cyan(),
-				cost_since_request_start
-			);
-			println!("{} ${:.5}", "Threshold:".bright_cyan(), threshold);
-			println!(
-				"{} ${:.5}",
-				"Total session cost:".bright_cyan(),
-				current_cost
-			);
-			println!();
-			println!(
-				"{}",
-				"Request execution stopped to prevent overspending.".bright_red()
-			);
-			println!();
+				println!();
+				println!(
+					"{}",
+					"⚠️  REQUEST SPENDING THRESHOLD EXCEEDED ⚠️"
+						.bright_red()
+						.bold()
+				);
+				println!(
+					"{} ${:.5}",
+					"Current request cost:".bright_cyan(),
+					cost_since_request_start
+				);
+				println!("{} ${:.5}", "Threshold:".bright_cyan(), threshold);
+				println!(
+					"{} ${:.5}",
+					"Total session cost:".bright_cyan(),
+					current_cost
+				);
+				println!();
+				println!(
+					"{}",
+					"Request execution stopped to prevent overspending.".bright_red()
+				);
+				println!();
+			}
 
 			return Ok(false); // Stop execution
 		}
@@ -225,7 +233,9 @@ impl ChatSession {
 			if let Some(last_msg) = self.session.messages.last_mut() {
 				last_msg.images = message.images.clone();
 			}
-			println!("{}", "📎 Image attached to message".bright_green());
+			if !crate::logging::tracing_setup::is_structured_output_mode() {
+				println!("{}", "📎 Image attached to message".bright_green());
+			}
 		}
 
 		// Attach pending video if available
@@ -235,7 +245,9 @@ impl ChatSession {
 			if let Some(last_msg) = self.session.messages.last_mut() {
 				last_msg.videos = message.videos.clone();
 			}
-			println!("{}", "🎬 Video attached to message".bright_green());
+			if !crate::logging::tracing_setup::is_structured_output_mode() {
+				println!("{}", "🎬 Video attached to message".bright_green());
+			}
 		}
 
 		// Check if we should cache this user message
@@ -246,11 +258,13 @@ impl ChatSession {
 				if let Ok(true) = cache_manager
 					.apply_cache_to_current_user_message(&mut self.session, supports_caching)
 				{
-					use colored::*;
-					println!(
-						"{}",
-						"✓ Current user message marked for caching".bright_green()
-					);
+					if !crate::logging::tracing_setup::is_structured_output_mode() {
+						use colored::*;
+						println!(
+							"{}",
+							"✓ Current user message marked for caching".bright_green()
+						);
+					}
 				}
 			}
 			// Reset the flag after applying (or attempting to apply) cache

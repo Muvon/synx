@@ -292,29 +292,37 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 				if let Err(e) = chat_session.save() {
 					use colored::*;
-					eprintln!();
-					eprintln!(
-						"{}",
-						"⚠️  CRITICAL: Failed to save session after cleanup"
-							.bright_red()
-							.bold()
-					);
-					eprintln!("{} {}", "Error:".bright_yellow(), e);
-					eprintln!(
-						"{}",
-						"Session state may be inconsistent on resume.".bright_yellow()
-					);
-					eprintln!();
+					if !crate::logging::tracing_setup::is_structured_output_mode() {
+						eprintln!();
+						eprintln!(
+							"{}",
+							"⚠️  CRITICAL: Failed to save session after cleanup"
+								.bright_red()
+								.bold()
+						);
+						eprintln!("{} {}", "Error:".bright_yellow(), e);
+						eprintln!(
+							"{}",
+							"Session state may be inconsistent on resume.".bright_yellow()
+						);
+						eprintln!();
+					} else {
+						crate::log_error!("CRITICAL: Failed to save session after cleanup: {}", e);
+					}
 
 					// Attempt one retry
 					log_debug!("Retrying session save after failure...");
 					if let Err(retry_err) = chat_session.save() {
-						eprintln!(
-							"{}",
-							"⚠️  Retry failed. Session may be corrupted.".bright_red()
-						);
+						if !crate::logging::tracing_setup::is_structured_output_mode() {
+							eprintln!(
+								"{}",
+								"⚠️  Retry failed. Session may be corrupted.".bright_red()
+							);
+						} else {
+							crate::log_error!("Retry save failed: {}", retry_err);
+						}
 						log_debug!("Retry save failed: {}", retry_err);
-					} else {
+					} else if !crate::logging::tracing_setup::is_structured_output_mode() {
 						eprintln!("{}", "✓ Retry succeeded - session saved.".bright_green());
 					}
 				}
@@ -790,19 +798,21 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				let notif_drain = tokio::spawn(async move {
 					while let Some(msg) = notif_rx.recv().await {
 						if let crate::websocket::ServerMessage::McpNotification(n) = msg {
-							use colored::Colorize;
-							eprintln!(
-								"{}",
-								format!(
-									"⚠ [{}] {}",
-									n.server,
-									n.params
-										.get("message")
-										.and_then(|m| m.as_str())
-										.unwrap_or(&n.method)
-								)
-								.yellow()
-							);
+							if !crate::logging::tracing_setup::is_structured_output_mode() {
+								use colored::Colorize;
+								eprintln!(
+									"{}",
+									format!(
+										"⚠ [{}] {}",
+										n.server,
+										n.params
+											.get("message")
+											.and_then(|m| m.as_str())
+											.unwrap_or(&n.method)
+									)
+									.yellow()
+								);
+							}
 						}
 					}
 				});
@@ -1119,19 +1129,21 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 		let notif_drain = tokio::spawn(async move {
 			while let Some(msg) = notif_rx.recv().await {
 				if let crate::websocket::ServerMessage::McpNotification(n) = msg {
-					use colored::Colorize;
-					eprintln!(
-						"{}",
-						format!(
-							"⚠ [{}] {}",
-							n.server,
-							n.params
-								.get("message")
-								.and_then(|m| m.as_str())
-								.unwrap_or(&n.method)
-						)
-						.yellow()
-					);
+					if !crate::logging::tracing_setup::is_structured_output_mode() {
+						use colored::Colorize;
+						eprintln!(
+							"{}",
+							format!(
+								"⚠ [{}] {}",
+								n.server,
+								n.params
+									.get("message")
+									.and_then(|m| m.as_str())
+									.unwrap_or(&n.method)
+							)
+							.yellow()
+						);
+					}
 				}
 			}
 		});
@@ -1210,19 +1222,21 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 							println!("{}", json);
 						}
 					} else if let crate::websocket::ServerMessage::McpNotification(n) = msg {
-						use colored::Colorize;
-						eprintln!(
-							"{}",
-							format!(
-								"⚠ [{}] {}",
-								n.server,
-								n.params
-									.get("message")
-									.and_then(|m| m.as_str())
-									.unwrap_or(&n.method)
-							)
-							.yellow()
-						);
+						if !crate::logging::tracing_setup::is_structured_output_mode() {
+							use colored::Colorize;
+							eprintln!(
+								"{}",
+								format!(
+									"⚠ [{}] {}",
+									n.server,
+									n.params
+										.get("message")
+										.and_then(|m| m.as_str())
+										.unwrap_or(&n.method)
+								)
+								.yellow()
+							);
+						}
 					}
 				}
 			});
