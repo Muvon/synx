@@ -73,6 +73,17 @@ CLI / WebSocket
 
 ## Code Quality Rules
 
+**Copyright header -- every `.rs` file must have it:**
+```rust
+// Copyright <YEAR> Muvon Un Limited
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// ...full Apache 2.0 header...
+```
+- New files: use the current year
+- Modified files: update the year to the current year if it's outdated
+- Check: `rg -l "Copyright 2025" --type rust` should return nothing for files modified in the current year
+
 **Build & lint -- run after every change:**
 ```bash
 cargo check --message-format=short                            # fast syntax check

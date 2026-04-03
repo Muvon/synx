@@ -1,4 +1,4 @@
-// Copyright 2025 Muvon Un Limited
+// Copyright 2026 Muvon Un Limited
 //
 // OAuth 2.0 Device Flow Implementation (RFC 8628)
 // Designed for CLI tools and headless applications
