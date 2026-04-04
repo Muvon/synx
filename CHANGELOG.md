@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.23.1] - 2026-04-04
+
+### 📋 Release Summary
+
+This update enhances the reliability of AI responses through improved structured output behavior and optimizes the default agent configuration for more versatile assistance (2b7850c5, cc8dca8f). General maintenance includes comprehensive dependency updates and legal documentation refreshes to ensure continued system stability and compliance (748aeb29, 55f0e4bd, b0f90304).
+
+
+### ✨ New Features & Enhancements
+
+- **workflow**: add pipeline support for role workflows `e661a700`
+
+### 🔧 Improvements & Optimizations
+
+- **core**: improve structured output behavior `2b7850c5`
+- **config**: update default agent to assistant:general `cc8dca8f`
+
+### 🔄 Other Changes
+
+4 maintenance, dependency, and tooling updates not listed individually.
+
 ## [0.23.0] - 2026-03-28
 
 ### 📋 Release Summary
