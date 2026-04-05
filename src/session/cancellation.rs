@@ -17,49 +17,11 @@
 //! This module provides a robust, zero-polling cancellation system using
 //! tokio's watch channel for proper async cancellation semantics.
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::signal;
 use tokio::sync::watch;
-
-/// Global session state for the SIGTSTP handler to write a TRUNCATION_POINT
-/// before the process suspends. Updated by the main loop as messages are added.
-static ACTIVE_SESSION: std::sync::OnceLock<Mutex<Option<ActiveSessionState>>> =
-	std::sync::OnceLock::new();
-
-struct ActiveSessionState {
-	file: PathBuf,
-	message_count: Arc<AtomicUsize>,
-}
-
-/// Register the active session so SIGTSTP can write a TRUNCATION_POINT.
-pub fn set_active_session(file: PathBuf, message_count: Arc<AtomicUsize>) {
-	let state = ACTIVE_SESSION.get_or_init(|| Mutex::new(None));
-	*state.lock().unwrap() = Some(ActiveSessionState {
-		file,
-		message_count,
-	});
-}
-
-/// Clear active session (e.g. on session end).
-pub fn clear_active_session() {
-	if let Some(state) = ACTIVE_SESSION.get() {
-		*state.lock().unwrap() = None;
-	}
-}
-
-/// Update the message count for the active session (called after each message append).
-pub fn update_active_session_count(count: usize) {
-	if let Some(state) = ACTIVE_SESSION.get() {
-		if let Ok(guard) = state.lock() {
-			if let Some(ref s) = *guard {
-				s.message_count.store(count, Ordering::Relaxed);
-			}
-		}
-	}
-}
 
 /// Manages cancellation state for a session with proper signal handling.
 ///
@@ -130,9 +92,6 @@ impl SessionCancellation {
 				let mut sigint = sigint;
 				let mut sigterm = sigterm;
 
-				let sigtstp_result = signal(SignalKind::from_raw(libc::SIGTSTP));
-				let mut sigtstp = sigtstp_result.ok();
-
 				tokio::select! {
 					_ = async {
 						loop {
@@ -147,39 +106,6 @@ impl SessionCancellation {
 						std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
 						let _ = crate::mcp::server::cleanup_servers();
 						std::process::exit(130);
-					},
-					_ = async {
-						match sigtstp.as_mut() {
-							Some(sig) => sig.recv().await,
-							None => { std::future::pending::<Option<()>>().await }
-						}
-					} => {
-						// Ctrl+Z: write TRUNCATION_POINT so --resume-recent loads cleanly
-						if let Some(state) = ACTIVE_SESSION.get() {
-							if let Ok(guard) = state.lock() {
-								if let Some(ref s) = *guard {
-									let count = s.message_count.load(Ordering::Relaxed);
-									let entry = serde_json::json!({
-										"type": "TRUNCATION_POINT",
-										"timestamp": std::time::SystemTime::now()
-											.duration_since(std::time::UNIX_EPOCH)
-											.unwrap_or_default()
-											.as_secs(),
-										"message_count": count,
-										"reason": "sigtstp"
-									});
-									let _ = crate::session::append_to_session_file(
-										&s.file,
-										&serde_json::to_string(&entry).unwrap_or_default(),
-									);
-								}
-							}
-						}
-						// Re-raise SIGTSTP with default handler to actually suspend
-						unsafe {
-							libc::signal(libc::SIGTSTP, libc::SIG_DFL);
-							libc::raise(libc::SIGTSTP);
-						}
 					}
 				}
 			}
