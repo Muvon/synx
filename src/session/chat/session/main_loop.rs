@@ -107,6 +107,8 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 	// uses the real session name — must happen after setup determines the actual name.
 	let session_id = chat_session.session.info.name.clone();
 	crate::session::context::with_session_id(session_id, async move {
+		// MCP init happens here so session_id is already set when MCP servers receive it
+		crate::mcp::initialize_mcp_for_role(&role, config).await?;
 		// Initialize session-scoped inbox and background job manager now that session ID is set
 		crate::session::inbox::init_inbox_for_session();
 		crate::mcp::agent::functions::init_job_manager();
@@ -926,6 +928,8 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 	// uses the real session name — must happen after setup determines the actual name.
 	let session_id = chat_session.session.info.name.clone();
 	crate::session::context::with_session_id(session_id, async move {
+	// MCP init happens here so session_id is already set when MCP servers receive it
+	crate::mcp::initialize_mcp_for_role(&role, config).await?;
 	// Initialize session-scoped inbox and background job manager now that session ID is set
 	crate::session::inbox::init_inbox_for_session();
 	crate::mcp::agent::functions::init_job_manager();

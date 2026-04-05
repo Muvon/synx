@@ -197,11 +197,11 @@ pub fn set_session_context(role: &str, project: &str) {
 	*CLI_SESSION_CONTEXT.write().unwrap() = (role.to_string(), project.to_string());
 }
 
-/// Get the session context (role domain, spec, project).
+/// Get the session context (role domain, spec, project, session_id).
 /// Splits the full role name on `:` — left part is domain, right part is spec.
 /// Local roles like `"developer"` → domain=`"developer"`, spec=`""`.
 /// Tap roles like `"doctor:blood"` → domain=`"doctor"`, spec=`"blood"`.
-pub fn get_session_context() -> (String, String, String) {
+pub fn get_session_context() -> (String, String, String, String) {
 	let (full_role, project) = {
 		// Check for session-scoped context first (WebSocket mode)
 		if let Some(session_id) = crate::session::context::current_session_id() {
@@ -219,13 +219,15 @@ pub fn get_session_context() -> (String, String, String) {
 		}
 	};
 
+	let session_id = crate::session::context::current_session_id().unwrap_or_default();
+
 	// Split role into domain + spec
 	let (domain, spec) = match full_role.split_once(':') {
 		Some((d, s)) => (d.to_string(), s.to_string()),
 		None => (full_role, String::new()),
 	};
 
-	(domain, spec, project)
+	(domain, spec, project, session_id)
 }
 
 /// Derive and set the project id from the current git remote / cwd, then store role.
@@ -928,8 +930,14 @@ async fn start_server_process(server: &McpServerConfig) -> Result<String> {
 
 // Initialize a stdin-based server following the MCP protocol
 async fn initialize_stdin_server(server_name: &str) -> Result<()> {
-	let (role, spec, project) = get_session_context();
+	let (role, spec, project, session_id) = get_session_context();
 	// Construct an initialize message according to the MCP protocol
+	let session_obj = serde_json::json!({
+		"role": role,
+		"spec": spec,
+		"project": project,
+		"session_id": session_id,
+	});
 	let init_message = json!({
 		"jsonrpc": "2.0",
 		"id": 1,  // Use ID 1 for initialization
@@ -942,11 +950,7 @@ async fn initialize_stdin_server(server_name: &str) -> Result<()> {
 			"protocolVersion": "2025-03-26",
 			"capabilities": {
 				"experimental": {
-					"session": {
-						"role": role,
-						"spec": spec,
-						"project": project
-					}
+					"session": session_obj
 				}
 			}
 		}

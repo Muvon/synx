@@ -64,13 +64,11 @@ pub struct RunArgs {
 pub async fn execute(args: &RunArgs, config: &Config) -> Result<()> {
 	// Daemon mode: no spinner, but still use readline if terminal input available.
 	// --format=jsonl always uses non-interactive mode (piped input).
-	let is_interactive_startup =
-		!args.daemon && args.format.is_none() && std::io::stdin().is_terminal();
 	let is_interactive_session = args.format.is_none() && std::io::stdin().is_terminal();
 
-	// Full startup: tap/dep resolution + MCP init under one spinner
+	// Resolve config and role (tap/dep resolution only — MCP init happens after session ID is set)
 	let (run_config, role) =
-		super::common::startup(args.tag.as_deref(), config, is_interactive_startup).await?;
+		super::common::resolve_config_and_role(args.tag.as_deref(), config, None).await?;
 
 	let session_args = octomind::session::chat::session::GenericSessionArgs {
 		role: role.clone(),
