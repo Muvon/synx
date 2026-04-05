@@ -438,6 +438,41 @@ retry_timeout = 30
 ignore_cost = false
 ```
 
+## `[learning]`
+
+Cross-session adaptive learning. Extracts lessons from sessions and injects them into future sessions. See [Learning Guide](../usage/13-learning.md) for full details.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable the learning system |
+| `model` | string | `"anthropic:claude-haiku-4-5"` | Model for extraction and retrieval LLM calls |
+| `backend` | string | `"file"` | Backend: `"file"` or `"mcp"` |
+| `min_messages_for_intermediate` | u32 | `3` | Min user messages before intermediate learning triggers |
+| `max_inject` | u32 | `10` | Max lessons injected into system prompt |
+
+### `[learning.store]` (MCP backend only)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | MCP tool name for storing lessons (e.g. `"memorize"`) |
+| `field_map` | table | Maps canonical fields to MCP argument names. Empty string = omit. |
+
+### `[learning.retrieve]` (MCP backend only)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | MCP tool name for retrieving lessons (e.g. `"remember"`) |
+| `field_map` | table | Maps canonical fields to MCP argument names. Empty string = omit. |
+
+```toml
+[learning]
+enabled = false
+model = "anthropic:claude-haiku-4-5"
+backend = "file"
+min_messages_for_intermediate = 3
+max_inject = 10
+```
+
 ## Multi-File Configuration
 
 Octomind supports split-file configuration. All `*.toml` files in the config directory are merged:

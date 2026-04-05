@@ -117,6 +117,23 @@ pub fn get_cache_dir() -> Result<PathBuf> {
 	Ok(cache_dir)
 }
 
+/// Get the learning directory for a project and role.
+/// Structure: `learning/{project}/{role_base}/` — project-first because learning
+/// is project-scoped, role is a secondary filter.
+/// Role uses only the base part before `:` (e.g. "developer" from "developer:rust"),
+/// matching how capabilities are sent to MCP servers.
+pub fn get_learning_dir(role: &str, project: &str) -> Result<PathBuf> {
+	let data_dir = get_octomind_data_dir()?;
+	let role_base = role.split(':').next().unwrap_or(role);
+	let learning_dir = data_dir.join("learning").join(project).join(role_base);
+
+	if !learning_dir.exists() {
+		fs::create_dir_all(&learning_dir)?;
+	}
+
+	Ok(learning_dir)
+}
+
 /// Get the default configuration file path
 pub fn get_config_file_path() -> Result<PathBuf> {
 	let config_dir = get_config_dir()?;

@@ -723,6 +723,9 @@ pub async fn check_and_compress_conversation(
 	let messages_to_compress: Vec<crate::session::Message> =
 		session.session.messages[start_idx + 1..=end_idx].to_vec();
 
+	// Clone for learning extraction after compression (operation_rx is moved into the AI call)
+	let learning_rx = operation_rx.clone();
+
 	// OPTIMIZATION: Single API call for decision + summary (1-hop instead of 2-hop)
 	let (should_compress, context_summary, done_tasks, task_map) = ask_ai_decision_and_summary(
 		session,
@@ -754,6 +757,39 @@ pub async fn check_and_compress_conversation(
 		&task_map,
 	)
 	.await?;
+
+	// Intermediate learning: extract lessons during auto-compaction if enough user messages
+	if config.learning.enabled {
+		let user_msg_count = session
+			.session
+			.messages
+			.iter()
+			.filter(|m| m.role == "user")
+			.count();
+		if user_msg_count >= config.learning.min_messages_for_intermediate {
+			let role = crate::config::get_thread_role().unwrap_or_default();
+			let project = session
+				.session
+				.info
+				.name
+				.split('-')
+				.nth(2)
+				.unwrap_or("unknown")
+				.to_string();
+			match crate::learning::extract::extract_and_store_lessons(
+				session,
+				config,
+				&role,
+				&project,
+				learning_rx,
+			)
+			.await
+			{
+				Ok(n) if n > 0 => log_debug!("Intermediate learning: {} lessons extracted", n),
+				_ => {}
+			}
+		}
+	}
 
 	// EXPONENTIAL COOLDOWN: Increment consecutive compressions counter.
 	// Each consecutive compression (without a user message) doubles the required

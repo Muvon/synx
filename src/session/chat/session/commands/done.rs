@@ -26,6 +26,7 @@ pub async fn handle_done(
 	config: &Config,
 	operation_cancelled: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(bool, bool)> {
+	let learning_rx = operation_cancelled.clone();
 	let compressed =
 		match crate::session::chat::conversation_compression::check_and_compress_conversation(
 			session,
@@ -50,6 +51,35 @@ pub async fn handle_done(
 		};
 
 	crate::log_debug!("/done: compression={}", compressed);
+
+	// Extract and store lessons (always on /done, regardless of compression result)
+	if config.learning.enabled {
+		let role = crate::config::get_thread_role().unwrap_or_default();
+		let project = session
+			.session
+			.info
+			.name
+			.split('-')
+			.nth(2)
+			.unwrap_or("unknown")
+			.to_string();
+		match crate::learning::extract::extract_and_store_lessons(
+			session,
+			config,
+			&role,
+			&project,
+			learning_rx,
+		)
+		.await
+		{
+			Ok(0) => crate::log_debug!("/done: no new lessons extracted"),
+			Ok(n) => println!(
+				"{}",
+				format!("📝 {} lesson{} learned", n, if n > 1 { "s" } else { "" }).bright_cyan()
+			),
+			Err(e) => crate::log_debug!("/done: lesson extraction failed: {}", e),
+		}
+	}
 
 	// Returns (exit_flag, reset_first_message_processed)
 	Ok((false, false))

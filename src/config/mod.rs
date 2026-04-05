@@ -262,6 +262,9 @@ pub struct Config {
 	// Plan-driven compression configuration
 	pub compression: CompressionHintConfig,
 
+	// Cross-session adaptive learning configuration
+	pub learning: crate::learning::LearningConfig,
+
 	// Legacy system prompt field for backward compatibility
 	pub system: Option<String>,
 	// Runtime output mode set by CLI (plain or jsonl)

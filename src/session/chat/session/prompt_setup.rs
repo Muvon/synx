@@ -36,7 +36,35 @@ pub async fn setup_system_prompt_and_cache(
 	// Initialize with system prompt if new session
 	if chat_session.session.messages.is_empty() {
 		// Create system prompt based on role - use merged config for role
-		let system_prompt = create_system_prompt(&current_dir, config_for_role, role).await;
+		let mut system_prompt = create_system_prompt(&current_dir, config_for_role, role).await;
+
+		// Inject learned context from past sessions (if learning is enabled)
+		if config_for_role.learning.enabled {
+			let project = current_dir
+				.file_name()
+				.and_then(|n| n.to_str())
+				.unwrap_or("unknown");
+			let role_base = role.split(':').next().unwrap_or(role);
+			let backend = crate::learning::backend::create_backend(&config_for_role.learning);
+			if let Ok(lessons) = backend
+				.retrieve_all(role_base, project, config_for_role)
+				.await
+			{
+				if !lessons.is_empty() {
+					let max = config_for_role.learning.max_inject;
+					system_prompt.push_str("\n\n## Lessons from Past Sessions\n");
+					for lesson in lessons.iter().take(max) {
+						system_prompt
+							.push_str(&format!("- [{}] {}\n", lesson.confidence, lesson.content));
+					}
+					log_debug!(
+						"Injected {} learned lessons into system prompt",
+						lessons.len().min(max)
+					);
+				}
+			}
+		}
+
 		chat_session.add_system_message(&system_prompt)?;
 
 		// CRITICAL FIX: Apply automatic cache markers for system messages AND tool definitions

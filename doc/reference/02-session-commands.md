@@ -83,8 +83,8 @@ Trim context by removing oldest messages. More aggressive than `/summarize`.
 ### `/done`
 Mark the current task as complete. Triggers:
 - Plan completion (if a plan is active)
-- Session cleanup and summary
-- Optional memorization of key findings
+- Force context compression
+- Lesson extraction and storage (when `[learning]` is enabled — see [Learning Guide](../usage/13-learning.md))
 
 ## Media
 
