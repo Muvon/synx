@@ -1206,6 +1206,12 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 	// is not available on blocking OS threads.
 	let session_id_for_closure = crate::session::context::current_session_id();
 
+	// Shared cancellation flag for the blocking thread. The outer tokio::select!
+	// sets this on Ctrl+C so the blocking read_line() loop can exit promptly
+	// even when the pipe fd is held open by grandchild processes.
+	let cancel_flag = Arc::new(AtomicBool::new(false));
+	let cancel_flag_for_blocking = cancel_flag.clone();
+
 	// Execute with timeout and cancellation
 	// Spawn the blocking I/O task and keep the JoinHandle separate from the timeout wrapper.
 	// This lets us store the handle in in_flight on cancellation so the NEXT call can await it,
@@ -1294,11 +1300,45 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 				// Read lines from stdout, skipping any JSON-RPC notifications
 				// (messages with a "method" field but no "id") until we get
 				// the actual response for our request.
+				//
+				// The stdout fd is set to non-blocking so we can periodically
+				// check the cancellation flag. Without this, read_line() blocks
+				// indefinitely when the MCP server's stdout pipe is held open by
+				// grandchild processes (e.g. cargo's build server) even after the
+				// server itself is killed on Ctrl+C.
+				#[cfg(unix)]
+				{
+					use std::os::unix::io::AsRawFd;
+					let fd = reader.get_ref().as_raw_fd();
+					unsafe {
+						let flags = libc::fcntl(fd, libc::F_GETFL);
+						if flags != -1 {
+							libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+						}
+					}
+				}
+
 				let response = loop {
+					// Check cancellation flag set by the outer tokio::select! on Ctrl+C
+					if cancel_flag_for_blocking.load(Ordering::Relaxed) {
+						return Err(anyhow::anyhow!(
+							"Operation cancelled while waiting for server response"
+						));
+					}
+
 					let mut response_str = String::new();
-					let read_result = reader
-						.read_line(&mut response_str)
-						.map_err(|e| anyhow::anyhow!("Failed to read from stdout: {}", e))?;
+					let read_result = match reader.read_line(&mut response_str) {
+						Ok(n) => n,
+						Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+							// No data available yet — sleep briefly and retry.
+							// 50ms gives responsive cancellation without busy-spinning.
+							std::thread::sleep(std::time::Duration::from_millis(50));
+							continue;
+						}
+						Err(e) => {
+							return Err(anyhow::anyhow!("Failed to read from stdout: {}", e));
+						}
+					};
 
 					if read_result == 0 {
 						// Include recent stderr lines for diagnostics
@@ -1421,6 +1461,11 @@ pub async fn communicate_with_stdin_server_extended_timeout(
 			}
 		},
 		_ = cancellation_future => {
+			// Signal the blocking thread to stop polling read_line() immediately.
+			// This is the primary cancellation mechanism — even if the pipe fd is
+			// held open by grandchild processes, the thread will exit within 50ms.
+			cancel_flag.store(true, Ordering::Relaxed);
+
 			// Store the still-running handle so the next call awaits it before locking.
 			*in_flight_arc.lock().unwrap() = handle_opt.take();
 

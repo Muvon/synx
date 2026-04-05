@@ -592,27 +592,31 @@ mod tests {
 	}
 
 	#[test]
-	fn test_clean_interrupted_tool_calls_removes_incomplete() {
-		// Test that incomplete sequences are removed
+	fn test_clean_interrupted_tool_calls_inserts_synthetic_result() {
+		// Test that incomplete sequences get a synthetic tool result instead of truncation
 		let mut messages = vec![
 			create_test_message("user", "List files", None, None),
 			create_test_message(
 				"assistant",
 				"I'll list the files for you.",
 				Some(
-					json!([{"id": "call_123", "name": "list_files", "arguments": {"directory": "."}}]),
+					json!([{"id": "call_123", "function": {"name": "list_files", "arguments": "{\"directory\": \".\"}"}}]),
 				),
 				None,
 			),
-			// Missing tool response - this assistant message should be removed
+			// Missing tool response - a synthetic result should be inserted
 		];
 
 		let cleaned = clean_interrupted_tool_calls(&mut messages, "test_session", "Test");
 
-		// Should clean the incomplete assistant message
+		// Should insert a synthetic tool result, preserving all messages
 		assert!(cleaned);
-		assert_eq!(messages.len(), 1); // Only user message should remain
+		assert_eq!(messages.len(), 3); // user + assistant + synthetic tool result
 		assert_eq!(messages[0].role, "user");
+		assert_eq!(messages[1].role, "assistant");
+		assert_eq!(messages[2].role, "tool");
+		assert_eq!(messages[2].tool_call_id.as_deref(), Some("call_123"));
+		assert!(messages[2].content.contains("interrupted"));
 	}
 
 	#[test]

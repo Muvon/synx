@@ -177,6 +177,17 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 		// Start signal handler
 		let _signal_handler = cancellation.start_signal_handler();
 
+		// Register active session for SIGTSTP handler to write TRUNCATION_POINT
+		let active_msg_count = Arc::new(std::sync::atomic::AtomicUsize::new(
+			chat_session.session.messages.len(),
+		));
+		if let Some(session_file) = &chat_session.session.session_file {
+			crate::session::cancellation::set_active_session(
+				session_file.clone(),
+				active_msg_count.clone(),
+			);
+		}
+
 		// We need to handle configuration reloading, so keep our own copy that we can update
 		let mut current_config = config_for_role.clone();
 
@@ -274,6 +285,11 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				// PHASE 4: Robust save with retry and error reporting
 				// CRITICAL FIX: Write TRUNCATION_POINT marker to session file
 				// This tells the loader to discard messages after this point on resume
+				// Update active session count for SIGTSTP handler
+				active_msg_count.store(
+					chat_session.session.messages.len(),
+					std::sync::atomic::Ordering::Relaxed,
+				);
 				if let Some(session_file) = &chat_session.session.session_file {
 					let truncation_entry = serde_json::json!({
 						"type": "TRUNCATION_POINT",
@@ -906,6 +922,12 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 			// Clear operation context at the end of each successful iteration
 			*current_operation.lock().unwrap() = None;
+
+			// Keep active session message count in sync for SIGTSTP handler
+			active_msg_count.store(
+				chat_session.session.messages.len(),
+				std::sync::atomic::Ordering::Relaxed,
+			);
 		}
 
 		Ok(())
@@ -949,6 +971,14 @@ pub async fn run_interactive_session_with_input<T: std::fmt::Debug>(
 
 	// Simplified tokio-based Ctrl+C handler for non-interactive mode
 	let _signal_handler = cancellation.start_signal_handler();
+
+	// Register active session for SIGTSTP handler
+	if let Some(session_file) = &chat_session.session.session_file {
+		crate::session::cancellation::set_active_session(
+			session_file.clone(),
+			Arc::new(std::sync::atomic::AtomicUsize::new(chat_session.session.messages.len())),
+		);
+	}
 
 	// Set the thread-local config for logging macros
 	let mut current_config = config_for_role.clone();

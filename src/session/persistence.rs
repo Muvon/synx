@@ -183,10 +183,11 @@ pub(crate) fn has_incomplete_tool_calls(messages: &[Message]) -> bool {
 	false
 }
 
-/// Clean up interrupted tool calls - simple chronological truncation approach
+/// Clean up interrupted tool calls by inserting synthetic results.
 ///
-/// When incomplete tool calls are detected, truncates the message history from the
-/// first incomplete assistant message to the end, ensuring a clean conversation state.
+/// Instead of truncating the entire conversation from the first incomplete tool call,
+/// this inserts a synthetic "[Tool execution was interrupted]" result for each missing
+/// tool response. This preserves all valid conversation history and only patches the gaps.
 pub fn clean_interrupted_tool_calls(
 	messages: &mut Vec<Message>,
 	session_name: &str,
@@ -196,71 +197,94 @@ pub fn clean_interrupted_tool_calls(
 		return false;
 	}
 
-	// Find the FIRST incomplete tool call sequence scanning from the BEGINNING
-	let mut truncate_from_index = None;
+	// Collect (insert_after_index, call_id, tool_name) for each missing tool response.
+	// We scan all assistant messages with tool_calls and check for missing responses.
+	let mut insertions: Vec<(usize, String, String)> = Vec::new();
 
-	// Scan forward to find the FIRST assistant message with incomplete tool calls
 	for (i, msg) in messages.iter().enumerate() {
 		if msg.role == "assistant" && msg.tool_calls.is_some() {
-			// Check if this assistant message has incomplete tool calls
 			if let Some(tool_calls_value) = &msg.tool_calls {
 				if let Ok(tool_calls) =
 					serde_json::from_value::<Vec<serde_json::Value>>(tool_calls_value.clone())
 				{
-					let mut has_incomplete_calls = false;
-
 					for tool_call in tool_calls {
-						if let Some(call_id) = tool_call.get("id").and_then(|id| id.as_str()) {
-							// Look for tool response AFTER this assistant message
-							let has_response = messages.iter().skip(i + 1).any(|response_msg| {
-								response_msg.role == "tool"
-									&& response_msg.tool_call_id.as_ref()
-										== Some(&call_id.to_string())
-							});
-
-							if !has_response {
-								has_incomplete_calls = true;
-								break;
-							}
+						let call_id = tool_call
+							.get("id")
+							.and_then(|id| id.as_str())
+							.unwrap_or("")
+							.to_string();
+						if call_id.is_empty() {
+							continue;
 						}
-					}
+						let tool_name = tool_call
+							.get("function")
+							.and_then(|f| f.get("name"))
+							.and_then(|n| n.as_str())
+							.unwrap_or("unknown")
+							.to_string();
 
-					if has_incomplete_calls {
-						truncate_from_index = Some(i);
-						break; // Found the FIRST incomplete sequence, truncate from here
+						let has_response = messages.iter().skip(i + 1).any(|response_msg| {
+							response_msg.role == "tool"
+								&& response_msg.tool_call_id.as_ref() == Some(&call_id)
+						});
+
+						if !has_response {
+							insertions.push((i, call_id, tool_name));
+						}
 					}
 				}
 			}
 		}
 	}
 
-	// If we found an incomplete sequence, TRUNCATE from that point
-	if let Some(truncate_index) = truncate_from_index {
-		let original_len = messages.len();
-		messages.truncate(truncate_index);
-		let removed_count = original_len - messages.len();
-
-		if removed_count > 0 {
-			crate::log_debug!(
-				"🔧 {}: Truncated {} messages from incomplete tool sequence",
-				context,
-				removed_count
-			);
-
-			// Log the cleanup
-			let _ = crate::session::logger::log_system_message(
-				session_name,
-				&format!(
-					"{}: Truncated {} messages from incomplete tool sequence",
-					context, removed_count
-				),
-			);
-
-			return true;
-		}
+	if insertions.is_empty() {
+		return false;
 	}
 
-	false
+	let count = insertions.len();
+
+	// Insert in reverse order so earlier indices remain valid
+	for (after_idx, call_id, tool_name) in insertions.into_iter().rev() {
+		// Insert right after the assistant message (or after existing tool responses)
+		// Find the correct insertion point: after the last tool response for this assistant msg
+		let mut insert_at = after_idx + 1;
+		while insert_at < messages.len() && messages[insert_at].role == "tool" {
+			insert_at += 1;
+		}
+
+		messages.insert(
+			insert_at,
+			Message {
+				role: "tool".to_string(),
+				content: "[Tool execution was interrupted by user]".to_string(),
+				timestamp: crate::utils::time::now_secs(),
+				cached: false,
+				tool_call_id: Some(call_id),
+				name: Some(tool_name),
+				tool_calls: None,
+				images: None,
+				videos: None,
+				thinking: None,
+				id: None,
+			},
+		);
+	}
+
+	crate::log_debug!(
+		"🔧 {}: Inserted {} synthetic tool results for interrupted calls",
+		context,
+		count
+	);
+
+	let _ = crate::session::logger::log_system_message(
+		session_name,
+		&format!(
+			"{}: Inserted {} synthetic tool results for interrupted calls",
+			context, count
+		),
+	);
+
+	true
 }
 
 // Helper function to load a session from file - optimized to use streams
