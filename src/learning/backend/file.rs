@@ -36,6 +36,7 @@ impl FileBackend {
 			let key = key.trim();
 			let val = val.trim().trim_matches('"');
 			match key {
+				"title" => lesson.title = val.to_string(),
 				"content" => lesson.content = val.to_string(),
 				"memory_type" => lesson.memory_type = val.to_string(),
 				"importance" => lesson.importance = val.parse().unwrap_or(0.5),
@@ -101,7 +102,8 @@ impl LearningBackend for FileBackend {
 
 		let tags_str = lesson.tags.join(", ");
 		let content = format!(
-			"---\ncontent: \"{}\"\nmemory_type: {}\nimportance: {}\nconfidence: {}\ntags: [{}]\nsource: \"{}\"\nrole: \"{}\"\nproject: \"{}\"\ncreated: \"{}\"\n---\n",
+			"---\ntitle: \"{}\"\ncontent: \"{}\"\nmemory_type: {}\nimportance: {}\nconfidence: {}\ntags: [{}]\nsource: \"{}\"\nrole: \"{}\"\nproject: \"{}\"\ncreated: \"{}\"\n---\n",
+			lesson.title.replace('"', "\\\""),
 			lesson.content.replace('"', "\\\""),
 			lesson.memory_type,
 			lesson.importance,

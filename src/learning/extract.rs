@@ -168,8 +168,20 @@ fn parse_lesson_tags(response: &str, role: &str, project: &str, source: &str) ->
 				_ => 0.5,
 			};
 
+			// Title: first 80 chars of content, trimmed to word boundary
+			let title = if content.len() <= 80 {
+				content.to_string()
+			} else {
+				let truncated = &content[..80];
+				truncated
+					.rfind(' ')
+					.map(|i| format!("{}...", &truncated[..i]))
+					.unwrap_or_else(|| format!("{}...", truncated))
+			};
+
 			lessons.push(Lesson {
 				content: content.to_string(),
+				title,
 				memory_type: "learning".into(),
 				importance,
 				confidence,

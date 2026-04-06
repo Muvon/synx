@@ -743,24 +743,28 @@ min_messages_for_intermediate = 3
 max_inject = 10
 
 # MCP backend configuration (uncomment to use instead of file backend):
+# Octobrain example — field_map maps canonical learning fields to the MCP tool's actual arguments.
+# Empty string = omit that field. Missing = omit.
+#
 # backend = "mcp"
 #
 # [learning.store]
 # tool = "memorize"
 # [learning.store.field_map]
-# content = "content"
-# memory_type = "memory_type"
-# importance = "importance"
-# tags = "tags"
+# content = "content"              # required by memorize
+# title = "title"                  # required by memorize (short summary)
+# memory_type = "memory_type"      # "learning" — valid octobrain category
+# importance = "importance"        # 0.0-1.0
+# confidence = "source"            # maps high/medium/low → user_confirmed/agent_inferred
+# tags = "tags"                    # array of strings, max 10
 # role = "role"
 # project = "project"
-# confidence = ""                  # empty = omit this field
 #
 # [learning.retrieve]
 # tool = "remember"
 # [learning.retrieve.field_map]
-# query = "query"
+# query = "query"                  # string or array of search terms
+# memory_type = "memory_types"     # passed as ["learning"] array to match octobrain schema
 # role = "role"
 # project = "project"
-# limit = "limit"
-# memory_type = "memory_type"
+# limit = "limit"                  # max 5 for octobrain

@@ -33,6 +33,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lesson {
 	pub content: String,
+	/// Short summary title (required by some MCP backends like octobrain).
+	#[serde(default)]
+	pub title: String,
 	#[serde(default = "default_memory_type")]
 	pub memory_type: String,
 	#[serde(default = "default_importance")]
@@ -65,6 +68,7 @@ impl Default for Lesson {
 	fn default() -> Self {
 		Self {
 			content: String::new(),
+			title: String::new(),
 			memory_type: "learning".into(),
 			importance: 0.5,
 			confidence: "medium".into(),
@@ -82,9 +86,17 @@ impl Lesson {
 	pub fn get_field(&self, name: &str) -> Option<serde_json::Value> {
 		match name {
 			"content" => Some(serde_json::Value::String(self.content.clone())),
+			"title" => Some(serde_json::Value::String(self.title.clone())),
 			"memory_type" => Some(serde_json::Value::String(self.memory_type.clone())),
 			"importance" => Some(serde_json::json!(self.importance)),
-			"confidence" => Some(serde_json::Value::String(self.confidence.clone())),
+			// confidence → maps to octobrain's "source" trust tier when field_map says so
+			"confidence" => {
+				let mapped = match self.confidence.as_str() {
+					"high" => "user_confirmed",
+					_ => "agent_inferred",
+				};
+				Some(serde_json::Value::String(mapped.to_string()))
+			}
 			"tags" => Some(serde_json::json!(self.tags)),
 			"source" => Some(serde_json::Value::String(self.source.clone())),
 			"role" => Some(serde_json::Value::String(self.role.clone())),

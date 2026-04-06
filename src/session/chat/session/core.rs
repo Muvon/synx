@@ -185,6 +185,8 @@ pub struct ChatSession {
 	/// Critical knowledge entries extracted from compressions — persisted across cycles.
 	/// Capped at `config.compression.knowledge_retention` entries (FIFO).
 	pub critical_knowledge: Vec<String>,
+	/// Whether learning lessons have been injected into the system prompt (once per session).
+	pub learning_injected: bool,
 }
 
 /// Parameters for creating a new ChatSession
@@ -299,6 +301,7 @@ impl ChatSession {
 			first_prompt_idx: None,             // Initialize first prompt index (set on first user message)
 			schema: None,                       // Schema set later via CLI override
 			critical_knowledge: Vec::new(),     // Populated from session log on resume
+			learning_injected: false,
 		}
 	}
 
@@ -494,6 +497,7 @@ impl ChatSession {
 						first_prompt_idx: None,     // Will be detected from existing messages
 						schema: None,               // Schema applied after init via CLI override
 						critical_knowledge: Vec::new(), // Will be restored from session log below
+						learning_injected: false,
 					};
 
 					// Apply runtime state from session log (legacy support)
@@ -1228,6 +1232,7 @@ mod tests {
 			first_prompt_idx: None,
 			schema: None,
 			critical_knowledge: Vec::new(),
+			learning_injected: false,
 		}
 	}
 

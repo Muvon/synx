@@ -83,9 +83,11 @@ backend = "mcp"
 [learning.store]
 tool = "memorize"
 [learning.store.field_map]
-content = "content"
+content = "content"        # required by memorize
+title = "title"            # required by memorize — short summary
 memory_type = "memory_type"
 importance = "importance"
+confidence = "source"      # maps confidence → octobrain's source trust tier
 tags = "tags"
 role = "role"
 project = "project"
@@ -93,16 +95,16 @@ project = "project"
 [learning.retrieve]
 tool = "remember"
 [learning.retrieve.field_map]
-query = "query"
+query = "query"            # string or array of search terms
+memory_type = "memory_types" # passed as ["learning"] array to match octobrain schema
 role = "role"
 project = "project"
-limit = "limit"
-memory_type = "memory_type"
+limit = "limit"            # octobrain max is 5
 ```
 
-Each entry in `field_map` maps a canonical field name to the MCP tool's argument name. Set a value to `""` to omit that field.
+Each entry in `field_map` maps a canonical learning field to the MCP tool's actual argument name. Set a value to `""` to omit that field. Missing entries are also omitted.
 
-Store and retrieve have separate field maps because MCP tools may have different argument schemas.
+Store and retrieve have separate field maps because MCP tools have different argument schemas.
 
 ## Relationship to Memory
 

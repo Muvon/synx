@@ -97,6 +97,39 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 	animation_manager.set_cancel_receiver(operation_rx.clone());
 	animation_manager.start_animation(&mode).await;
 
+	// Inject learned lessons into system prompt on first API call (once per session)
+	if !chat_session.learning_injected && config.learning.enabled {
+		chat_session.learning_injected = true;
+		let current_dir = crate::mcp::get_thread_working_directory();
+		let project = current_dir
+			.file_name()
+			.and_then(|n| n.to_str())
+			.unwrap_or("unknown")
+			.to_string();
+		// Extract user's input from the last user message for query-based retrieval
+		let user_input = chat_session
+			.session
+			.messages
+			.iter()
+			.rev()
+			.find(|m| m.role == "user")
+			.map(|m| m.content.clone())
+			.unwrap_or_default();
+		let learned_context = crate::learning::inject::retrieve_and_format(
+			chat_session,
+			config,
+			&user_input,
+			role,
+			&project,
+			operation_rx.clone(),
+		)
+		.await;
+		if !learned_context.is_empty() {
+			chat_session.add_user_message(&learned_context)?;
+			crate::log_debug!("Injected learning context as user message");
+		}
+	}
+
 	// Make API call
 	let messages = chat_session.session.messages.clone();
 	let max_retries = chat_session.max_retries;

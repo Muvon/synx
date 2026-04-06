@@ -49,7 +49,7 @@ impl McpBackend {
 			("role", Value::String(role.to_string())),
 			("project", Value::String(project.to_string())),
 			("limit", serde_json::json!(limit)),
-			("memory_type", Value::String("learning".to_string())),
+			("memory_type", serde_json::json!(["learning"])),
 		]
 		.into();
 

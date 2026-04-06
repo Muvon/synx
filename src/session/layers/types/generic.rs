@@ -416,6 +416,7 @@ impl GenericLayer {
 			first_prompt_idx: Some(first_prompt_idx), // Protect layer's first prompt from compression
 			schema: None,                             // Layers don't use structured output
 			critical_knowledge: Vec::new(),           // Layers don't retain knowledge across compressions
+			learning_injected: false,
 		}
 	}
 
