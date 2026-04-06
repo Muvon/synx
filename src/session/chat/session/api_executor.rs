@@ -97,9 +97,10 @@ pub async fn execute_api_call_and_process_response<S: OutputSink>(
 	animation_manager.set_cancel_receiver(operation_rx.clone());
 	animation_manager.start_animation(&mode).await;
 
-	// Inject learned lessons into system prompt on first API call (once per session)
+	// Inject learned lessons as user message on first API call (once per session, resets on /done)
 	if !chat_session.learning_injected && config.learning.enabled {
 		chat_session.learning_injected = true;
+		crate::log_debug!("Learning injection triggered for this task");
 		let current_dir = crate::mcp::get_thread_working_directory();
 		let project = current_dir
 			.file_name()

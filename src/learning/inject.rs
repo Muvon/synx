@@ -43,6 +43,12 @@ pub async fn retrieve_and_format(
 	}
 
 	let backend = create_backend(learning);
+	crate::log_debug!(
+		"Learning retrieval: backend={}, role={}, project={}",
+		learning.backend,
+		role,
+		project
+	);
 
 	// Prepare retrieval query via LLM (backend-adaptive)
 	let patterns = match prepare_retrieval_query(
@@ -55,7 +61,10 @@ pub async fn retrieve_and_format(
 	)
 	.await
 	{
-		Ok(p) => p,
+		Ok(p) => {
+			crate::log_debug!("Learning retrieval patterns: {:?}", p);
+			p
+		}
 		Err(e) => {
 			crate::log_debug!("Learning retrieval prep failed: {}", e);
 			return String::new();
@@ -75,8 +84,13 @@ pub async fn retrieve_and_format(
 	};
 
 	if lessons.is_empty() {
+		crate::log_debug!("Learning retrieval: no matching lessons found");
 		return String::new();
 	}
+	crate::log_debug!(
+		"Learning retrieval: {} lessons matched, injecting into context",
+		lessons.len()
+	);
 
 	// Format for system prompt
 	let mut output = String::from("\n\n## Lessons from Past Sessions\n");

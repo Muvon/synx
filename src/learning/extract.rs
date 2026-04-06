@@ -52,12 +52,22 @@ pub async fn extract_and_store_lessons(
 	}
 
 	let backend = create_backend(learning);
+	crate::log_debug!(
+		"Learning extraction: backend={}, role={}, project={}",
+		learning.backend,
+		role,
+		project
+	);
 
 	// Retrieve existing lessons for dedup
 	let existing = backend
 		.retrieve_all(role, project, config)
 		.await
 		.unwrap_or_default();
+	crate::log_debug!(
+		"Learning extraction: {} existing lessons found for dedup",
+		existing.len()
+	);
 	let existing_text = if existing.is_empty() {
 		"(none)".to_string()
 	} else {
@@ -90,6 +100,10 @@ pub async fn extract_and_store_lessons(
 
 	// Parse lessons
 	let lessons = parse_lesson_tags(&response, role, project, &session.session.info.name);
+	crate::log_debug!(
+		"Learning extraction: LLM returned {} lessons",
+		lessons.len()
+	);
 	if lessons.is_empty() {
 		return Ok(0);
 	}
@@ -98,9 +112,14 @@ pub async fn extract_and_store_lessons(
 	let mut stored = 0;
 	for lesson in &lessons {
 		if let Err(e) = backend.store(lesson, config).await {
-			crate::log_debug!("Failed to store lesson: {}", e);
+			crate::log_debug!("Learning store failed: {}", e);
 		} else {
 			stored += 1;
+			crate::log_debug!(
+				"Learning stored: [{}] {}",
+				lesson.confidence,
+				lesson.content
+			);
 		}
 	}
 
