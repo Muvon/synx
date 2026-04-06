@@ -79,6 +79,8 @@ pub async fn handle_done(
 			),
 			Err(e) => crate::log_debug!("/done: lesson extraction failed: {}", e),
 		}
+		// Mark as extracted so exit doesn't double-extract
+		session.learning_extracted = true;
 		// Reset so next user message triggers fresh injection with new query
 		session.learning_injected = false;
 	}

@@ -740,7 +740,7 @@ backend = "file"
 # Minimum user messages before intermediate learning triggers during auto-compaction
 min_messages_for_intermediate = 3
 # Maximum lessons to inject into the system prompt per session
-max_inject = 10
+max_inject = 5
 
 # MCP backend configuration (uncomment to use instead of file backend):
 # Octobrain example — field_map maps canonical learning fields to the MCP tool's actual arguments.

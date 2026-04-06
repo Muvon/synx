@@ -165,7 +165,7 @@ fn default_min_messages() -> usize {
 	3
 }
 fn default_max_inject() -> usize {
-	10
+	5
 }
 
 impl Default for LearningConfig {

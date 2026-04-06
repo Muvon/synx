@@ -417,6 +417,7 @@ impl GenericLayer {
 			schema: None,                             // Layers don't use structured output
 			critical_knowledge: Vec::new(),           // Layers don't retain knowledge across compressions
 			learning_injected: false,
+			learning_extracted: false,
 		}
 	}
 

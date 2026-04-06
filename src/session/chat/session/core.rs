@@ -187,6 +187,8 @@ pub struct ChatSession {
 	pub critical_knowledge: Vec<String>,
 	/// Whether learning lessons have been injected into the system prompt (once per session).
 	pub learning_injected: bool,
+	/// Whether learning extraction already ran for this session (prevents double extraction on exit).
+	pub learning_extracted: bool,
 }
 
 /// Parameters for creating a new ChatSession
@@ -302,6 +304,7 @@ impl ChatSession {
 			schema: None,                       // Schema set later via CLI override
 			critical_knowledge: Vec::new(),     // Populated from session log on resume
 			learning_injected: false,
+			learning_extracted: false,
 		}
 	}
 
@@ -498,6 +501,7 @@ impl ChatSession {
 						schema: None,               // Schema applied after init via CLI override
 						critical_knowledge: Vec::new(), // Will be restored from session log below
 						learning_injected: false,
+						learning_extracted: false,
 					};
 
 					// Apply runtime state from session log (legacy support)
@@ -1233,6 +1237,7 @@ mod tests {
 			schema: None,
 			critical_knowledge: Vec::new(),
 			learning_injected: false,
+			learning_extracted: false,
 		}
 	}
 

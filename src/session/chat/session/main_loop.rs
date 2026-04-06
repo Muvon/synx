@@ -479,8 +479,8 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				}
 				InputResult::Exit => {
 					// Ctrl+D pressed - graceful exit handled in input.rs
-					// Fire-and-forget learning extraction on exit
-					if current_config.learning.enabled {
+					// Fire-and-forget learning extraction on exit (skip if /done already extracted)
+					if current_config.learning.enabled && !chat_session.learning_extracted {
 						let project = current_dir
 							.file_name()
 							.and_then(|n| n.to_str())
@@ -508,8 +508,8 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 			// Check if the input is an exit command
 			if input == "/exit" || input == "/quit" {
-				// Fire-and-forget learning extraction on exit
-				if current_config.learning.enabled {
+				// Fire-and-forget learning extraction on exit (skip if /done already extracted)
+				if current_config.learning.enabled && !chat_session.learning_extracted {
 					let project = current_dir
 						.file_name()
 						.and_then(|n| n.to_str())

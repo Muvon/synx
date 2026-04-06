@@ -11,28 +11,41 @@ use crate::config::Config;
 use crate::session::chat::ChatSession;
 use anyhow::Result;
 
-const EXTRACTION_SYSTEM_PROMPT: &str = r#"# Task
-Extract generalizable lessons from the conversation transcript below that would help an AI assistant avoid repeating mistakes and reuse successful patterns in future sessions on the same project.
+const EXTRACTION_SYSTEM_PROMPT: &str = r#"# Step 1: Decision
+First, decide: does this conversation contain any USER corrections or USER-stated rules?
+Output your decision:
+<decision>LEARN</decision> or <decision>NONE</decision>
+
+If NONE, stop here. Do not output anything else.
+
+# Step 2: Extract (only if LEARN)
+For each lesson, you MUST provide the exact user quote as evidence.
+If you cannot quote the user, you do not have a lesson — skip it.
+
+# What qualifies as a lesson
+- User correction: user explicitly said something is wrong and stated the fix
+- User-stated rule: user declared a project convention, preference, or constraint
+- Repeated failure: user corrected the same type of mistake more than once
+
+# What does NOT qualify
+- Anything the AI discovered, debugged, or figured out without user input
+- One-time implementation details or debugging steps
+- Generic knowledge any developer would know
+- Anything derivable by reading the codebase
+- Successful AI actions that received no user feedback
 
 # Rules
-1. Extract ONLY lessons that are NEW — not already in the EXISTING LESSONS list.
-2. Each lesson must be a single, self-contained fact or rule — no references to "this session" or "the user said".
-3. Prioritize (highest to lowest): corrections by the user > patterns that succeeded > domain-specific facts > workflow preferences.
-4. Skip anything obvious from reading source code, generic programming advice, or one-off task details.
-5. Output 0-5 lessons. If nothing is worth remembering, output the word NONE and stop.
-
-# Confidence Levels
-- high: User explicitly stated or corrected this.
-- medium: Inferred from a pattern that worked without correction.
-- low: Observed once, may not generalize.
+- Max 3 lessons. One strong lesson is better than three weak ones.
+- confidence=high: direct user correction ("no, do X instead")
+- confidence=medium: user-stated preference without direct correction
+- State each lesson as a reusable rule, not a narrative
 
 # Existing Lessons (DO NOT duplicate)
 {existing_lessons}
 
 # Output Format
-For each lesson, use exactly:
-<lesson confidence="high|medium|low" tags="keyword1,keyword2">
-The lesson text — concise, actionable, generalizable.
+<lesson confidence="high|medium" tags="keyword1,keyword2" evidence="exact user quote here">
+Lesson text — what to do or avoid, stated as a rule.
 </lesson>"#;
 
 /// Extract lessons from a session and store them via the backend.
@@ -98,19 +111,29 @@ pub async fn extract_and_store_lessons(
 	)
 	.await?;
 
-	// Parse lessons
+	// Gate: check <decision> tag first — if NONE, skip parsing entirely
+	if !response.contains("<decision>LEARN</decision>") {
+		crate::log_debug!("Learning extraction: model decided NONE — nothing to learn");
+		return Ok(0);
+	}
+
+	// Parse lessons (only those with evidence)
 	let lessons = parse_lesson_tags(&response, role, project, &session.session.info.name);
 	crate::log_debug!(
-		"Learning extraction: LLM returned {} lessons",
+		"Learning extraction: LLM returned {} lessons with evidence",
 		lessons.len()
 	);
 	if lessons.is_empty() {
 		return Ok(0);
 	}
 
-	// Store each
+	// Store each, with content-based dedup against existing lessons
 	let mut stored = 0;
 	for lesson in &lessons {
+		if is_duplicate(&lesson.content, &existing) {
+			crate::log_debug!("Learning skipped (duplicate): {}", lesson.content);
+			continue;
+		}
 		if let Err(e) = backend.store(lesson, config).await {
 			crate::log_debug!("Learning store failed: {}", e);
 		} else {
@@ -172,6 +195,17 @@ fn parse_lesson_tags(response: &str, role: &str, project: &str, source: &str) ->
 		let content = after_open[..end_tag].trim();
 
 		if !content.is_empty() {
+			// Programmatic gate: reject lessons without evidence attribute
+			let evidence = extract_attr(attrs, "evidence");
+			if evidence.is_none() || evidence.as_ref().is_some_and(|e| e.trim().is_empty()) {
+				crate::log_debug!(
+					"Learning rejected (no evidence): {}",
+					&content[..content.len().min(80)]
+				);
+				remaining = &after_open[end_tag + 9..];
+				continue;
+			}
+
 			let confidence = extract_attr(attrs, "confidence").unwrap_or("medium".into());
 			let tags_str = extract_attr(attrs, "tags").unwrap_or_default();
 			let tags: Vec<String> = tags_str
@@ -181,10 +215,8 @@ fn parse_lesson_tags(response: &str, role: &str, project: &str, source: &str) ->
 				.collect();
 
 			let importance = match confidence.as_str() {
-				"high" => 0.8,
-				"medium" => 0.5,
-				"low" => 0.3,
-				_ => 0.5,
+				"high" => 0.9,
+				_ => 0.6, // medium or anything else
 			};
 
 			// Title: first 80 chars of content, trimmed to word boundary
@@ -216,6 +248,32 @@ fn parse_lesson_tags(response: &str, role: &str, project: &str, source: &str) ->
 	}
 
 	lessons
+}
+
+/// Check if a new lesson is a duplicate of an existing one by word overlap.
+/// Returns true if >60% of words in the new content match any existing lesson.
+fn is_duplicate(new_content: &str, existing: &[Lesson]) -> bool {
+	let new_lower = new_content.to_lowercase();
+	let new_words: std::collections::HashSet<String> =
+		new_lower.split_whitespace().map(String::from).collect();
+
+	if new_words.is_empty() {
+		return false;
+	}
+
+	for existing_lesson in existing {
+		let existing_lower = existing_lesson.content.to_lowercase();
+		let existing_words: std::collections::HashSet<String> = existing_lower
+			.split_whitespace()
+			.map(String::from)
+			.collect();
+		let overlap = new_words.intersection(&existing_words).count();
+		let similarity = overlap as f64 / new_words.len().max(1) as f64;
+		if similarity > 0.6 {
+			return true;
+		}
+	}
+	false
 }
 
 /// Extract an XML attribute value: `key="value"`.
@@ -274,8 +332,18 @@ pub fn extract_lessons_detached(
 				}
 			};
 
+		// Gate: check decision
+		if !response.contains("<decision>LEARN</decision>") {
+			crate::log_debug!("Learning detached: model decided NONE");
+			return;
+		}
+
 		let lessons = parse_lesson_tags(&response, &role, &project, &session_name);
 		for lesson in &lessons {
+			if is_duplicate(&lesson.content, &existing) {
+				crate::log_debug!("Learning detached skipped (duplicate): {}", lesson.content);
+				continue;
+			}
 			if let Err(e) = backend.store(lesson, &config).await {
 				crate::log_debug!("Learning detached store failed: {}", e);
 			} else {
@@ -402,7 +470,7 @@ mod tests {
 	#[test]
 	fn test_parse_lesson_tags_single() {
 		let response = r#"Some preamble text.
-<lesson confidence="high" tags="auth,api">
+<lesson confidence="high" tags="auth,api" evidence="use bearer tokens not basic auth">
 Bearer token auth is required for all endpoints
 </lesson>
 Some trailing text."#;
@@ -414,7 +482,7 @@ Some trailing text."#;
 			"Bearer token auth is required for all endpoints"
 		);
 		assert_eq!(lessons[0].confidence, "high");
-		assert_eq!(lessons[0].importance, 0.8);
+		assert_eq!(lessons[0].importance, 0.9);
 		assert_eq!(lessons[0].tags, vec!["auth", "api"]);
 		assert_eq!(lessons[0].role, "developer");
 		assert_eq!(lessons[0].project, "octofs");
@@ -423,23 +491,33 @@ Some trailing text."#;
 	#[test]
 	fn test_parse_lesson_tags_multiple() {
 		let response = r#"
-<lesson confidence="high" tags="error">
+<lesson confidence="high" tags="error" evidence="no, use custom error types">
 Use custom error types not anyhow
 </lesson>
-<lesson confidence="low" tags="style">
+<lesson confidence="medium" tags="style" evidence="I prefer single PRs">
 User prefers single PRs
 </lesson>"#;
 
 		let lessons = parse_lesson_tags(response, "dev", "proj", "src");
 		assert_eq!(lessons.len(), 2);
 		assert_eq!(lessons[0].confidence, "high");
-		assert_eq!(lessons[1].confidence, "low");
-		assert_eq!(lessons[1].importance, 0.3);
+		assert_eq!(lessons[0].importance, 0.9);
+		assert_eq!(lessons[1].confidence, "medium");
+		assert_eq!(lessons[1].importance, 0.6);
 	}
 
 	#[test]
 	fn test_parse_lesson_tags_empty_content_skipped() {
+		let response = r#"<lesson confidence="high" tags="x" evidence="some quote">
+</lesson>"#;
+		let lessons = parse_lesson_tags(response, "dev", "proj", "src");
+		assert_eq!(lessons.len(), 0);
+	}
+
+	#[test]
+	fn test_parse_lesson_tags_no_evidence_rejected() {
 		let response = r#"<lesson confidence="high" tags="x">
+This lesson has no evidence attribute and should be rejected
 </lesson>"#;
 		let lessons = parse_lesson_tags(response, "dev", "proj", "src");
 		assert_eq!(lessons.len(), 0);
@@ -454,13 +532,37 @@ User prefers single PRs
 
 	#[test]
 	fn test_parse_lesson_tags_missing_confidence_defaults_medium() {
-		let response = r#"<lesson tags="test">
+		let response = r#"<lesson tags="test" evidence="user said something">
 Some lesson without confidence attr
 </lesson>"#;
 		let lessons = parse_lesson_tags(response, "dev", "proj", "src");
 		assert_eq!(lessons.len(), 1);
 		assert_eq!(lessons[0].confidence, "medium");
-		assert_eq!(lessons[0].importance, 0.5);
+		assert_eq!(lessons[0].importance, 0.6);
+	}
+
+	#[test]
+	fn test_is_duplicate_high_overlap() {
+		let existing = vec![Lesson {
+			content: "Bearer token auth is required for all API endpoints".into(),
+			..Default::default()
+		}];
+		assert!(is_duplicate(
+			"Bearer token auth is required for all octofs API endpoints",
+			&existing
+		));
+	}
+
+	#[test]
+	fn test_is_duplicate_no_overlap() {
+		let existing = vec![Lesson {
+			content: "Bearer token auth is required for all API endpoints".into(),
+			..Default::default()
+		}];
+		assert!(!is_duplicate(
+			"Use custom error types instead of anyhow",
+			&existing
+		));
 	}
 
 	#[test]
