@@ -226,6 +226,121 @@ fn extract_attr(attrs: &str, key: &str) -> Option<String> {
 	Some(attrs[start..end].to_string())
 }
 
+/// Fire-and-forget extraction for session exit. Takes owned data, no session reference needed.
+/// Spawns a detached tokio task — caller returns immediately.
+pub fn extract_lessons_detached(
+	messages: Vec<crate::session::Message>,
+	config: Config,
+	role: String,
+	project: String,
+	session_name: String,
+) {
+	tokio::spawn(async move {
+		let learning = &config.learning;
+		if !learning.enabled {
+			return;
+		}
+
+		let backend = create_backend(learning);
+		let existing = backend
+			.retrieve_all(&role, &project, &config)
+			.await
+			.unwrap_or_default();
+
+		let existing_text = if existing.is_empty() {
+			"(none)".to_string()
+		} else {
+			existing
+				.iter()
+				.map(|l| format!("- [{}] {}", l.confidence, l.content))
+				.collect::<Vec<_>>()
+				.join("\n")
+		};
+
+		let transcript = build_transcript(&messages);
+		if transcript.is_empty() {
+			return;
+		}
+
+		let system = EXTRACTION_SYSTEM_PROMPT.replace("{existing_lessons}", &existing_text);
+
+		// Call LLM without ChatSession — no cost tracking on exit
+		let response =
+			match call_learning_llm_detached(&config, &learning.model, system, transcript).await {
+				Ok(r) => r,
+				Err(e) => {
+					crate::log_debug!("Learning detached extraction failed: {}", e);
+					return;
+				}
+			};
+
+		let lessons = parse_lesson_tags(&response, &role, &project, &session_name);
+		for lesson in &lessons {
+			if let Err(e) = backend.store(lesson, &config).await {
+				crate::log_debug!("Learning detached store failed: {}", e);
+			} else {
+				crate::log_debug!(
+					"Learning detached stored: [{}] {}",
+					lesson.confidence,
+					lesson.content
+				);
+			}
+		}
+		if !lessons.is_empty() {
+			crate::log_debug!(
+				"Learning detached: {} lessons extracted on exit",
+				lessons.len()
+			);
+		}
+	});
+}
+
+/// LLM call without ChatSession reference — for detached/fire-and-forget extraction.
+async fn call_learning_llm_detached(
+	config: &Config,
+	model: &str,
+	system_content: String,
+	user_content: String,
+) -> Result<String> {
+	let now = crate::utils::time::now_secs();
+	let messages = vec![
+		crate::session::Message {
+			role: "system".to_string(),
+			content: system_content,
+			timestamp: now,
+			cached: false,
+			tool_call_id: None,
+			name: None,
+			tool_calls: None,
+			images: None,
+			videos: None,
+			thinking: None,
+			id: None,
+		},
+		crate::session::Message {
+			role: "user".to_string(),
+			content: user_content,
+			timestamp: now,
+			cached: false,
+			tool_call_id: None,
+			name: None,
+			tool_calls: None,
+			images: None,
+			videos: None,
+			thinking: None,
+			id: None,
+		},
+	];
+
+	let params = crate::session::ChatCompletionWithValidationParams::new(
+		&messages, model, 0.3, 1.0, 0, 4096, config,
+	)
+	.with_max_retries(1);
+
+	let response = crate::session::chat_completion_with_validation(params).await?;
+	Ok(response.content)
+}
+
 /// Call the learning LLM (cheap model) for extraction or retrieval prep.
 pub(crate) async fn call_learning_llm(
 	session: &mut ChatSession,

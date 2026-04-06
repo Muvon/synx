@@ -479,6 +479,21 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 				}
 				InputResult::Exit => {
 					// Ctrl+D pressed - graceful exit handled in input.rs
+					// Fire-and-forget learning extraction on exit
+					if current_config.learning.enabled {
+						let project = current_dir
+							.file_name()
+							.and_then(|n| n.to_str())
+							.unwrap_or("unknown")
+							.to_string();
+						crate::learning::extract::extract_lessons_detached(
+							chat_session.session.messages.clone(),
+							current_config.clone(),
+							role.clone(),
+							project,
+							chat_session.session.info.name.clone(),
+						);
+					}
 					// Kill any running async jobs
 					if let Some(manager) = crate::mcp::agent::functions::get_job_manager() {
 						manager.kill_all();
@@ -493,6 +508,21 @@ pub async fn run_interactive_session<T: std::fmt::Debug>(args: &T, config: &Conf
 
 			// Check if the input is an exit command
 			if input == "/exit" || input == "/quit" {
+				// Fire-and-forget learning extraction on exit
+				if current_config.learning.enabled {
+					let project = current_dir
+						.file_name()
+						.and_then(|n| n.to_str())
+						.unwrap_or("unknown")
+						.to_string();
+					crate::learning::extract::extract_lessons_detached(
+						chat_session.session.messages.clone(),
+						current_config.clone(),
+						role.clone(),
+						project,
+						chat_session.session.info.name.clone(),
+					);
+				}
 				// Kill any running async jobs before exiting
 				if let Some(manager) = crate::mcp::agent::functions::get_job_manager() {
 					manager.kill_all();
