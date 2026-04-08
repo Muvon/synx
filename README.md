@@ -4,15 +4,34 @@
   </a>
   <br /><br />
   <strong>Specialist AI agents that just work.</strong><br />
-  The open-source runtime for community-built experts — any domain, zero setup, no vendor lock-in.
+  <em>The open-source runtime for community-built experts — any domain, zero setup.</em>
   <br /><br />
 
   [![License](https://img.shields.io/badge/license-Apache%202.0-7c3aed?style=flat-square)](LICENSE)
   [![GitHub stars](https://img.shields.io/github/stars/muvon/octomind?style=flat-square&color=7c3aed)](https://github.com/muvon/octomind/stargazers)
   [![Website](https://img.shields.io/badge/website-octomind.run-7c3aed?style=flat-square)](https://octomind.run)
 
+  <br />
+
   [Documentation](https://octomind.run/docs/) · [Community Tap](https://github.com/muvon/octomind-tap) · [Website](https://octomind.run)
 </div>
+
+---
+
+## Table of Contents
+
+- [The Problem](#the-problem)
+- [The Solution: Tap Agents](#the-solution-tap-agents)
+- [Quick Start](#quick-start)
+- [How It Works](#how-it-works)
+- [Runtime Self-Extension](#runtime-self-extension)
+- [Key Features](#key-features)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
@@ -27,11 +46,13 @@ You want an AI that actually knows your domain. Instead you get:
 
 Every AI tool in 2026 is a coding assistant that lets you swap models. **That's it.**
 
-Octomind is different. It's not a framework you configure. It's a **runtime** for specialist agents — any domain — where the community has already done the hard work. You just run it.
-
 ---
 
-## This Is What "Just Works" Looks Like
+## The Solution: Tap Agents
+
+Octomind is different. It's not a framework you configure. It's a **runtime** for specialist agents — any domain — where the community has already done the hard work.
+
+**You just run it.**
 
 ```bash
 # Install once
@@ -40,14 +61,14 @@ export OPENROUTER_API_KEY="your_key"
 
 # Run any community-built specialist — zero setup
 octomind run developer:rust       # Senior Rust dev, full toolchain pre-wired
-octomind run doctor:blood         # Medical lab analyst, reads your actual results
-octomind run devops:kubernetes    # K8s operator with kubectl + helm ready
-octomind run security:pentest     # Security specialist, offensive tooling attached
-octomind run legal:contracts      # Contract reviewer, jurisdiction-aware
-octomind run finance:analyst      # Financial analyst, wired to your data sources
+octomind run doctor:blood          # Medical lab analyst, reads your actual results
+octomind run devops:kubernetes     # K8s operator with kubectl + helm ready
+octomind run security:pentest      # Security specialist, offensive tooling attached
+octomind run legal:contracts       # Contract reviewer, jurisdiction-aware
+octomind run finance:analyst       # Financial analyst, wired to your data sources
 ```
 
-What happens when you run `octomind run doctor:blood`:
+### What Happens When You Run `octomind run doctor:blood`
 
 ```
 → Fetches the agent manifest from the tap registry
@@ -60,24 +81,7 @@ What happens when you run `octomind run doctor:blood`:
 
 This isn't a prompt or a skill. It's **packaged expertise** — ready to run.
 
----
-
-## Quick Start
-
-```bash
-# Install (macOS & Linux)
-curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
-
-# One API key gets you all providers (or use any directly)
-export OPENROUTER_API_KEY="your_key"
-
-# Start with a specialist agent — no setup required
-octomind run developer:rust
-```
-
----
-
-## The Tap: Community-Packaged Expertise
+### The Tap Registry
 
 The tap is a community-driven Git registry. Each agent is a complete, battle-tested configuration built by a domain expert:
 
@@ -88,7 +92,7 @@ The tap is a community-driven Git registry. Each agent is a complete, battle-tes
 - ✅ Dependencies that auto-install on first run
 - ✅ Credential management — asks once, stores permanently
 
-Not a prompt file. Not a skill injection. **The full stack, configured by the community, ready to run.**
+**Not a prompt file. Not a skill injection. The full stack, configured by the community, ready to run.**
 
 ```bash
 # Official tap included by default — just run
@@ -107,11 +111,73 @@ octomind run legal:contracts
 
 Each tap is a Git repo. Each agent is one TOML file. Pull requests are contributions.
 
-> Want to add your expertise? A `developer:golang` agent, a `doctor:ecg` agent, a `lawyer:gdpr` agent — one file, and everyone benefits. [How to write a tap agent →](https://github.com/muvon/octomind-tap)
+> **Want to add your expertise?** A `developer:golang` agent, a `doctor:ecg` agent, a `lawyer:gdpr` agent — one file, and everyone benefits. [How to write a tap agent →](https://github.com/muvon/octomind-tap)
 
 ---
 
-## Agents That Grow Beyond Their Configuration
+## Quick Start
+
+```bash
+# Install (macOS & Linux)
+curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
+
+# One API key gets you all providers (or use any directly)
+export OPENROUTER_API_KEY="your_key"
+
+# Start with a specialist agent — no setup required
+octomind run developer:rust
+```
+
+That's it. You're in an interactive session with a Rust specialist that can read your code, run commands, and edit files.
+
+---
+
+## How It Works
+
+### Core MCP Tools
+
+Octomind has 5 built-in MCP tools that every agent has access to:
+
+| Tool | Purpose |
+|------|---------|
+| `plan` | Structured multi-step task tracking for complex work |
+| `mcp` | Enable/disable MCP servers at runtime — agents can acquire new capabilities on demand |
+| `agent` | Spawn specialist sub-agents mid-session — delegate to the right expert |
+| `schedule` | Schedule messages to be injected at future times |
+| `skill` | Inject reusable instruction packs from taps |
+
+### Filesystem Tools (via octofs)
+
+File operations come from [octofs](https://github.com/muvon/octofs) — a companion MCP server for file read/write/edit:
+
+| Tool | Purpose |
+|------|---------|
+| `view` | Read files, directories, search content |
+| `text_editor` | Create files, replace text, undo edits |
+| `batch_edit` | Atomic multi-file edits with rollback |
+| `shell` | Execute commands with output capture |
+| `semantic_search` | Search codebase by meaning |
+| `structural_search` | Search code by AST patterns |
+| `workdir` | Get/set working directory |
+
+**octofs is external but recommended.** Tap formulas include it by default — plug and play.
+
+### Memory & Knowledge Tools (via octomem)
+
+Long-term memory and knowledge indexing:
+
+| Tool | Purpose |
+|------|---------|
+| `remember` | Semantic search over stored memories |
+| `memorize` | Store information for future sessions |
+| `knowledge` | Index and search documents, URLs, files |
+| `graphrag` | Knowledge graph queries over codebase |
+
+**octomem is external but recommended.** Included in tap formulas that need persistent context.
+
+---
+
+## Runtime Self-Extension
 
 This is the capability nobody else has.
 
@@ -134,11 +200,13 @@ The tap gives the agent its starting configuration. The `mcp` and `agent` tools 
 
 ---
 
-## Zero Config. Infinitely Configurable.
+## Key Features
+
+### 🎯 Zero Config. Infinitely Configurable.
 
 For most people: install, run, done. No config file needed.
 
-For power users and teams: Octomind has the deepest configuration system in the space — and **it's all TOML, no code required**.
+For power users and teams: Octomind has the deepest configuration system in the space — **all TOML, no code required**.
 
 ```toml
 # Per-role: independent model, temperature, MCP servers, tools, system prompt
@@ -168,11 +236,7 @@ max_session_spending_threshold = 5.00
 sandbox = true
 ```
 
-Every role, every layer, every workflow gets its own model, tools, and temperature. Mix providers freely. Build multi-model pipelines. Customize everything — with just a config file, no code.
-
----
-
-## Infinite Sessions With Adaptive Compression
+### 🧠 Infinite Sessions With Adaptive Compression
 
 Context rot is the silent productivity killer. Session fills up → quality drops → agent forgets what it decided an hour ago → you restart and lose everything.
 
@@ -185,9 +249,7 @@ Octomind's adaptive compression engine runs automatically in the background:
 
 Work on a hard problem for 4 hours. The agent still knows what it decided in hour one.
 
----
-
-## 13+ Providers. Switch Instantly. Zero Lock-in.
+### 🔄 13+ Providers. Switch Instantly. Zero Lock-in.
 
 ```bash
 # Hit a rate limit? Switch mid-session — no restart, no lost context
@@ -212,9 +274,7 @@ octomind run --model openai:gpt-4o
 
 Real-time cost tracking per session and per request. Know exactly what you're spending.
 
----
-
-## Works Everywhere — Plug Into Anything
+### 🌐 Works Everywhere — Plug Into Anything
 
 Octomind isn't just an interactive terminal tool. It runs in every context you need:
 
@@ -250,42 +310,151 @@ One binary. Every workflow. Eight arms, infinite domains.
 
 ---
 
-## Built-in Tools
-
-| Category | Tools |
-|----------|-------|
-| **Search** | `ast_grep` — structural code search (not regex), `view` — smart file/dir reader |
-| **Editing** | `text_editor`, `batch_edit` — atomic multi-file edits with rollback |
-| **Execution** | `shell` — full command execution with output capture |
-| **Planning** | `plan` — structured multi-step task tracking |
-| **Self-extension** | `mcp` — enable/disable MCP servers at runtime, `agent` — spawn sub-agents on demand |
-
----
-
 ## Installation
 
-```bash
-# One-line install
-curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
+### One-Line Install
 
-# Build from source
-git clone https://github.com/muvon/octomind.git
-cd octomind && cargo build --release
+```bash
+curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
 ```
 
-**macOS and Linux.** Single Rust binary. Fast startup. No runtime dependencies.
+Detects your OS and architecture, downloads the latest release, installs to `~/.local/bin/`.
+
+### Package Managers
+
+```bash
+# Cargo (Rust)
+cargo install octomind
+```
+
+Requires Rust 1.82+. See [Building from Source](doc/dev/01-building-from-source.md) for development setup.
+
+### Build from Source
+
+```bash
+git clone https://github.com/muvon/octomind.git
+cd octomind
+cargo build --release
+```
+
+### API Key Setup
+
+Set at least one provider API key:
+
+```bash
+# OpenRouter (recommended — access to many providers)
+export OPENROUTER_API_KEY="your_key"
+
+# Or use a specific provider
+export OPENAI_API_KEY="your_key"
+export ANTHROPIC_API_KEY="your_key"
+export DEEPSEEK_API_KEY="your_key"
+```
+
+Add to your shell profile (`~/.bashrc`, `~/.zshrc`) for persistence.
+
+### Verification
+
+```bash
+octomind --version
+octomind config          # generate default config
+octomind run             # start your first session
+```
+
+**macOS and Linux supported.** Single Rust binary. Fast startup. No runtime dependencies.
 
 ---
 
-## Documentation
+## Usage
 
-- [Installation & Setup](doc/01-installation.md)
-- [The Tap — Using & Publishing Agents](doc/tap-guide.md)
-- [Configuration Reference](doc/03-configuration.md)
-- [Providers & Models](doc/04-providers.md)
-- [Sessions & Adaptive Compression](doc/05-sessions.md)
-- [Layers, Workflows & Sub-agents](doc/07-command-layers.md)
-- [WebSocket & ACP Protocol](doc/09-websocket-server.md)
+### Interactive Session
+
+```bash
+# Default: interactive with tools
+octomind run
+
+# Named session (resume later)
+octomind run --name my-feature
+
+# Resume a session
+octomind run --resume my-feature
+
+# Tap agent (fetches specialized config)
+octomind run developer:rust
+```
+
+### Non-Interactive Mode
+
+```bash
+# Single message, plain output
+octomind run developer "Explain the auth module" --format plain
+
+# Structured JSON output for pipelines
+octomind run developer "List TODO items" --schema todos.json --format jsonl
+```
+
+### Session Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show all commands |
+| `/info` | Token usage and costs |
+| `/model <provider:model>` | Switch AI model mid-session |
+| `/role <name>` | Switch role mid-session |
+| `/save` | Save current session |
+| `/exit` | Exit session |
+
+See [Session Commands](doc/reference/02-session-commands.md) for the full list.
+
+---
+
+## Configuration
+
+Configuration lives at `~/.local/share/octomind/config/config.toml`.
+
+```bash
+# View current config
+octomind config --show
+
+# Validate config
+octomind config --validate
+```
+
+Key configuration areas:
+
+- **Roles** — model, temperature, system prompt, MCP servers, tool permissions
+- **Workflows** — multi-step AI processing with validation loops
+- **Pipelines** — deterministic script-driven pre-processing
+- **MCP Servers** — external tools and capabilities
+- **Spending Limits** — per-request and per-session thresholds
+
+See [Configuration Reference](doc/reference/03-config-reference.md) for all options.
+
+---
+
+## Architecture
+
+```
+CLI / WebSocket
+      |
+      v
+ ChatSession          <- src/session/chat/session/ (core.rs, main_loop.rs)
+      |
+      +-- Roles       <- src/config/roles.rs (model, system prompt, MCP servers per role)
+      +-- Layers      <- src/session/layers/ (chained AI sub-agents, run after each response)
+      +-- Pipelines   <- src/session/pipelines/ (deterministic script steps, run before workflows)
+      +-- Workflows   <- src/session/workflows/ (multi-step orchestrated task runners)
+      |
+      +-- MCP servers <- src/mcp/
+            +-- core/     plan, mcp, agent, schedule, skill (built-in)
+            +-- (filesystem tools provided by external octofs MCP server)
+            +-- (memory tools provided by external octomem MCP server)
+            +-- agent/    agent_* tools -> route tasks to configured layers
+```
+
+**Config is the single source of truth.** All defaults live in `config-templates/default.toml`. The resolved config drives everything: which model, which MCP servers, which layers, which role. No hardcoded values anywhere in code.
+
+See [Architecture](doc/dev/02-architecture.md) for detailed internals.
 
 ---
 
@@ -297,10 +466,35 @@ Every domain expert who publishes a specialist makes Octomind useful for an enti
 
 `accountant:tax`, `devops:terraform`, `designer:ux-review`, `scientist:genomics` — the registry grows one file at a time.
 
-[How to write a tap agent →](doc/tap-guide.md) | [Open issues →](https://github.com/muvon/octomind/issues)
+- [How to write a tap agent](https://github.com/muvon/octomind-tap)
+- [Open issues](https://github.com/muvon/octomind/issues)
+- [Building from source](doc/dev/01-building-from-source.md)
 
 ---
 
-**Octomind** by [Muvon](https://muvon.io) | [Website](https://octomind.run) | [Issues](https://github.com/muvon/octomind/issues)
+## Documentation
 
-**License:** Apache 2.0 — © 2025–2026 Muvon Un Limited
+- [Installation & Setup](doc/usage/01-installation.md)
+- [Quickstart](doc/usage/02-quickstart.md)
+- [Configuration](doc/usage/03-configuration.md)
+- [Providers & Models](doc/usage/04-providers.md)
+- [Sessions & Compression](doc/usage/05-sessions.md)
+- [Roles](doc/usage/06-roles.md)
+- [MCP Tools](doc/usage/07-mcp-tools.md)
+- [Workflows](doc/usage/09-workflows.md)
+- [Pipelines](doc/usage/14-pipelines.md)
+- [WebSocket & ACP](doc/integration/01-websocket-server.md)
+- [CLI Reference](doc/reference/01-cli-reference.md)
+- [Config Reference](doc/reference/03-config-reference.md)
+
+Full documentation index: [doc/README.md](doc/README.md)
+
+---
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).
+
+---
+
+**Octomind** by [Muvon](https://muvon.io) | [Website](https://octomind.run) | [Documentation](https://octomind.run/docs/)
