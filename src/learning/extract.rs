@@ -165,7 +165,13 @@ fn build_transcript(messages: &[crate::session::Message]) -> String {
 
 		// Truncate long messages to keep transcript manageable
 		let content = if msg.content.len() > 500 {
-			format!("{}...[truncated]", &msg.content[..500])
+			format!("{}...[truncated]", {
+				let mut end = 500;
+				while !msg.content.is_char_boundary(end) {
+					end -= 1;
+				}
+				&msg.content[..end]
+			})
 		} else {
 			msg.content.clone()
 		};
@@ -223,7 +229,11 @@ fn parse_lesson_tags(response: &str, role: &str, project: &str, source: &str) ->
 			let title = if content.len() <= 80 {
 				content.to_string()
 			} else {
-				let truncated = &content[..80];
+				let mut end = 80;
+				while !content.is_char_boundary(end) {
+					end -= 1;
+				}
+				let truncated = &content[..end];
 				truncated
 					.rfind(' ')
 					.map(|i| format!("{}...", &truncated[..i]))

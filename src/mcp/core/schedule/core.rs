@@ -266,7 +266,13 @@ fn handle_list(call: &McpToolCall) -> Result<McpToolResult> {
 		};
 		// Truncate message preview to 80 chars.
 		let preview = if entry.message.len() > 80 {
-			format!("{}…", &entry.message[..80])
+			format!("{}…", {
+				let mut end = 80;
+				while !entry.message.is_char_boundary(end) {
+					end -= 1;
+				}
+				&entry.message[..end]
+			})
 		} else {
 			entry.message.clone()
 		};
