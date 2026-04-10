@@ -64,11 +64,32 @@ pub fn has_pending_schedules() -> bool {
 /// Returns a future that resolves when the next scheduled entry is due.
 /// Returns `futures::future::pending()` (never resolves) when the store is empty —
 /// so the select! arm is a no-op when nothing is scheduled.
+///
+/// Also wakes up when schedules change (new/edited/removed) via schedule notify.
 pub async fn next_schedule_sleep() {
+	let session_id = crate::session::context::current_session_id();
 	let duration = get_store().lock().unwrap().next_due_duration();
-	match duration {
-		Some(d) => tokio::time::sleep(d).await,
-		None => futures::future::pending::<()>().await,
+
+	match (duration, session_id) {
+		(Some(d), Some(ref sid)) => {
+			// Wait for timer OR schedule change notification
+			let notify = crate::session::context::get_schedule_notify(sid);
+			tokio::select! {
+				_ = tokio::time::sleep(d) => {}
+				_ = notify.notified() => {}
+			}
+		}
+		(Some(d), None) => {
+			tokio::time::sleep(d).await;
+		}
+		(None, Some(ref sid)) => {
+			// No schedules - wait for notification that one was added
+			let notify = crate::session::context::get_schedule_notify(sid);
+			notify.notified().await;
+		}
+		(None, None) => {
+			futures::future::pending::<()>().await;
+		}
 	}
 }
 
@@ -227,6 +248,10 @@ fn handle_add(call: &McpToolCall) -> Result<McpToolResult> {
 
 	get_store().lock().unwrap().add(entry);
 
+	// Wake up the schedule monitor so it recalculates the next due time
+	if let Some(sid) = crate::session::context::current_session_id() {
+		crate::session::context::notify_schedule_change(&sid);
+	}
 	let desc_line = if description.is_empty() {
 		String::new()
 	} else {
@@ -314,6 +339,10 @@ fn handle_remove(call: &McpToolCall) -> Result<McpToolResult> {
 
 	let removed = get_store().lock().unwrap().remove(&id);
 	if removed {
+		// Wake up the schedule monitor so it recalculates the next due time
+		if let Some(sid) = crate::session::context::current_session_id() {
+			crate::session::context::notify_schedule_change(&sid);
+		}
 		Ok(McpToolResult::success(
 			call.tool_name.clone(),
 			call.tool_id.clone(),
@@ -385,6 +414,11 @@ fn handle_edit(call: &McpToolCall) -> Result<McpToolResult> {
 		.edit(&id, new_description, new_message, new_when);
 
 	if updated {
+		// Wake up the schedule monitor so it recalculates the next due time
+		if let Some(sid) = crate::session::context::current_session_id() {
+			crate::session::context::notify_schedule_change(&sid);
+		}
+
 		// Read back the updated entry for confirmation.
 		let store = get_store();
 		let guard = store.lock().unwrap();

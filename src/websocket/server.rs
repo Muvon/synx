@@ -359,10 +359,25 @@ fn spawn_ws_inbox_monitor(
 			session_id
 		);
 		loop {
-			let should_exit = crate::session::context::with_session_id(session_id.clone(), async {
+			// Process phase: flush schedules and drain inbox.
+			// Returns: -1 = exit, 0 = wait for event, 1 = retry immediately (session was busy).
+			let action = crate::session::context::with_session_id(session_id.clone(), async {
 				crate::mcp::core::flush_due_to_inbox();
 
-				while let Some(inbox_msg) = crate::session::inbox::try_pop_inbox_message() {
+				// Drain inbox only if session is available (not held by handle_user_message).
+				while crate::session::inbox::has_inbox_messages() {
+					if !sessions.lock().await.contains_key(&session_id) {
+						// Session temporarily held by message handler. Back off and retry
+						// without going to the wait section (notify permit may be stale).
+						tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+						return 1_i8; // retry
+					}
+
+					let inbox_msg = match crate::session::inbox::try_pop_inbox_message() {
+						Some(msg) => msg,
+						None => break,
+					};
+
 					log_debug!(
 						"WS monitor: processing inbox message from {:?} for {}",
 						inbox_msg.source,
@@ -370,12 +385,13 @@ fn spawn_ws_inbox_monitor(
 					);
 
 					// Take session for exclusive access.
-					let entry = sessions.lock().await.remove(&session_id);
-					let mut chat_session = match entry {
+					let mut chat_session = match sessions.lock().await.remove(&session_id) {
 						Some(s) => s,
 						None => {
-							log_debug!("WS monitor: session {} removed, exiting", session_id);
-							return true;
+							// Race: taken between check and remove. Put message back.
+							crate::session::inbox::push_inbox_message(inbox_msg);
+							tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+							return 1; // retry
 						}
 					};
 
@@ -464,33 +480,32 @@ fn spawn_ws_inbox_monitor(
 						.insert(session_id.clone(), chat_session);
 				}
 
-				false // don't exit
+				0 // wait for event
 			})
 			.await;
 
-			if should_exit || bg_tx.is_closed() {
+			if action < 0 || bg_tx.is_closed() {
+				break;
+			}
+			if action > 0 {
+				// Retry immediately — session was busy, skip wait section.
+				continue;
+			}
+
+			// Exit if session inbox was destroyed (session truly gone via cleanup_session).
+			let inbox_gone = crate::session::context::with_session_id(session_id.clone(), async {
+				crate::session::inbox::get_inbox_notify().is_none()
+			})
+			.await;
+			if inbox_gone {
+				log_debug!("WS monitor: inbox cleared for {}, exiting", session_id);
 				break;
 			}
 
-			// Check if session still exists.
-			if !sessions.lock().await.contains_key(&session_id) {
-				log_debug!("WS monitor: session {} gone, exiting", session_id);
-				break;
-			}
-
-			// Wait for the next event: schedule timer or inbox message.
-			let should_exit = crate::session::context::with_session_id(session_id.clone(), async {
-				let has_schedules = crate::mcp::core::has_pending_schedules();
-				let active_jobs = crate::mcp::agent::functions::get_job_manager()
-					.map(|m| m.active_count())
-					.unwrap_or(0);
-
-				if !has_schedules && active_jobs == 0 {
-					// Nothing to wait for — sleep briefly and re-check.
-					tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-					return false;
-				}
-
+			// Wait for the next event: schedule timer, inbox message, or schedule change.
+			// next_schedule_sleep() handles the empty case (waits for schedule-change notify),
+			// so no special polling branch is needed.
+			crate::session::context::with_session_id(session_id.clone(), async {
 				let inbox_notify = crate::session::inbox::get_inbox_notify();
 				tokio::select! {
 					_ = crate::mcp::core::next_schedule_sleep() => {}
@@ -502,13 +517,8 @@ fn spawn_ws_inbox_monitor(
 						}
 					} => {}
 				}
-				false
 			})
 			.await;
-
-			if should_exit {
-				break;
-			}
 		}
 		log_debug!(
 			"WebSocket: inbox monitor exited for session: {}",

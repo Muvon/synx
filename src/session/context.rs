@@ -411,6 +411,54 @@ pub fn get_schedule_storage(session_id: &SessionId) -> Arc<Mutex<ScheduleStore>>
 	storage
 }
 
+// ---------------------------------------------------------------------------
+// Session-keyed schedule notify
+// ---------------------------------------------------------------------------
+
+use tokio::sync::Notify;
+
+/// Registry for schedule notify, keyed by session ID.
+/// Each session has its own Notify that wakes up when schedules change.
+static SCHEDULE_NOTIFIES: RwLock<Option<HashMap<SessionId, Arc<Notify>>>> = RwLock::new(None);
+
+/// Get or create schedule notify for a session.
+pub fn get_schedule_notify(session_id: &SessionId) -> Arc<Notify> {
+	{
+		let guard = SCHEDULE_NOTIFIES.read().unwrap();
+		if let Some(registry) = guard.as_ref() {
+			if let Some(notify) = registry.get(session_id) {
+				return notify.clone();
+			}
+		}
+	}
+
+	// Create new notify
+	let mut guard = SCHEDULE_NOTIFIES.write().unwrap();
+	let registry = guard.get_or_insert_with(HashMap::new);
+	let notify = Arc::new(Notify::new());
+	registry.insert(session_id.clone(), notify.clone());
+	notify
+}
+
+/// Notify that schedules have changed for a session.
+pub fn notify_schedule_change(session_id: &SessionId) {
+	let guard = SCHEDULE_NOTIFIES.read().unwrap();
+	if let Some(registry) = guard.as_ref() {
+		if let Some(notify) = registry.get(session_id) {
+			notify.notify_one();
+		}
+	}
+}
+
+/// Remove schedule notify when a session ends.
+pub fn clear_schedule_notify(session_id: &SessionId) {
+	if let Ok(mut guard) = SCHEDULE_NOTIFIES.write() {
+		if let Some(registry) = guard.as_mut() {
+			registry.remove(session_id);
+		}
+	}
+}
+
 /// Remove schedule storage when a session ends.
 pub fn clear_schedule_storage(session_id: &SessionId) {
 	if let Ok(mut guard) = SCHEDULE_REGISTRIES.write() {
@@ -949,5 +997,5 @@ pub fn cleanup_session(session_id: &SessionId) {
 	clear_skill_compress_requests(session_id);
 	crate::session::inbox::clear_inbox_for_session(session_id);
 	crate::mcp::core::plan::compression::cleanup_compression_state(session_id);
-	crate::log_debug!("Cleaned up session-scoped state for: {}", session_id);
+	clear_schedule_notify(session_id);
 }
