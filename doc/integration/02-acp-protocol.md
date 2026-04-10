@@ -55,6 +55,38 @@ When the AI calls `agent_context_gatherer(task="...")`, Octomind:
 
 The `command` field in `[[agents]]` can point to any ACP-compatible binary, not just Octomind. This enables integration with custom tools and services.
 
+## Background Inbox Monitor
+
+ACP sessions automatically spawn a background task that monitors the session's inbox for incoming messages from schedules, webhooks, injections, and background agents. When a message arrives:
+
+1. The monitor acquires the session
+2. Processes the message through the full AI pipeline (tool calls, streaming, etc.)
+3. Streams the response back to the ACP client
+4. Returns the session to the pool
+
+This uses `tokio::sync::Notify` for efficient event-driven wake-ups — no polling. The monitor exits when the session is destroyed.
+
+## Session ID in MCP Capabilities
+
+MCP servers receive a `session_id` field during the initialize handshake. This is sent under `capabilities.experimental.session`:
+
+```json
+{
+  "capabilities": {
+    "experimental": {
+      "session": {
+        "role": "developer",
+        "spec": "...",
+        "project": "my-project",
+        "session_id": "abc123..."
+      }
+    }
+  }
+}
+```
+
+This allows MCP servers to identify and track specific sessions, enabling session-scoped state and per-session behavior.
+
 ## Error Handling
 
 - Protocol errors are logged to `~/.local/share/octomind/logs/acp-errors.jsonl`

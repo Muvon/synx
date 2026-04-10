@@ -30,16 +30,27 @@ src/
     oauth_config.rs          # OAuth 2.1 + PKCE validation
     hooks.rs                 # Webhook hook config
     workflows.rs             # Workflow + step definitions
+    pipelines.rs             # Pipeline step definitions and parsing
     layers.rs                # Layer configuration
     agents.rs                # Agent (ACP) configuration
     env_source.rs            # .env tracking
     registry.rs              # Capability resolution
 
+  learning/
+    mod.rs                   # LearningConfig, Lesson struct, public API
+    extract.rs               # Lesson extraction from conversations (LLM-based)
+    inject.rs                # Lesson retrieval and system prompt injection
+    backend/
+      mod.rs                 # LearningBackend trait, factory
+      file.rs                # File-based backend (markdown + YAML frontmatter)
+      mcp.rs                 # MCP tool backend (e.g., octobrain)
+
   session/
     mod.rs                   # Message types, session entry points
+    context.rs               # Session context with learning state
+    persistence.rs           # Session save/restore
     inbox.rs                 # Unified inbox (schedule, agent, skill, inject, webhook)
     inject_listener.rs       # Unix socket for message injection
-    history/                 # Session persistence
 
     chat/
       mod.rs                 # Chat orchestration
@@ -56,7 +67,8 @@ src/
 
     cache.rs                 # Cache marker management
     layers/                  # Layer execution engine
-    workflows/               # Workflow orchestrator
+    workflows/               # Workflow orchestrator (with step timing)
+    pipelines/               # Deterministic script pipeline executor
     output.rs                # OutputMode, OutputSink trait
 
   mcp/

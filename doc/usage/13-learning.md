@@ -63,6 +63,7 @@ Files are human-readable and editable. Delete a file to remove a lesson.
 Triggered by:
 - **`/done`** — always extracts, regardless of compression result.
 - **Auto-compaction** — extracts during compression if the session has enough user messages (configurable via `min_messages_for_intermediate`).
+- **Session exit** — fire-and-forget extraction when the session ends naturally (not via `/done`). Runs asynchronously with no cost tracking. Skipped if `/done` already extracted during the session.
 
 The extraction LLM receives the conversation transcript plus existing lessons (for deduplication) and outputs structured `<lesson>` tags with confidence and tags.
 

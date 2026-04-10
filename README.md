@@ -444,6 +444,7 @@ CLI / WebSocket
       +-- Layers      <- src/session/layers/ (chained AI sub-agents, run after each response)
       +-- Pipelines   <- src/session/pipelines/ (deterministic script steps, run before workflows)
       +-- Workflows   <- src/session/workflows/ (multi-step orchestrated task runners)
+      +-- Learning    <- src/learning/ (cross-session lesson extraction and injection)
       |
       +-- MCP servers <- src/mcp/
             +-- core/     plan, mcp, agent, schedule, skill (built-in)
@@ -483,6 +484,7 @@ Every domain expert who publishes a specialist makes Octomind useful for an enti
 - [MCP Tools](doc/usage/07-mcp-tools.md)
 - [Workflows](doc/usage/09-workflows.md)
 - [Pipelines](doc/usage/14-pipelines.md)
+- [Learning](doc/usage/13-learning.md)
 - [WebSocket & ACP](doc/integration/01-websocket-server.md)
 - [CLI Reference](doc/reference/01-cli-reference.md)
 - [Config Reference](doc/reference/03-config-reference.md)

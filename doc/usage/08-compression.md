@@ -94,6 +94,19 @@ net_benefit =
 - Applies velocity decay (sessions slow down over time)
 - Bounded: minimum 5 calls, maximum 2x current calls or 100
 
+### Forced vs Automatic Compression
+
+The `/done` command triggers **forced compression**, which behaves differently from automatic compression:
+
+| Behavior | Forced (`/done`) | Automatic |
+|----------|-------------------|-----------|
+| Minimum context threshold | Bypassed (20% floor ignored) | Respected |
+| Exponential cooldown | Resets counters | Applied normally |
+| Aggressiveness | More aggressive cleanup | Preserves more context |
+| Purpose | Session boundary — clean slate | Mid-session cost optimization |
+
+Forced compression marks a task boundary. It resets cooldown counters so the next task starts fresh without accumulated compression debt.
+
 ### Context Preservation
 
 - Last 4 turns (2 exchanges) always remain uncompressed

@@ -24,6 +24,17 @@ Octomind also loads `.env` files from the current directory via `dotenvy`. Varia
 |----------|-------------|
 | `OCTOMIND_CONFIG_PATH` | Override config directory path (default: `~/.local/share/octomind/config/`) |
 
+## Installation Script
+
+Variables used by `install.sh` for automated/CI environments.
+
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_TOKEN` | GitHub API token to avoid rate limits during installation |
+| `GH_TOKEN` | Alternative token variable (GitHub CLI convention) |
+| `OCTOMIND_INSTALL_DIR` | Override installation directory (default: `~/.local/bin/`) |
+| `OCTOMIND_VERSION` | Install a specific version instead of latest |
+
 ## OpenRouter-Specific
 
 | Variable | Default | Description |

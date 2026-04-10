@@ -175,6 +175,23 @@ allowed_tools = []
 
 See [Commands and Layers](10-commands-and-layers.md) for layer configuration details.
 
+## Step Timing
+
+Each workflow step captures its execution duration. The orchestrator tracks both per-step and total workflow time:
+
+```
+── developer_workflow | refine | Step 1/2 | 1250ms ──
+── developer_workflow | research | Step 2/2 | 3400ms ──
+```
+
+Step outputs include:
+- `step_name` — which step ran
+- `step_index` / `total_steps` — progress indicator
+- `duration_ms` — per-step milliseconds
+- Total `duration_secs` — aggregate workflow time
+
+This is useful for profiling workflow efficiency and identifying slow steps.
+
 ## Best Practices
 
 1. **Use appropriate output modes**: `"none"` for intermediate steps, `"append"` for final output

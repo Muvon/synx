@@ -27,6 +27,7 @@ For users working with Octomind day-to-day.
 | [Commands & Layers](usage/10-commands-and-layers.md) | Custom commands, layers, agents, prompts |
 | [Structured Output](usage/11-structured-output.md) | JSON Schema output for automation |
 | [Editor Integration](usage/12-editor-integration.md) | Neovim, Zed, JetBrains setup |
+| [Learning](usage/13-learning.md) | Cross-session adaptive learning |
 
 ## Integration Guide
 

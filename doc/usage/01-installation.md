@@ -83,6 +83,23 @@ echo 'fpath=(~/.zfunc $fpath)' >> ~/.zshrc
 echo 'autoload -Uz compinit && compinit' >> ~/.zshrc
 ```
 
+## CI/CD Installation
+
+The install script supports environment variables for automated environments where GitHub API rate limits may apply:
+
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_TOKEN` or `GH_TOKEN` | Authenticate GitHub API requests to avoid rate limits |
+| `OCTOMIND_INSTALL_DIR` | Override installation directory (default: `~/.local/bin/`) |
+| `OCTOMIND_VERSION` | Install a specific version instead of latest |
+
+```bash
+# CI example
+GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+  OCTOMIND_VERSION="0.23.1" \
+  curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
+```
+
 ## Verification
 
 ```bash
