@@ -135,69 +135,92 @@ async fn handle_connection(
 	);
 	send_message(&mut ws_sender, &welcome).await?;
 
-	// Process messages sequentially (like terminal)
-	while let Some(msg) = ws_receiver.next().await {
-		match msg {
-			Ok(Message::Text(text)) => {
-				log_debug!("Received message from {}: {} bytes", peer_addr, text.len());
+	// Channel for background tasks (schedule monitors) to send messages to the client.
+	// Background tasks can't access ws_sender directly (not Send), so they push
+	// ServerMessages here and the connection loop forwards them.
+	let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel::<ServerMessage>();
 
-				// Parse client message
-				let client_msg = match serde_json::from_str::<ClientMessage>(&text) {
-					Ok(msg) => {
-						log_debug!("Parsed message: {:?}", msg);
-						msg
+	// Process messages from both WebSocket and background tasks
+	loop {
+		tokio::select! {
+			ws_msg = ws_receiver.next() => {
+				let msg = match ws_msg {
+					Some(msg) => msg,
+					None => break, // stream ended
+				};
+				match msg {
+					Ok(Message::Text(text)) => {
+						log_debug!("Received message from {}: {} bytes", peer_addr, text.len());
+
+						// Parse client message
+						let client_msg = match serde_json::from_str::<ClientMessage>(&text) {
+							Ok(msg) => {
+								log_debug!("Parsed message: {:?}", msg);
+								msg
+							}
+							Err(e) => {
+								log_error!("Invalid JSON from {}: {}", peer_addr, e);
+								let error = ServerMessage::error(format!("Invalid JSON: {}", e));
+								send_message(&mut ws_sender, &error).await?;
+								continue;
+							}
+						};
+
+						// Validate message
+						if let Err(e) = client_msg.validate() {
+							log_error!("Message validation failed from {}: {}", peer_addr, e);
+							let error = ServerMessage::error(e);
+							send_message(&mut ws_sender, &error).await?;
+							continue;
+						}
+
+						// Process the message
+						if let Err(e) = process_client_message(
+							client_msg,
+							&mut ws_sender,
+							&config,
+							&role,
+							&sessions,
+							&session_locks,
+							&mut active_session_ids,
+							&bg_tx,
+						)
+						.await
+						{
+							log_error!("Message processing failed for {}: {}", peer_addr, e);
+							let error = ServerMessage::error(format!("Internal error: {}", e));
+							send_message(&mut ws_sender, &error).await?;
+						}
+					}
+					Ok(Message::Close(_)) => {
+						log_info!("Client {} closed connection", peer_addr);
+						break;
+					}
+					Ok(Message::Ping(data)) => {
+						log_debug!("Ping received from {}", peer_addr);
+						// Respond to ping with pong
+						if let Err(e) = ws_sender.send(Message::Pong(data)).await {
+							log_error!("Failed to send pong to {}: {}", peer_addr, e);
+							break;
+						}
+					}
+					Ok(_) => {
+						// Ignore other message types (binary, pong, etc.)
 					}
 					Err(e) => {
-						log_error!("Invalid JSON from {}: {}", peer_addr, e);
-						let error = ServerMessage::error(format!("Invalid JSON: {}", e));
-						send_message(&mut ws_sender, &error).await?;
-						continue;
+						log_error!("WebSocket protocol error from {}: {}", peer_addr, e);
+						break;
 					}
-				};
-
-				// Validate message
-				if let Err(e) = client_msg.validate() {
-					log_error!("Message validation failed from {}: {}", peer_addr, e);
-					let error = ServerMessage::error(e);
-					send_message(&mut ws_sender, &error).await?;
-					continue;
-				}
-
-				// Process the message
-				if let Err(e) = process_client_message(
-					client_msg,
-					&mut ws_sender,
-					&config,
-					&role,
-					&sessions,
-					&session_locks,
-					&mut active_session_ids,
-				)
-				.await
-				{
-					log_error!("Message processing failed for {}: {}", peer_addr, e);
-					let error = ServerMessage::error(format!("Internal error: {}", e));
-					send_message(&mut ws_sender, &error).await?;
 				}
 			}
-			Ok(Message::Close(_)) => {
-				log_info!("Client {} closed connection", peer_addr);
-				break;
-			}
-			Ok(Message::Ping(data)) => {
-				log_debug!("Ping received from {}", peer_addr);
-				// Respond to ping with pong
-				if let Err(e) = ws_sender.send(Message::Pong(data)).await {
-					log_error!("Failed to send pong to {}: {}", peer_addr, e);
-					break;
+			// Forward background messages (from schedule/inbox monitors) to the client.
+			bg_msg = bg_rx.recv() => {
+				if let Some(msg) = bg_msg {
+					if let Err(e) = send_message(&mut ws_sender, &msg).await {
+						log_error!("Failed to forward background message: {}", e);
+						break;
+					}
 				}
-			}
-			Ok(_) => {
-				// Ignore other message types (binary, pong, etc.)
-			}
-			Err(e) => {
-				log_error!("WebSocket protocol error from {}: {}", peer_addr, e);
-				break;
 			}
 		}
 	}
@@ -222,6 +245,7 @@ async fn handle_connection(
 }
 
 /// Process a client message and send responses
+#[allow(clippy::too_many_arguments)]
 async fn process_client_message(
 	client_msg: ClientMessage,
 	ws_sender: &mut futures_util::stream::SplitSink<
@@ -233,10 +257,20 @@ async fn process_client_message(
 	sessions: &Arc<Mutex<HashMap<String, ChatSession>>>,
 	session_locks: &SessionLocks,
 	active_session_ids: &mut HashSet<String>,
+	bg_tx: &tokio::sync::mpsc::UnboundedSender<ServerMessage>,
 ) -> Result<()> {
 	match client_msg {
 		ClientMessage::Session(msg) => {
-			handle_session_message(msg, ws_sender, config, role, sessions, active_session_ids).await
+			handle_session_message(
+				msg,
+				ws_sender,
+				config,
+				role,
+				sessions,
+				active_session_ids,
+				bg_tx,
+			)
+			.await
 		}
 		ClientMessage::Message(msg) => {
 			let session_id = msg.session_id.clone();
@@ -305,6 +339,184 @@ async fn get_or_create_session_lock(
 		.clone()
 }
 
+/// Spawn a background task that monitors schedules and inbox for a WebSocket session.
+///
+/// Runs independently of user prompts — when a scheduled entry fires or an inbox
+/// message arrives, the task takes the session from the map, processes the message
+/// through the full AI pipeline, sends results through `bg_tx` for the connection
+/// loop to forward to the client, and puts the session back.
+/// Exits when the session is removed from the map or the bg_tx channel is closed.
+fn spawn_ws_inbox_monitor(
+	session_id: String,
+	sessions: Arc<Mutex<HashMap<String, ChatSession>>>,
+	config: Config,
+	role: String,
+	bg_tx: tokio::sync::mpsc::UnboundedSender<ServerMessage>,
+) {
+	tokio::spawn(async move {
+		log_debug!(
+			"WebSocket: inbox monitor started for session: {}",
+			session_id
+		);
+		loop {
+			let should_exit = crate::session::context::with_session_id(session_id.clone(), async {
+				crate::mcp::core::flush_due_to_inbox();
+
+				while let Some(inbox_msg) = crate::session::inbox::try_pop_inbox_message() {
+					log_debug!(
+						"WS monitor: processing inbox message from {:?} for {}",
+						inbox_msg.source,
+						session_id
+					);
+
+					// Take session for exclusive access.
+					let entry = sessions.lock().await.remove(&session_id);
+					let mut chat_session = match entry {
+						Some(s) => s,
+						None => {
+							log_debug!("WS monitor: session {} removed, exiting", session_id);
+							return true;
+						}
+					};
+
+					let config_for_role = config.get_merged_config_for_role(&role);
+					let mut cancellation = crate::session::cancellation::SessionCancellation::new();
+					let op_rx = cancellation.new_operation();
+
+					if let Err(e) = chat_session.add_user_message(&inbox_msg.content) {
+						log_error!("WS monitor: failed to add inbox message: {}", e);
+						sessions
+							.lock()
+							.await
+							.insert(session_id.clone(), chat_session);
+						continue;
+					}
+
+					if let Err(e) =
+						prepare_for_api_call(&mut chat_session, &config_for_role, op_rx.clone())
+							.await
+					{
+						log_error!("WS monitor: failed to prepare API call: {}", e);
+						sessions
+							.lock()
+							.await
+							.insert(session_id.clone(), chat_session);
+						continue;
+					}
+
+					// Stream results through a channel that feeds into bg_tx.
+					let (ws_tx, mut ws_rx) =
+						tokio::sync::mpsc::unbounded_channel::<ServerMessage>();
+					let ws_sink = WebSocketSink::new(ws_tx.clone());
+
+					crate::mcp::process::set_notification_sender(Some(session_id.clone()), ws_tx);
+
+					let bg_tx_fwd = bg_tx.clone();
+					let forward_task = tokio::spawn(async move {
+						while let Some(msg) = ws_rx.recv().await {
+							if bg_tx_fwd.send(msg).is_err() {
+								break; // connection closed
+							}
+						}
+					});
+
+					let result = execute_api_call_and_process_response(
+						&mut chat_session,
+						&config_for_role,
+						&role,
+						op_rx,
+						OutputMode::WebSocket,
+						ws_sink,
+					)
+					.await;
+
+					crate::mcp::process::clear_notification_sender(Some(session_id.clone()));
+					let _ = forward_task.await;
+
+					if let Err(e) = result {
+						log_debug!("WS monitor: error processing inbox message: {}", e);
+					}
+
+					// Send cost update after processing.
+					let total_tokens = chat_session.session.info.input_tokens
+						+ chat_session.session.info.output_tokens
+						+ chat_session.session.info.cache_read_tokens
+						+ chat_session.session.info.cache_write_tokens
+						+ chat_session.session.info.reasoning_tokens;
+					let _ = bg_tx.send(ServerMessage::Cost(CostPayload {
+						session_tokens: total_tokens,
+						session_cost: chat_session.session.info.total_cost,
+						input_tokens: chat_session.session.info.input_tokens,
+						output_tokens: chat_session.session.info.output_tokens,
+						cache_read_tokens: chat_session.session.info.cache_read_tokens,
+						cache_write_tokens: chat_session.session.info.cache_write_tokens,
+						reasoning_tokens: chat_session.session.info.reasoning_tokens,
+						session_id: session_id.clone(),
+					}));
+
+					// Save and put session back.
+					if let Err(e) = chat_session.save() {
+						log_error!("WS monitor: failed to save session: {}", e);
+					}
+					sessions
+						.lock()
+						.await
+						.insert(session_id.clone(), chat_session);
+				}
+
+				false // don't exit
+			})
+			.await;
+
+			if should_exit || bg_tx.is_closed() {
+				break;
+			}
+
+			// Check if session still exists.
+			if !sessions.lock().await.contains_key(&session_id) {
+				log_debug!("WS monitor: session {} gone, exiting", session_id);
+				break;
+			}
+
+			// Wait for the next event: schedule timer or inbox message.
+			let should_exit = crate::session::context::with_session_id(session_id.clone(), async {
+				let has_schedules = crate::mcp::core::has_pending_schedules();
+				let active_jobs = crate::mcp::agent::functions::get_job_manager()
+					.map(|m| m.active_count())
+					.unwrap_or(0);
+
+				if !has_schedules && active_jobs == 0 {
+					// Nothing to wait for — sleep briefly and re-check.
+					tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+					return false;
+				}
+
+				let inbox_notify = crate::session::inbox::get_inbox_notify();
+				tokio::select! {
+					_ = crate::mcp::core::next_schedule_sleep() => {}
+					_ = async {
+						if let Some(notify) = inbox_notify {
+							notify.notified().await;
+						} else {
+							std::future::pending::<()>().await;
+						}
+					} => {}
+				}
+				false
+			})
+			.await;
+
+			if should_exit {
+				break;
+			}
+		}
+		log_debug!(
+			"WebSocket: inbox monitor exited for session: {}",
+			session_id
+		);
+	});
+}
+
 /// Handle a "session" type message: create new or resume existing session.
 /// No AI call is made — just session setup. Responds with session_id.
 async fn handle_session_message(
@@ -317,6 +529,7 @@ async fn handle_session_message(
 	role: &str,
 	sessions: &Arc<Mutex<HashMap<String, ChatSession>>>,
 	active_session_ids: &mut HashSet<String>,
+	bg_tx: &tokio::sync::mpsc::UnboundedSender<ServerMessage>,
 ) -> Result<()> {
 	log_debug!("Handling session message: session_id={:?}", msg.session_id);
 
@@ -391,6 +604,11 @@ async fn handle_session_message(
 
 	// Wrap in session context so all session-scoped registries route correctly
 	crate::session::context::with_session_id(session_id.clone(), async {
+		// Initialize session-scoped inbox and job manager so schedule/inbox
+		// storage is keyed to this session ID.
+		crate::session::inbox::init_inbox_for_session();
+		crate::mcp::agent::functions::init_job_manager();
+
 		setup_system_prompt_and_cache(&mut chat_session, &config_for_role, &session_role, false)
 			.await?;
 
@@ -410,12 +628,24 @@ async fn handle_session_message(
 
 		send_message(
 			ws_sender,
-			&ServerMessage::status(status_msg, Some(session_id)),
+			&ServerMessage::status(status_msg, Some(session_id.clone())),
 		)
 		.await?;
-		Ok(())
+		Ok::<(), anyhow::Error>(())
 	})
-	.await
+	.await?;
+
+	// Spawn independent background task that monitors schedules/inbox
+	// and processes messages automatically without waiting for user prompts.
+	spawn_ws_inbox_monitor(
+		session_id,
+		Arc::clone(sessions),
+		config.clone(),
+		role.to_string(),
+		bg_tx.clone(),
+	);
+
+	Ok(())
 }
 
 /// Look up an existing session: memory first, then disk. Never auto-create.
@@ -752,68 +982,6 @@ async fn handle_user_message(
 			log_error!("API call failed: {}", e);
 			let error = ServerMessage::error(format!("Error: {}", e));
 			send_message(ws_sender, &error).await?;
-		}
-	}
-
-	// Keep session alive while there are pending inbox messages, scheduled entries, or active jobs.
-	// All injection sources push to the inbox — drain it here, same as non-interactive mode.
-	loop {
-		// Flush any due schedule entries into the inbox first.
-		crate::mcp::core::flush_due_to_inbox();
-
-		// Process all messages currently in the inbox.
-		while let Some(inbox_msg) = crate::session::inbox::try_pop_inbox_message() {
-			log_debug!(
-				"WebSocket: processing inbox message from {:?}",
-				inbox_msg.source
-			);
-			chat_session.add_user_message(&inbox_msg.content)?;
-			let op_rx = cancellation.new_operation();
-			prepare_for_api_call(&mut chat_session, &config_for_role, op_rx.clone()).await?;
-
-			let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-			let sink = WebSocketSink::new(tx);
-
-			let result = execute_api_call_and_process_response(
-				&mut chat_session,
-				&config_for_role,
-				role,
-				op_rx,
-				OutputMode::WebSocket,
-				sink,
-			)
-			.await;
-
-			while let Ok(msg) = rx.try_recv() {
-				send_message(ws_sender, &msg).await?;
-			}
-
-			if let Err(e) = result {
-				log_debug!("Error processing inbox message (websocket): {}", e);
-			}
-		}
-
-		// Check if there's anything left to wait for.
-		let has_schedules = crate::mcp::core::has_pending_schedules();
-		let active_jobs = crate::mcp::agent::functions::get_job_manager()
-			.map(|m| m.active_count())
-			.unwrap_or(0);
-
-		if !has_schedules && active_jobs == 0 {
-			break;
-		}
-
-		// Wait for the next event: either a schedule timer fires or an inbox message arrives.
-		let inbox_notify = crate::session::inbox::get_inbox_notify();
-		tokio::select! {
-			_ = crate::mcp::core::next_schedule_sleep() => {}
-			_ = async {
-				if let Some(notify) = inbox_notify {
-					notify.notified().await;
-				} else {
-					std::future::pending::<()>().await;
-				}
-			} => {}
 		}
 	}
 
