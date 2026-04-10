@@ -359,20 +359,17 @@ fn spawn_ws_inbox_monitor(
 			session_id
 		);
 		loop {
-			// Process phase: flush schedules and drain inbox.
-			// Returns: -1 = exit, 0 = wait for event, 1 = retry immediately (session was busy).
-			let action = crate::session::context::with_session_id(session_id.clone(), async {
+			// Process phase: flush due schedules into inbox, then drain.
+			// Returns true to exit the monitor loop.
+			let should_exit = crate::session::context::with_session_id(session_id.clone(), async {
 				crate::mcp::core::flush_due_to_inbox();
 
-				// Drain inbox only if session is available (not held by handle_user_message).
-				while crate::session::inbox::has_inbox_messages() {
-					if !sessions.lock().await.contains_key(&session_id) {
-						// Session temporarily held by message handler. Back off and retry
-						// without going to the wait section (notify permit may be stale).
-						tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-						return 1_i8; // retry
-					}
-
+				// Drain inbox only when session is available.
+				// If held by handle_user_message(), skip — it fires inbox_notify when done,
+				// which wakes us from the wait section to retry.
+				while crate::session::inbox::has_inbox_messages()
+					&& sessions.lock().await.contains_key(&session_id)
+				{
 					let inbox_msg = match crate::session::inbox::try_pop_inbox_message() {
 						Some(msg) => msg,
 						None => break,
@@ -388,10 +385,10 @@ fn spawn_ws_inbox_monitor(
 					let mut chat_session = match sessions.lock().await.remove(&session_id) {
 						Some(s) => s,
 						None => {
-							// Race: taken between check and remove. Put message back.
+							// Taken between check and remove. Put message back —
+							// handle_user_message() will fire inbox_notify when it returns the session.
 							crate::session::inbox::push_inbox_message(inbox_msg);
-							tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-							return 1; // retry
+							return false;
 						}
 					};
 
@@ -480,16 +477,12 @@ fn spawn_ws_inbox_monitor(
 						.insert(session_id.clone(), chat_session);
 				}
 
-				0 // wait for event
+				false // don't exit
 			})
 			.await;
 
-			if action < 0 || bg_tx.is_closed() {
+			if should_exit || bg_tx.is_closed() {
 				break;
-			}
-			if action > 0 {
-				// Retry immediately — session was busy, skip wait section.
-				continue;
 			}
 
 			// Exit if session inbox was destroyed (session truly gone via cleanup_session).
@@ -1002,11 +995,14 @@ async fn handle_user_message(
 	// Clear the notification sender now that this request is done
 	crate::mcp::process::clear_notification_sender(Some(session_id.clone()));
 
-	// Store session back
+	// Store session back and wake inbox monitor if it has pending messages.
 	sessions
 		.lock()
 		.await
 		.insert(session_id.clone(), chat_session);
+	if let Some(notify) = crate::session::inbox::get_inbox_notify() {
+		notify.notify_one();
+	}
 	log_debug!("Session stored back in memory: {}", session_id);
 
 	Ok(())
