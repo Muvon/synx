@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.24.0] - 2026-04-10
+
+### 📋 Release Summary
+
+This release introduces a cross-session adaptive learning system with automatic lesson extraction and an inbox monitor for improved background session management. Pipeline execution is now deterministic with step timing display, and GitHub token authentication has been added for CI rate limits. Several bug fixes improve stdin handling, UTF-8 character support, and system stability (7bfd8852, 5b120090, edc69aeb, c44be5f9, 9a3a5ddf, c7f239e1, 7d04200b, e2e089db, d28c5bf7, 91859d75).
+
+
+### ✨ New Features & Enhancements
+
+- **install**: add GitHub token auth for CI rate limits `7bfd8852`
+- **acp**: add background inbox monitor for sessions `5b120090`
+- **orchestrator**: add step timing and result display `edc69aeb`
+- **pipeline**: add deterministic pipeline execution `c44be5f9`
+- **learning**: add fire-and-forget lesson extraction on exit `ee725ca6`
+- **learning**: add title and octobrain support `66f954c6`
+- **learning**: add cross-session adaptive learning system `9a3a5ddf`
+- **mcp**: include session_id in MCP server capabilities `53e8f540`
+
+### 🔧 Improvements & Optimizations
+
+- **smoke**: refactor and add smoke tests `5ce17e92`
+- **inbox**: replace sleep polling with notify wake-up `c20ff1eb`
+- **compression**: differentiate forced /done from automatic compression behavior `d64a579a`
+- **learning**: improve extraction with evidence and deduplication `38678da9`
+- **learning**: add debug logging for extraction and retrieval `f499f565`
+- **session**: remove SIGTSTP truncation point handler `998ba55f`
+
+### 🐛 Bug Fixes & Stability
+
+- **agent**: improve dep script error reporting with stderr output `c7f239e1`
+- **run**: read piped stdin before async subprocess spawning `7d04200b`
+- **acp**: resolve inbox monitor race conditions `e2e089db`
+- prevent UTF-8 truncation splitting multi-byte characters `d28c5bf7`
+- **session**: handle interrupted tool calls cleanly `91859d75`
+
+### 📚 Documentation & Examples
+
+- add learning features and CI/CD documentation `af5297f5`
+- **readme**: add TOC and detailed usage sections `5604913f`
+- **pipelines**: add pipeline feature documentation `5e92fa61`
+
 ## [0.23.1] - 2026-04-04
 
 ### 📋 Release Summary
