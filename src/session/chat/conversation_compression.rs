@@ -157,14 +157,17 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 
 	if net_benefit > 0.0 {
 		// Verify compression will actually reduce context meaningfully
-		let (start_idx, end_idx) =
-			match find_compression_range(&session.session.messages, session.first_prompt_idx) {
-				Ok(range) => range,
-				Err(e) => {
-					log_debug!("Failed to find compression range: {}", e);
-					return (false, 2.0);
-				}
-			};
+		let (start_idx, end_idx) = match find_compression_range(
+			&session.session.messages,
+			session.first_prompt_idx,
+			false,
+		) {
+			Ok(range) => range,
+			Err(e) => {
+				log_debug!("Failed to find compression range: {}", e);
+				return (false, 2.0);
+			}
+		};
 
 		if start_idx >= end_idx {
 			log_debug!(
@@ -665,7 +668,7 @@ pub async fn check_and_compress_conversation(
 	operation_rx: tokio::sync::watch::Receiver<bool>,
 	force: bool,
 ) -> Result<bool> {
-	let (should_check, _) = should_check_compression(session, config).await;
+	let (should_check, computed_ratio) = should_check_compression(session, config).await;
 
 	if !force && !should_check {
 		return Ok(false);
@@ -678,6 +681,19 @@ pub async fn check_and_compress_conversation(
 			let current_tokens = session.get_full_context_tokens(config).await;
 			current_tokens >= config.max_session_tokens_threshold
 		});
+
+	// When force=true (/done), use fixed level 1 pressure ratio (no adaptive adjustment).
+	// Regular automatic compressions use the adaptive ratio from should_check_compression.
+	let target_ratio = if force {
+		config
+			.compression
+			.pressure_levels
+			.first()
+			.map(|l| l.target_ratio)
+			.unwrap_or(2.0)
+	} else {
+		computed_ratio
+	};
 
 	// Check for cancellation before starting compression (which involves an API call)
 	if *operation_rx.borrow() {
@@ -700,7 +716,7 @@ pub async fn check_and_compress_conversation(
 	// OPTIMIZATION: Do semantic chunking BEFORE AI call (local, no API cost)
 	// This allows us to send context chunks to AI in the same call as decision
 	let (start_idx, end_idx) =
-		find_compression_range(&session.session.messages, session.first_prompt_idx)?;
+		find_compression_range(&session.session.messages, session.first_prompt_idx, force)?;
 
 	// end_idx is already safe from find_compression_range
 
@@ -734,6 +750,7 @@ pub async fn check_and_compress_conversation(
 		operation_rx,
 		force,
 		end_idx,
+		target_ratio,
 	)
 	.await?;
 
@@ -791,17 +808,24 @@ pub async fn check_and_compress_conversation(
 		}
 	}
 
-	// EXPONENTIAL COOLDOWN: Increment consecutive compressions counter.
-	// Each consecutive compression (without a user message) doubles the required
-	// token growth before the next compression is allowed.
-	// Resets to 0 on every new user message (see main_loop.rs).
-	session.session.info.consecutive_compressions += 1;
-	log_debug!(
-		"Exponential cooldown: consecutive_compressions now {} (next requires {:.0}% growth)",
-		session.session.info.consecutive_compressions,
-		(0.10 * 2.0_f64.powi(session.session.info.consecutive_compressions as i32)).min(1.0)
-			* 100.0
-	);
+	if force {
+		// /done resets cooldown — treat as fresh session phase boundary.
+		session.session.info.consecutive_compressions = 0;
+		session.session.info.context_tokens_after_last_compression = 0;
+		log_debug!("Forced compression: cooldown counters reset (fresh session phase)");
+	} else {
+		// EXPONENTIAL COOLDOWN: Increment consecutive compressions counter.
+		// Each consecutive compression (without a user message) doubles the required
+		// token growth before the next compression is allowed.
+		// Resets to 0 on every new user message (see main_loop.rs).
+		session.session.info.consecutive_compressions += 1;
+		log_debug!(
+			"Exponential cooldown: consecutive_compressions now {} (next requires {:.0}% growth)",
+			session.session.info.consecutive_compressions,
+			(0.10 * 2.0_f64.powi(session.session.info.consecutive_compressions as i32)).min(1.0)
+				* 100.0
+		);
+	}
 
 	animation_manager.stop_current().await;
 	Ok(true)
@@ -821,6 +845,7 @@ fn build_compression_prompt(
 	messages_to_compress: &[crate::session::Message],
 	force: bool,
 	end_idx: usize,
+	target_ratio: f64,
 ) -> (String, String, std::collections::HashMap<String, usize>) {
 	// SYSTEM: role identity + instructions (what the model must do and how to respond).
 	// Kept separate from the data so the model acts as a compressor, not a session participant.
@@ -988,11 +1013,22 @@ If NO, respond with just: NO"
 	let recent_count = (total_msgs / 4).clamp(4, 8);
 	let recent_start = total_msgs.saturating_sub(recent_count);
 
-	let mut user_content = String::from(
-		"**Conversation transcript to compress:**\n\
-		NOTE: Messages marked [RECENT] are the most recent and most important — preserve them with \
+	let reduction_pct = ((1.0 - 1.0 / target_ratio) * 100.0) as u32;
+	let aggressiveness = if target_ratio >= 4.0 {
+		"very aggressive"
+	} else if target_ratio >= 2.0 {
+		"selective"
+	} else {
+		"gentle"
+	};
+	let mut user_content = format!(
+		"**COMPRESSION TARGET**: Reduce this transcript to ~{}% of its original size ({:.1}x compression). \
+Be {} in what you preserve.\n\n\
+**Conversation transcript to compress:**\n\
+NOTE: Messages marked [RECENT] are the most recent and most important — preserve them with \
 highest fidelity. [USER]/[ASSISTANT] pairs are primary signal; [TOOL CALL]/[TOOL RESULT] are \
 secondary context.\n\n",
+		reduction_pct, target_ratio, aggressiveness,
 	);
 
 	// Inject accumulated critical knowledge from prior compressions
@@ -1361,6 +1397,7 @@ async fn ask_ai_decision_and_summary(
 	operation_rx: tokio::sync::watch::Receiver<bool>,
 	force: bool,
 	end_idx: usize,
+	target_ratio: f64,
 ) -> Result<(
 	bool,
 	String,
@@ -1368,7 +1405,7 @@ async fn ask_ai_decision_and_summary(
 	std::collections::HashMap<String, usize>,
 )> {
 	let (system_content, user_content, task_map) =
-		build_compression_prompt(session, messages_to_compress, force, end_idx);
+		build_compression_prompt(session, messages_to_compress, force, end_idx, target_ratio);
 	let response_content =
 		call_ai_for_decision(session, config, system_content, user_content, operation_rx).await?;
 	let (should_compress, summary, done_tasks) =
@@ -1712,6 +1749,7 @@ fn strip_done_tags(content: &str) -> String {
 fn find_compression_range(
 	messages: &[crate::session::Message],
 	first_prompt_idx: Option<usize>,
+	force: bool,
 ) -> Result<(usize, usize)> {
 	// Find system message index
 	let system_idx = messages
@@ -1781,13 +1819,13 @@ fn find_compression_range(
 		.map(|(idx, _)| idx)
 		.collect();
 
-	// Need at least 6 conversation messages to compress (keep 4, compress 2+)
-	if conversation_indices.len() <= 4 {
+	// When forced (/done), preserve only last 2 conversation messages so more gets
+	// compressed. Automatic compression preserves 4 for safety.
+	let preserve_count = if force { 2 } else { 4 };
+
+	if conversation_indices.len() <= preserve_count {
 		return Ok((0, 0)); // Not enough to compress
 	}
-
-	// Compress everything except last 4 conversation messages
-	let preserve_count = 4;
 	let mut compress_count = conversation_indices.len() - preserve_count;
 
 	// CRITICAL: The compressed summary is an assistant message. The first preserved
@@ -1916,7 +1954,7 @@ mod tests {
 		messages.push(msg("user")); // 8
 		messages.push(msg("assistant")); // 9
 
-		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 
 		// conversation_indices = [1, 2, 4, 5, 6, 7, 8, 9] (8 messages)
 		// Keep last 4: [6, 7, 8, 9]
@@ -1952,7 +1990,7 @@ mod tests {
 		messages.push(msg("user")); // 8
 		messages.push(msg("assistant")); // 9
 
-		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 
 		// conversation_indices = [1, 2, 3, 4, 6, 7, 8, 9] (8 messages)
 		// Keep last 4: [6, 7, 8, 9]
@@ -2000,7 +2038,7 @@ mod tests {
 		messages.push(msg("assistant")); // 9
 		messages.push(msg("user")); // 10
 
-		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 
 		// conversation_indices = [1, 2, 4, 6, 7, 8, 9, 10] (8 items)
 		// Initial last 4: [7, 8, 9, 10] → first preserved = 7 (assistant)
@@ -2046,7 +2084,7 @@ mod tests {
 		messages.push(msg("user")); // 7
 		messages.push(msg("assistant")); // 8
 								   // Test with first_prompt_idx set to index 3 (first real user message)
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(3), false).unwrap();
 
 		// Safety requirement: compression starts AFTER first_prompt_idx (INCLUSIVE boundary)
 		// first_prompt_idx=3 means index 3 is PROTECTED, compression starts at 4
@@ -2104,7 +2142,7 @@ mod tests {
 		// Index 1 is the assistant with tool_calls.
 		// Without the fix: start_idx=1, drain removes indices 2..=end_idx,
 		// orphaning tool_calls at index 1.
-		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 
 		// With the fix: start_idx must advance past the tool results (indices 2, 3)
 		// to index 4 (the next assistant message after tools).
@@ -2162,7 +2200,7 @@ mod tests {
 		messages.push(msg("assistant")); // 10
 
 		// first_prompt_idx=Some(2) points to the assistant with tool_calls
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(2)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(2), false).unwrap();
 
 		// Must advance past tool result at index 3
 		assert!(
@@ -2195,7 +2233,7 @@ mod tests {
 			msg("assistant"), // 9
 		];
 
-		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 
 		// System[0] and welcome[1] must be protected
 		assert!(
@@ -2229,7 +2267,7 @@ mod tests {
 			msg("assistant"), // 9
 		];
 
-		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 
 		// System[0], welcome[1], and instructions[2] must be protected
 		assert!(
@@ -2251,12 +2289,12 @@ mod tests {
 		}
 
 		// Test with None
-		let (start_none, _end_none) = find_compression_range(&messages, None).unwrap();
+		let (start_none, _end_none) = find_compression_range(&messages, None, false).unwrap();
 		assert!(start_none > 0, "system message at 0 must not be start_idx");
 		// Drain is start_idx+1..=end_idx, so system at 0 is safe if start_idx > 0
 
 		// Test with Some(1)
-		let (start_some, end_some) = find_compression_range(&messages, Some(1)).unwrap();
+		let (start_some, end_some) = find_compression_range(&messages, Some(1), false).unwrap();
 		assert!(start_some >= 1, "start_idx must be >= 1");
 		assert!(end_some > start_some);
 	}
@@ -2289,7 +2327,7 @@ mod tests {
 		messages.push(msg("user")); // 10
 		messages.push(msg("assistant")); // 11
 
-		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 
 		// Must protect: system[0], welcome[1], instructions[2]
 		// start_idx should be >= 3, and if 3 has tool_calls, advance past tool results
@@ -2363,7 +2401,7 @@ mod tests {
 		messages.push(msg("user")); // 7
 		messages.push(msg("assistant")); // 8
 
-		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 
 		// Verify the range is valid
 		assert!(start_idx < end_idx, "Range must be valid");
@@ -2435,7 +2473,7 @@ mod tests {
 		messages.push(msg("user")); // 7
 		messages.push(msg("assistant")); // 8
 
-		let (start_idx, end_idx) = find_compression_range(&messages, None).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 		assert_eq!(start_idx, 1); // Large message
 		assert_eq!(end_idx, 4); // Last small message
 
@@ -2939,7 +2977,7 @@ mod tests {
 		let first_prompt_idx = Some(1usize);
 
 		// First compression
-		let (start1, end1) = find_compression_range(&messages, first_prompt_idx).unwrap();
+		let (start1, end1) = find_compression_range(&messages, first_prompt_idx, false).unwrap();
 		assert_eq!(start1, 1, "start_idx must be first_prompt_idx");
 		assert!(end1 >= 4);
 
@@ -2963,7 +3001,7 @@ mod tests {
 		} // 3-10
 
 		// Second compression — first_prompt_idx is STILL Some(1)
-		let (start2, end2) = find_compression_range(&after, first_prompt_idx).unwrap();
+		let (start2, end2) = find_compression_range(&after, first_prompt_idx, false).unwrap();
 		assert_eq!(
 			start2, 1,
 			"second compression also starts at original anchor"
@@ -2989,7 +3027,7 @@ mod tests {
 			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
 		} // 3-10
 
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
 		assert_eq!(start_idx, 1, "start at permanent anchor");
 
 		// Drain range is start_idx+1..=end_idx = 2..=end_idx
@@ -3062,7 +3100,7 @@ mod tests {
 			msg("assistant"), // 11 - final response
 		];
 
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(3), false).unwrap();
 
 		assert_eq!(start_idx, 3, "start at first_prompt_idx");
 		// Conversation indices at/after start_idx=3: [3, 4, 5, 7, 9, 11] (6 items)
@@ -3101,7 +3139,7 @@ mod tests {
 			messages.push(msg(if i % 2 == 0 { "assistant" } else { "user" }));
 		} // 4-13
 
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(3), false).unwrap();
 
 		assert_eq!(start_idx, 3);
 		// Conversation indices at/after 3: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] (11 items)
@@ -3143,7 +3181,7 @@ mod tests {
 		} // 3-10
 
 		// 3rd compression — still starts at anchor (1)
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
 		assert_eq!(start_idx, 1);
 
 		// Old summary at 2 is in drain range
@@ -3170,7 +3208,7 @@ mod tests {
 			msg("assistant"), // 8
 		];
 
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
 
 		// The drain range is start_idx+1..=end_idx
 		// The anchor at start_idx is NOT in this range
@@ -3213,7 +3251,7 @@ mod tests {
 		}
 
 		let before_count = messages.len();
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
 
 		// Calculate expected removal count
 		let messages_to_remove = end_idx - start_idx; // drain removes start_idx+1..=end_idx
@@ -3254,7 +3292,7 @@ mod tests {
 		messages.push(msg("user")); // 7
 		messages.push(msg("assistant")); // 8
 
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
 		assert_eq!(start_idx, 1);
 
 		let correct = &messages[start_idx + 1..=end_idx];
@@ -3297,7 +3335,7 @@ mod tests {
 			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
 		} // 6-9
 
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
 
 		let mut tokens_removed = 0u64;
 		for msg in messages.iter().take(end_idx + 1).skip(start_idx + 1) {
@@ -3374,7 +3412,7 @@ mod tests {
 			messages.push(msg(if i % 2 == 0 { "assistant" } else { "user" }));
 		} // 2-11
 
-		let (s1, e1) = find_compression_range(&messages, first_prompt_idx).unwrap();
+		let (s1, e1) = find_compression_range(&messages, first_prompt_idx, false).unwrap();
 		assert_eq!(s1, 1, "Cycle 1: start must be anchor (1)");
 		assert!(e1 > s1, "Cycle 1: end must be after anchor");
 		assert!(
@@ -3394,7 +3432,7 @@ mod tests {
 			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
 		}
 
-		let (s2, e2) = find_compression_range(&messages, first_prompt_idx).unwrap();
+		let (s2, e2) = find_compression_range(&messages, first_prompt_idx, false).unwrap();
 		assert_eq!(s2, 1, "Cycle 2: start must still be anchor (1)");
 		assert!(e2 > s2);
 
@@ -3409,7 +3447,7 @@ mod tests {
 			messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
 		}
 
-		let (s3, e3) = find_compression_range(&messages, first_prompt_idx).unwrap();
+		let (s3, e3) = find_compression_range(&messages, first_prompt_idx, false).unwrap();
 		assert_eq!(s3, 1, "Cycle 3: start must still be anchor (1)");
 		assert!(e3 > s3);
 
@@ -3432,7 +3470,7 @@ mod tests {
 	// The very last message is the "ongoing task" user message
 		messages.push(msg("user")); // 22 ← must never be in drain range
 
-		let (_, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		let (_, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
 
 		assert!(
 			end_idx < messages.len() - 1,
@@ -3483,7 +3521,7 @@ mod tests {
 			msg("assistant"), // 14 response
 		];
 
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(3)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(3), false).unwrap();
 
 		// The 2nd user prompt at index 5 must NOT be in the drain range (start_idx+1..=end_idx)
 		assert!(
@@ -3623,7 +3661,7 @@ mod tests {
 		// First preserved: conversation_indices[5] = 6 (assistant with tool_calls!)
 		// end_idx = 6 - 1 = 5
 
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
 
 		// The first preserved message must be a user, not an assistant.
 		// If the first preserved conversation message is an assistant, the compressed
@@ -3705,7 +3743,7 @@ mod tests {
 		// Final assistant response (no tool_calls)
 		messages.push(msg("assistant")); // 22
 
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
 
 		// Must return a valid compression range, NOT (0, 0)
 		assert!(
@@ -3743,7 +3781,7 @@ mod tests {
 				messages.push(msg(if i % 2 == 0 { "user" } else { "assistant" }));
 			}
 
-			let (s, e) = find_compression_range(&messages, first_prompt_idx).unwrap();
+			let (s, e) = find_compression_range(&messages, first_prompt_idx, false).unwrap();
 
 			// Count compressed summaries in the drain range (s+1..=e)
 			let summaries_in_drain = messages[s + 1..=e]
@@ -3796,7 +3834,7 @@ mod tests {
 			msg("assistant"), // 4
 		];
 		// Only 4 conversation messages (user+assistant) — need >4 to compress
-		let (start_idx, end_idx) = find_compression_range(&messages, Some(1)).unwrap();
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
 		assert_eq!(
 			(start_idx, end_idx),
 			(0, 0),
