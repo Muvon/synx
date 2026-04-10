@@ -74,12 +74,7 @@ detect_platform() {
 
 # Get the latest release version (including prereleases)
 get_latest_version() {
-    if command_exists curl; then
-        curl -s "https://api.github.com/repos/$REPO/releases" | \
-            grep '"tag_name":' | \
-            head -1 | \
-            sed -E 's/.*"([^"]+)".*/\1/'
-    else
+    if ! command_exists curl; then
         log_error "curl is required but not found. Please install curl."
         log_info "On Ubuntu/Debian: sudo apt-get install curl"
         log_info "On CentOS/RHEL: sudo yum install curl"
@@ -87,6 +82,31 @@ get_latest_version() {
         log_info "On Windows: curl is available in Windows 10+ or install via chocolatey"
         exit 1
     fi
+
+    # Build auth header if GITHUB_TOKEN is available (avoids rate limits in CI)
+    local auth_header=""
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        auth_header="-H \"Authorization: token $GITHUB_TOKEN\""
+    elif [ -n "${GH_TOKEN:-}" ]; then
+        auth_header="-H \"Authorization: token $GH_TOKEN\""
+    fi
+
+    # Try /releases/latest first (single object, no list parsing)
+    local version
+    version=$(eval curl -s $auth_header "https://api.github.com/repos/$REPO/releases/latest" | \
+        grep '"tag_name":' | \
+        head -1 | \
+        sed -E 's/.*"([^"]+)".*/\1/')
+
+    # Fallback to full releases list (catches prereleases)
+    if [ -z "$version" ]; then
+        version=$(eval curl -s $auth_header "https://api.github.com/repos/$REPO/releases" | \
+            grep '"tag_name":' | \
+            head -1 | \
+            sed -E 's/.*"([^"]+)".*/\1/')
+    fi
+
+    echo "$version"
 }
 
 # Download and extract binary
