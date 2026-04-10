@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ACP smoke test — single octomind acp process, all tests in one session
-# Usage: ./test_acp.sh [--role assistant|developer] [--bin /path/to/octomind]
+# Usage: ./test_acp.sh [--tag assistant|developer] [--bin /path/to/octomind]
 
-ROLE="assistant"
-BIN="$(dirname "$0")/target/debug/octomind"
+TAG="assistant"
+BIN="$(dirname "$0")/../../target/debug/octomind"
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --role) ROLE="$2"; shift 2 ;;
-    --bin)  BIN="$2";  shift 2 ;;
+    --tag) TAG="$2"; shift 2 ;;
+    --bin) BIN="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -29,7 +29,7 @@ fail() { echo -e "${RED}✗${NC} $1"; ((FAIL++)); }
 info() { echo -e "${YELLOW}→${NC} $1"; }
 
 echo ""
-echo "=== Octomind ACP smoke test (role: $ROLE) ==="
+echo "=== Octomind ACP smoke test (tag: $TAG) ==="
 echo ""
 
 # Single acp process driven via a named fifo
@@ -37,7 +37,7 @@ FIFO=$(mktemp -u)
 mkfifo "$FIFO"
 trap 'exec 3>&- 2>/dev/null; rm -f "$FIFO" "$TMPOUT"; kill $ACP_PID 2>/dev/null || true' EXIT
 
-"$BIN" acp --role "$ROLE" < "$FIFO" > "$TMPOUT" 2>/dev/null &
+"$BIN" acp "$TAG" < "$FIFO" > "$TMPOUT" 2>/dev/null &
 ACP_PID=$!
 exec 3>"$FIFO"   # keep fifo open so acp doesn't get premature EOF
 
@@ -181,22 +181,17 @@ else
   fail "cancel — skipped (no session)"
 fi
 
-# ── 7. MCP tool execution (developer role with shell) ──────────────────────────
-info "Test 7: MCP tool execution (shell)"
+# ── 7. MCP tool execution ─────────────────────────────────────────────────────
+info "Test 7: MCP tool execution"
 send "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"session/new\",\"params\":{\"cwd\":\"$CWD\",\"mcpServers\":[]}}"
 if wait_for_id 7 15; then
-  SID_DEV=$(get_response 7 | jq -r '.result.sessionId // empty' 2>/dev/null)
-  if [ -n "$SID_DEV" ]; then
-    # Create a new session with developer role to test shell tool
-    # First we need to close the current session and start with developer role
-    send "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"session/new\",\"params\":{\"cwd\":\"$CWD\",\"mcpServers\":[]}}"
-    # Note: The role is set at ACP startup, so we test with whatever role was passed
-    # For assistant role, we test view tool instead
-    send "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"session/prompt\",\"params\":{\"sessionId\":\"$SID_DEV\",\"prompt\":[{\"type\":\"text\",\"text\":\"Use the view tool to read the first 5 lines of Cargo.toml and tell me the version.\"}]}}"
+  SID_TOOL=$(get_response 7 | jq -r '.result.sessionId // empty' 2>/dev/null)
+  if [ -n "$SID_TOOL" ]; then
+    # Tag determines which tools are available (e.g. assistant has view, developer has shell)
+    send "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"session/prompt\",\"params\":{\"sessionId\":\"$SID_TOOL\",\"prompt\":[{\"type\":\"text\",\"text\":\"Use the view tool to read the first 5 lines of Cargo.toml and tell me the version.\"}]}}"
     if wait_for_id 9 45; then
       R=$(get_response 9)
       STOP=$(echo "$R" | jq -r '.result.stopReason // empty' 2>/dev/null)
-      # Check for tool call notifications
       TOOL_CALLS=$(grep '"session/update"' "$TMPOUT" | grep -c 'tool_call' 2>/dev/null || echo "0")
       if [ "$STOP" = "end_turn" ] && [ "$TOOL_CALLS" -gt 0 ]; then
         ok "MCP tool execution — tool called $TOOL_CALLS time(s), stopReason=$STOP"
@@ -209,36 +204,10 @@ if wait_for_id 7 15; then
       fail "MCP tool execution — timeout"
     fi
   else
-    fail "MCP tool execution — no sessionId for developer session"
+    fail "MCP tool execution — no sessionId"
   fi
 else
   fail "MCP tool execution — session/new timeout"
-fi
-
-# ── 8. Tool call ID wire dump (diagnose tool_call_id mismatch) ────────────────
-info "Test 8: tool call ID wire dump (developer role only)"
-send "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"session/new\",\"params\":{\"cwd\":\"$CWD\",\"mcpServers\":[]}}"
-if wait_for_id 10 15; then
-  SID_DUMP=$(get_response 10 | jq -r '.result.sessionId // empty' 2>/dev/null)
-  if [ -n "$SID_DUMP" ]; then
-    BEFORE=$(wc -l < "$TMPOUT" | tr -d ' ')
-    send "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"session/prompt\",\"params\":{\"sessionId\":\"$SID_DUMP\",\"prompt\":[{\"type\":\"text\",\"text\":\"Run: echo hello\"}]}}"
-    if wait_for_id 11 45; then
-      echo ""
-      echo "--- raw session/update notifications for this prompt ---"
-      tail -n +"$BEFORE" "$TMPOUT" | grep '"session/update"' | while IFS= read -r line; do echo "$line" | jq '.' 2>/dev/null || echo "$line"; done
-      echo "--- end raw dump ---"
-      echo "--- end raw dump ---"
-      echo ""
-      ok "wire dump complete"
-    else
-      fail "wire dump — timeout"
-    fi
-  else
-    fail "wire dump — no sessionId"
-  fi
-else
-  fail "wire dump — session/new timeout"
 fi
 
 # ── Shutdown ──────────────────────────────────────────────────────────────────
