@@ -105,6 +105,7 @@ fn run_dep_script(entry: &str, deps_root: &Path) -> Result<()> {
 
 	let status = std::process::Command::new("bash")
 		.arg(&script_path)
+		.stdin(Stdio::null()) // never inherit parent stdin (piped prompt)
 		.stdout(Stdio::null()) // stdout reserved for Octomind
 		.stderr(Stdio::null()) // suppress install output; shown only in debug
 		.status()

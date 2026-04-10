@@ -66,6 +66,18 @@ pub async fn execute(args: &RunArgs, config: &Config) -> Result<()> {
 	// --format=jsonl always uses non-interactive mode (piped input).
 	let is_interactive_session = args.format.is_none() && std::io::stdin().is_terminal();
 
+	// Read piped stdin immediately — before any async init that may spawn subprocesses
+	// which inherit (and can drain) the pipe fd on some platforms (macOS).
+	let piped_input = if !is_interactive_session {
+		if args.daemon && std::io::stdin().is_terminal() {
+			Some(String::new())
+		} else {
+			Some(read_input()?)
+		}
+	} else {
+		None
+	};
+
 	// Resolve config and role (tap/dep resolution only — MCP init happens after session ID is set)
 	let (run_config, role) =
 		super::common::resolve_config_and_role(args.tag.as_deref(), config, None).await?;
@@ -85,13 +97,12 @@ pub async fn execute(args: &RunArgs, config: &Config) -> Result<()> {
 	if is_interactive_session {
 		session::chat::run_interactive_session(&session_args, &run_config).await
 	} else {
-		// Daemon without piped stdin: start with no initial input, just wait for inbox.
-		let input = if args.daemon && std::io::stdin().is_terminal() {
-			String::new()
-		} else {
-			read_input()?
-		};
-		session::chat::run_interactive_session_with_input(&session_args, &run_config, &input).await
+		session::chat::run_interactive_session_with_input(
+			&session_args,
+			&run_config,
+			&piped_input.unwrap(),
+		)
+		.await
 	}
 }
 
