@@ -103,19 +103,26 @@ fn run_dep_script(entry: &str, deps_root: &Path) -> Result<()> {
 
 	crate::log_debug!("running dep script: {}", entry);
 
-	let status = std::process::Command::new("bash")
+	let output = std::process::Command::new("bash")
 		.arg(&script_path)
 		.stdin(Stdio::null()) // never inherit parent stdin (piped prompt)
 		.stdout(Stdio::null()) // stdout reserved for Octomind
-		.stderr(Stdio::null()) // suppress install output; shown only in debug
-		.status()
+		.stderr(Stdio::piped()) // capture stderr for error reporting
+		.output()
 		.with_context(|| format!("Failed to execute dep script: {}", script_path.display()))?;
 
-	if !status.success() {
+	if !output.status.success() {
+		let stderr = String::from_utf8_lossy(&output.stderr);
+		let stderr_msg = if stderr.trim().is_empty() {
+			String::new()
+		} else {
+			format!("\n{}", stderr.trim())
+		};
 		anyhow::bail!(
-			"Dep script '{}' exited with status {}",
+			"Dep script '{}' exited with status {}{}",
 			entry,
-			status.code().unwrap_or(-1)
+			output.status.code().unwrap_or(-1),
+			stderr_msg
 		);
 	}
 
