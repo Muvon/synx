@@ -726,16 +726,54 @@ pub async fn check_and_compress_conversation(
 		return Ok(false);
 	}
 
-	// Calculate tokens before compression
-	// CRITICAL: Count only start_idx+1..=end_idx — the messages actually removed.
-	// The message at start_idx is the anchor (kept by remove_messages_in_range),
-	// so its tokens must NOT be counted as "compressible".
+	// COMPRESS-ALL: Extract user messages BEFORE compression.
+	// - Last user message → re-injected as raw session message after summary
+	// - Last 4 user messages (excluding the appended one) → USER TASKS section in summary
+	// No intersection: the appended message is NOT in USER TASKS.
+	let all_user_msgs: Vec<&crate::session::Message> = session.session.messages
+		[start_idx + 1..=end_idx]
+		.iter()
+		.filter(|m| m.role == "user" && !m.content.trim().is_empty())
+		.collect();
+
+	// Last user message for raw re-injection after summary
+	let last_user_message = all_user_msgs.last().cloned().cloned();
+
+	// Last 4 user messages EXCLUDING the appended one → USER TASKS in summary
+	let user_tasks_msgs: Vec<String> = {
+		let exclude_last = if all_user_msgs.len() > 1 {
+			&all_user_msgs[..all_user_msgs.len() - 1]
+		} else {
+			&[]
+		};
+		exclude_last
+			.iter()
+			.rev()
+			.take(4)
+			.rev()
+			.map(|m| {
+				let content = m.content.trim();
+				if content.len() > 200 {
+					format!(
+						"{}…",
+						&content[..content
+							.char_indices()
+							.take_while(|&(i, _)| i <= 200)
+							.last()
+							.map(|(i, _)| i)
+							.unwrap_or(200)]
+					)
+				} else {
+					content.to_string()
+				}
+			})
+			.collect()
+	};
+
+	// Calculate tokens before compression (all messages that will be removed)
 	let tokens_before = calculate_range_tokens(session, start_idx + 1, end_idx)?;
 
-	// Clone messages to compress so the borrow ends before the mutable session borrow
-	// CRITICAL: Only include messages that will actually be removed (start_idx+1..=end_idx).
-	// The anchor at start_idx is kept — including it would make the AI summarize content
-	// that remains in the conversation, causing duplication.
+	// ALL messages go into compression input — summary captures everything
 	let messages_to_compress: Vec<crate::session::Message> =
 		session.session.messages[start_idx + 1..=end_idx].to_vec();
 
@@ -743,13 +781,12 @@ pub async fn check_and_compress_conversation(
 	let learning_rx = operation_rx.clone();
 
 	// OPTIMIZATION: Single API call for decision + summary (1-hop instead of 2-hop)
-	let (should_compress, context_summary, done_tasks, task_map) = ask_ai_decision_and_summary(
+	let (should_compress, context_summary) = ask_ai_decision_and_summary(
 		session,
 		config,
 		&messages_to_compress,
 		operation_rx,
 		force,
-		end_idx,
 		target_ratio,
 	)
 	.await?;
@@ -770,8 +807,8 @@ pub async fn check_and_compress_conversation(
 		&context_summary,
 		tokens_before,
 		current_context_tokens,
-		&done_tasks,
-		&task_map,
+		user_tasks_msgs,
+		last_user_message,
 	)
 	.await?;
 
@@ -844,9 +881,8 @@ fn build_compression_prompt(
 	session: &ChatSession,
 	messages_to_compress: &[crate::session::Message],
 	force: bool,
-	end_idx: usize,
 	target_ratio: f64,
-) -> (String, String, std::collections::HashMap<String, usize>) {
+) -> (String, String) {
 	// SYSTEM: role identity + instructions (what the model must do and how to respond).
 	// Kept separate from the data so the model acts as a compressor, not a session participant.
 	//
@@ -906,16 +942,7 @@ analysis conclusions, root cause findings), write it in a <knowledge> tag. \
 <knowledge>\n\
 Your critical insight here (2-3 sentences max).\n\
 </knowledge>\n\n\
-**COMPLETED TASKS — identify finished work for cleanup:**\n\
-If a <tasks> block is present at the end of the transcript, it lists user requests from the \
-preserved (non-compressed) zone. For each task that is FULLY COMPLETED — the assistant finished \
-all work, delivered results, and moved on to something else — list its ID in a <done> block:\n\
-<done>\n\
-task1\n\
-task3\n\
-</done>\n\
-Only mark tasks where ALL work is verifiably done. Do NOT mark in-progress, partially done, \
-or the current active task. If no tasks are done or no <tasks> block exists, omit <done> entirely."
+"
 	} else {
 		"You are a conversation compressor. \
 Your job is to produce a lossless summary of a conversation transcript so the session can continue \
@@ -988,16 +1015,6 @@ analysis conclusions, root cause findings), write it in a <knowledge> tag. \
 <knowledge>\n\
 Your critical insight here (2-3 sentences max).\n\
 </knowledge>\n\n\
-**COMPLETED TASKS — identify finished work for cleanup:**\n\
-If a <tasks> block is present at the end of the transcript, it lists user requests from the \
-preserved (non-compressed) zone. For each task that is FULLY COMPLETED — the assistant finished \
-all work, delivered results, and moved on to something else — list its ID in a <done> block:\n\
-<done>\n\
-task1\n\
-task3\n\
-</done>\n\
-Only mark tasks where ALL work is verifiably done. Do NOT mark in-progress, partially done, \
-or the current active task. If no tasks are done or no <tasks> block exists, omit <done> entirely.\n\n\
 If NO, respond with just: NO"
 	}
 	.to_string();
@@ -1203,45 +1220,7 @@ secondary context.\n\n",
 		}
 	}
 
-	// TASK-AWARE COMPRESSION: Collect user messages from the PRESERVED zone
-	// (messages after end_idx that won't be drained by normal compression).
-	// Send them as numbered tasks so the AI can identify which are fully completed.
-	// Completed task chains can then be drained from the preserved zone too.
-	let mut task_map = std::collections::HashMap::new();
-	let all_messages = &session.session.messages;
-	if end_idx + 1 < all_messages.len() {
-		let mut task_num = 0u32;
-		let mut tasks_block = String::from("\n<tasks>\n");
-		let mut has_tasks = false;
-		for (idx, msg) in all_messages.iter().enumerate().skip(end_idx + 1) {
-			if msg.role == "user" && !msg.content.trim().is_empty() {
-				task_num += 1;
-				let task_id = format!("task{}", task_num);
-				let content = msg.content.trim();
-				// Truncate to ~200 chars for the prompt
-				let truncated = if content.len() > 200 {
-					let end = content
-						.char_indices()
-						.map(|(i, _)| i)
-						.take_while(|&i| i <= 200)
-						.last()
-						.unwrap_or(0);
-					format!("{}…", &content[..end])
-				} else {
-					content.to_string()
-				};
-				tasks_block.push_str(&format!("<task id=\"{}\">{}</task>\n", task_id, truncated));
-				task_map.insert(task_id, idx);
-				has_tasks = true;
-			}
-		}
-		tasks_block.push_str("</tasks>\n");
-		if has_tasks {
-			user_content.push_str(&tasks_block);
-		}
-	}
-
-	(system_content, user_content, task_map)
+	(system_content, user_content)
 }
 
 /// Call the AI compression model and return the raw response content.
@@ -1335,7 +1314,7 @@ fn parse_ai_response(
 	config: &Config,
 	content: &str,
 	force: bool,
-) -> Result<(bool, String, Vec<String>)> {
+) -> Result<(bool, String)> {
 	let content = content.trim();
 	let lines: Vec<&str> = content.lines().collect();
 
@@ -1346,27 +1325,17 @@ fn parse_ai_response(
 			));
 		}
 		log_debug!("AI compression decision: NO (empty response)");
-		return Ok((false, String::new(), Vec::new()));
+		return Ok((false, String::new()));
 	}
 
 	// Extract and store critical knowledge from <knowledge> tags before returning summary
 	extract_and_store_knowledge(session, config, content);
 
-	// Extract completed task IDs from <done> tags before stripping
-	let done_tasks = extract_done_tasks(content);
-	if !done_tasks.is_empty() {
-		log_debug!(
-			"AI identified {} completed tasks: {:?}",
-			done_tasks.len(),
-			done_tasks
-		);
-	}
-
 	if force {
 		// Entire response is the summary — no YES/NO prefix expected.
-		let summary = strip_done_tags(&strip_knowledge_tags(content));
+		let summary = strip_knowledge_tags(content);
 		log_debug!("AI forced compression summary ({} chars)", summary.len());
-		return Ok((true, summary, done_tasks));
+		return Ok((true, summary));
 	}
 
 	let first_line = lines[0].trim().to_uppercase();
@@ -1375,7 +1344,7 @@ fn parse_ai_response(
 	if decision {
 		let summary = if lines.len() > 1 {
 			let raw = lines[1..].join("\n").trim().to_string();
-			strip_done_tags(&strip_knowledge_tags(&raw))
+			strip_knowledge_tags(&raw)
 		} else {
 			String::new()
 		};
@@ -1383,10 +1352,10 @@ fn parse_ai_response(
 			"AI compression decision: YES with summary ({} chars)",
 			summary.len()
 		);
-		Ok((true, summary, done_tasks))
+		Ok((true, summary))
 	} else {
 		log_debug!("AI compression decision: NO");
-		Ok((false, String::new(), Vec::new()))
+		Ok((false, String::new()))
 	}
 }
 
@@ -1396,26 +1365,17 @@ async fn ask_ai_decision_and_summary(
 	messages_to_compress: &[crate::session::Message],
 	operation_rx: tokio::sync::watch::Receiver<bool>,
 	force: bool,
-	end_idx: usize,
 	target_ratio: f64,
-) -> Result<(
-	bool,
-	String,
-	Vec<String>,
-	std::collections::HashMap<String, usize>,
-)> {
-	let (system_content, user_content, task_map) =
-		build_compression_prompt(session, messages_to_compress, force, end_idx, target_ratio);
+) -> Result<(bool, String)> {
+	let (system_content, user_content) =
+		build_compression_prompt(session, messages_to_compress, force, target_ratio);
 	let response_content =
 		call_ai_for_decision(session, config, system_content, user_content, operation_rx).await?;
-	let (should_compress, summary, done_tasks) =
-		parse_ai_response(session, config, &response_content, force)?;
-	Ok((should_compress, summary, done_tasks, task_map))
+	parse_ai_response(session, config, &response_content, force)
 }
 
-/// Apply compression by replacing message range with compressed summary
-/// Also parses and injects file contexts if given by AI
-/// `done_tasks` + `task_map` enable draining completed-task message chains from the preserved zone.
+/// Apply compression: drain all messages, insert summary, re-inject recent user messages.
+/// Also parses and injects file contexts if given by AI.
 #[allow(clippy::too_many_arguments)]
 async fn apply_compression(
 	session: &mut ChatSession,
@@ -1424,8 +1384,8 @@ async fn apply_compression(
 	context_summary: &str,
 	tokens_before: u64,
 	current_context_tokens: u64,
-	done_tasks: &[String],
-	task_map: &std::collections::HashMap<String, usize>,
+	user_tasks_msgs: Vec<String>,
+	last_user_message: Option<crate::session::Message>,
 ) -> Result<()> {
 	// Parse file contexts from AI summary (AI may request specific file ranges to re-inject)
 	let file_contexts = super::file_context::parse_file_contexts(context_summary);
@@ -1444,89 +1404,90 @@ async fn apply_compression(
 		String::new()
 	};
 
-	// Format compressed entry
+	// Format compressed entry with file context
 	let compression_id = crate::mcp::core::plan::compression::get_compression_id()
 		.unwrap_or_else(|| "unknown".to_string());
 
-	let compressed_entry = format_compressed_entry_with_context(
+	let base_entry = format_compressed_entry_with_context(
 		context_summary,
 		&file_context_content,
 		compression_id,
 	);
 
+	// Prepend USER TASKS section (last 4 user requests, excluding the appended one).
+	// These are raw user messages — not AI-rephrased — so intent is never lost.
+	let compressed_entry = if user_tasks_msgs.is_empty() {
+		base_entry
+	} else {
+		let user_tasks = user_tasks_msgs
+			.iter()
+			.enumerate()
+			.map(|(i, msg)| format!("{}. {}", i + 1, msg))
+			.collect::<Vec<_>>()
+			.join("\n");
+		format!("## USER TASKS\n{}\n\n{}", user_tasks, base_entry)
+	};
+
 	let tokens_after = estimate_tokens(&compressed_entry) as u64;
 
-	// Remove messages in range (drains start_idx+1..=end_idx, keeps anchor at start_idx)
+	// COMPRESS-ALL: Drain everything from start_idx+1 to end_idx
 	let (messages_removed, _) = session.remove_messages_in_range(start_idx, end_idx)?;
 
-	// TASK-AWARE DRAIN: Remove completed-task message chains from the preserved zone.
-	// The AI identified tasks that are fully done — we can drain their entire message
-	// chains (user request + all assistant/tool responses up to the next user message)
-	// from the preserved zone, since the summary already captured their outcomes.
-	//
-	// IMPORTANT: remove_messages_in_range already shifted indices. Messages that were
-	// at absolute index `abs_idx` are now at `abs_idx - (end_idx - start_idx)` because
-	// the compression zone (start_idx+1..=end_idx) was removed.
-	let mut extra_drained = 0usize;
-	if !done_tasks.is_empty() && !task_map.is_empty() {
-		// Compression drain removed (end_idx - start_idx) messages from start_idx+1..=end_idx.
-		// All preserved-zone indices (> end_idx) shifted down by this amount.
-		let shift = end_idx - start_idx;
-
-		let mut drain_indices: Vec<usize> = Vec::new();
-		let msg_count = session.session.messages.len();
-
-		for task_id in done_tasks {
-			if let Some(&abs_idx) = task_map.get(task_id) {
-				// Task was in the compression zone — already compressed, skip
-				if abs_idx <= end_idx {
-					continue;
-				}
-				// Adjust for the compression drain
-				let adjusted_idx = abs_idx - shift;
-				if adjusted_idx >= msg_count {
-					continue;
-				}
-				drain_indices.push(adjusted_idx);
-				// Find the chain: all messages after this user msg until the next user msg
-				for chain_idx in (adjusted_idx + 1)..msg_count {
-					if session.session.messages[chain_idx].role == "user" {
-						break;
-					}
-					drain_indices.push(chain_idx);
-				}
-			}
-		}
-
-		if !drain_indices.is_empty() {
-			drain_indices.sort_unstable();
-			drain_indices.dedup();
-			extra_drained = drain_indices.len();
-
-			log_debug!(
-				"Task-aware drain: removing {} messages for completed task(s) from preserved zone",
-				extra_drained
-			);
-
-			// Remove in reverse order to keep indices stable
-			for &idx in drain_indices.iter().rev() {
-				if idx < session.session.messages.len() {
-					session.session.messages.remove(idx);
-				}
+	// Insert summary + re-injected user message in one shot with correct cache markers.
+	// Cache markers: marker #1 on summary, marker #2 on re-injected user message.
+	// Evict existing content markers first to enforce the 2-marker limit.
+	let supports_caching = crate::session::model_supports_caching(&session.session.info.model);
+	if supports_caching {
+		for msg in session.session.messages.iter_mut() {
+			if msg.cached && msg.role != "system" {
+				msg.cached = false;
 			}
 		}
 	}
 
-	let messages_removed = messages_removed + extra_drained;
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap_or_default()
+		.as_secs();
 
-	// Insert compressed summary (compressed block is always cached=true — new stable boundary)
-	session.insert_compressed_knowledge(start_idx, compressed_entry)?;
+	// Marker #1: anchor (before summary) — stable bootstrap cache boundary
+	if let Some(anchor) = session.session.messages.get_mut(start_idx) {
+		anchor.cached = supports_caching;
+	}
 
-	// NOTE: first_prompt_idx is NOT updated here. It always points to the
-	// original first user message — the permanent anchor. On subsequent
-	// compressions, the old compressed summary (at start_idx+1) will be in
-	// the drain range and get re-compressed into a fresh summary. This is
-	// correct: each compression cycle folds all prior context into one summary.
+	// Summary message (no cache marker — sits between the two markers)
+	let summary_msg = crate::session::Message {
+		role: "assistant".to_string(),
+		content: compressed_entry,
+		timestamp: now,
+		cached: false,
+		name: Some("plan_compression".to_string()),
+		..Default::default()
+	};
+	session.session.messages.insert(start_idx + 1, summary_msg);
+
+	// Marker #2: re-injected user message — full content cache boundary
+	let user_msg = match last_user_message {
+		Some(mut msg) => {
+			msg.cached = supports_caching;
+			msg
+		}
+		None => crate::session::Message {
+			role: "user".to_string(),
+			content: "Please continue.".to_string(),
+			timestamp: now,
+			cached: supports_caching,
+			..Default::default()
+		},
+	};
+	session.session.messages.insert(start_idx + 2, user_msg);
+	log_debug!(
+		"Re-injected last user message after compressed summary (USER TASKS: {})",
+		user_tasks_msgs.len()
+	);
+
+	// Update first_prompt_idx to the actual anchor used for this compression.
+	session.first_prompt_idx = Some(start_idx);
 
 	// Calculate metrics
 	let tokens_saved = tokens_before.saturating_sub(tokens_after);
@@ -1710,39 +1671,7 @@ fn strip_knowledge_tags(content: &str) -> String {
 
 /// Parse all <done>...</done> tags from AI compression response.
 /// Returns task IDs (e.g. "task1", "task2") that the AI marked as fully completed.
-fn extract_done_tasks(content: &str) -> Vec<String> {
-	let mut tasks = Vec::new();
-	if let Some(start) = content.find("<done>") {
-		let abs_start = start + "<done>".len();
-		if let Some(end) = content[abs_start..].find("</done>") {
-			let abs_end = abs_start + end;
-			for line in content[abs_start..abs_end].lines() {
-				let trimmed = line.trim();
-				if !trimmed.is_empty() {
-					tasks.push(trimmed.to_string());
-				}
-			}
-		}
-	}
-	tasks
-}
-
-/// Strip <done>...</done> tags from summary text.
-/// The done-task list is already extracted — no need to keep it in the summary.
-fn strip_done_tags(content: &str) -> String {
-	let mut result = content.to_string();
-	while let Some(start) = result.find("<done>") {
-		if let Some(end) = result[start..].find("</done>") {
-			let abs_end = start + end + "</done>".len();
-			result = format!("{}{}", &result[..start], &result[abs_end..]);
-		} else {
-			break;
-		}
-	}
-	result.trim().to_string()
-}
-
-/// Find which messages to compress (keep last 4 turns = 2 exchanges raw)
+/// Find the compression range: anchor to last message (compress-all approach).
 ///
 /// CRITICAL: Must not cut between assistant with tool_calls and its tool results
 /// CRITICAL: Compression NEVER goes below first_prompt_idx (INCLUSIVE boundary)
@@ -1757,12 +1686,33 @@ fn find_compression_range(
 		.position(|m| m.role == "system")
 		.unwrap_or(0);
 
-	// CRITICAL: Start boundary is first_prompt_idx (INCLUSIVE - never compress this or before)
+	// Start boundary: try to move anchor BEFORE first_prompt_idx so the first user
+	// message gets compressed. Without this, the first user message persists raw
+	// across all compression cycles — even after the user moved on to new tasks.
+	//
+	// If instructions file exists at idx-1 (user role), use it as anchor.
+	// The first user message then falls into drain range (start_idx+1..=end_idx).
+	// Keep old behavior for tool-loops (single user message — it's still active).
+	//
 	// If not set (e.g. resumed sessions), detect bootstrap messages and skip past them.
 	// Bootstrap pattern: system[0] → assistant(welcome)[1] → optional user(instructions)[2]
 	// We must NEVER compress the system prompt, welcome message, or instructions file.
 	let mut start_idx = match first_prompt_idx {
-		Some(idx) => idx,
+		Some(idx) => {
+			// Check if user sent additional messages after the first prompt.
+			// If yes, the first prompt is no longer active and should be compressed.
+			let has_subsequent_user = messages.iter().skip(idx + 1).any(|m| m.role == "user");
+
+			if has_subsequent_user
+				&& idx > 0 && messages.get(idx - 1).is_some_and(|m| m.role == "user")
+			{
+				// Instructions file at idx-1 becomes anchor.
+				// First user message at idx is now in drain range.
+				idx - 1
+			} else {
+				idx
+			}
+		}
 		None => {
 			let mut idx = system_idx + 1;
 			// Skip welcome message (assistant immediately after system, WITHOUT tool_calls).
@@ -1807,79 +1757,23 @@ fn find_compression_range(
 		}
 	}
 
-	// Collect conversation message indices (user + assistant only) AT OR AFTER start_idx.
-	// CRITICAL: Only messages in the compressible range count toward compress_count.
-	// Bootstrap messages before start_idx are protected and must NOT inflate the count,
-	// otherwise compress_count "uses up" slots on unreachable messages, leaving end_idx
-	// too low and compressing almost nothing.
-	let conversation_indices: Vec<usize> = messages
+	// COMPRESS-ALL APPROACH: Compress everything from start_idx+1 to the last message.
+	// Recent user messages are extracted and re-injected after the summary by the caller.
+	// This eliminates the old preserve_count / boundary-search complexity and ensures
+	// no user messages persist as stale raw artifacts across compression cycles.
+	let end_idx = messages.len() - 1;
+
+	// Minimum conversation messages to justify compression.
+	// Need at least 5 (non-force) or 3 (force/done) to produce a useful summary.
+	let min_conv = if force { 3 } else { 5 };
+	let conv_count = messages
 		.iter()
-		.enumerate()
-		.filter(|(idx, m)| *idx >= start_idx && (m.role == "user" || m.role == "assistant"))
-		.map(|(idx, _)| idx)
-		.collect();
-
-	// When forced (/done), preserve only last 2 conversation messages so more gets
-	// compressed. Automatic compression preserves 4 for safety.
-	let preserve_count = if force { 2 } else { 4 };
-
-	if conversation_indices.len() <= preserve_count {
-		return Ok((0, 0)); // Not enough to compress
+		.skip(start_idx)
+		.filter(|m| m.role == "user" || m.role == "assistant")
+		.count();
+	if conv_count < min_conv {
+		return Ok((0, 0));
 	}
-	let mut compress_count = conversation_indices.len() - preserve_count;
-
-	// CRITICAL: The compressed summary is an assistant message. The first preserved
-	// message after it SHOULD be a user to maintain the alternating user/assistant
-	// pattern preferred by the API. Search forward from compress_count for the
-	// first user in the preserved zone and advance compress_count to it.
-	//
-	// If NO user exists in the preserved zone (tool-loop sessions where the AI
-	// calls tools continuously without user input), the user's most recent prompt
-	// is in the compression range. Search BACKWARD to find it and pull it into
-	// the preserved zone so the active user request is never compressed away.
-	if messages[conversation_indices[compress_count]].role == "assistant" {
-		let mut found_user = None;
-		for i in compress_count..conversation_indices.len() {
-			if messages[conversation_indices[i]].role == "user" {
-				found_user = Some(i);
-				break;
-			}
-		}
-		if let Some(user_idx) = found_user {
-			compress_count = user_idx;
-		} else {
-			// CRITICAL FIX: No user in preserved zone means ALL preserved messages are
-			// assistant/tool messages from a tool-loop. The user's most recent prompt is
-			// somewhere in the compression range and would be compressed away, causing
-			// the AI to lose the active user request entirely.
-			//
-			// Fix: search backward from compress_count to find the last user message
-			// in the compression zone and pull it (and everything after) into the
-			// preserved zone. This guarantees the user's active request survives.
-			let mut last_user_in_compress = None;
-			for i in (1..compress_count).rev() {
-				if messages[conversation_indices[i]].role == "user" {
-					last_user_in_compress = Some(i);
-					break;
-				}
-			}
-			if let Some(user_idx) = last_user_in_compress {
-				compress_count = user_idx;
-			}
-		}
-	}
-
-	// CRITICAL FIX: The end_idx must be the last MESSAGE INDEX (not conversation index)
-	// before the first preserved conversation message.
-	//
-	// OLD BUG: Used conversation_indices[compress_count - 1] which gave us the index
-	// of the last conversation message to compress, but SKIPPED any tool messages
-	// that follow it.
-	//
-	// CORRECT: The first preserved conversation message is at conversation_indices[compress_count].
-	// Everything BEFORE that index (including tool messages) should be compressed.
-	// So end_idx = conversation_indices[compress_count] - 1
-	let end_idx = conversation_indices[compress_count] - 1;
 
 	if start_idx >= end_idx {
 		return Ok((0, 0));
@@ -1956,15 +1850,9 @@ mod tests {
 
 		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 
-		// conversation_indices = [1, 2, 4, 5, 6, 7, 8, 9] (8 messages)
-		// Keep last 4: [6, 7, 8, 9]
-		// First preserved conversation message: conversation_indices[4] = 6
-		// end_idx = 6 - 1 = 5 (includes tool message at 3)
+		// Compress-all: end_idx = last message
 		assert_eq!(start_idx, 1);
-		assert_eq!(
-			end_idx, 5,
-			"Must include all messages before first preserved conversation message"
-		);
+		assert_eq!(end_idx, 9, "compress-all: end_idx = last message");
 	}
 
 	#[test]
@@ -1992,15 +1880,9 @@ mod tests {
 
 		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 
-		// conversation_indices = [1, 2, 3, 4, 6, 7, 8, 9] (8 messages)
-		// Keep last 4: [6, 7, 8, 9]
-		// First preserved conversation message: conversation_indices[4] = 6
-		// end_idx = 6 - 1 = 5 (includes tool message at 5)
+		// Compress-all: end_idx = last message
 		assert_eq!(start_idx, 1);
-		assert_eq!(
-			end_idx, 5,
-			"Must include all messages (including tool results) before first preserved conversation message"
-		);
+		assert_eq!(end_idx, 9, "compress-all: end_idx = last message");
 	}
 
 	#[test]
@@ -2040,23 +1922,9 @@ mod tests {
 
 		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 
-		// conversation_indices = [1, 2, 4, 6, 7, 8, 9, 10] (8 items)
-		// Initial last 4: [7, 8, 9, 10] → first preserved = 7 (assistant)
-		// But compressed summary is assistant, so first preserved must be user.
-		// Advance past assistant at 7 → first preserved = 8 (user)
-		// end_idx = 8 - 1 = 7 (includes assistant at 7 and all tool messages)
+		// Compress-all: end_idx = last message, no preserved zone
 		assert_eq!(start_idx, 1);
-		assert_eq!(
-			end_idx, 7,
-			"Must advance past leading assistant in preserved zone to ensure first preserved is user"
-		);
-
-		// Verify first preserved message is a user
-		assert_eq!(
-			messages[end_idx + 1].role,
-			"user",
-			"First preserved message must be user, not assistant"
-		);
+		assert_eq!(end_idx, 10, "compress-all: end_idx = last message");
 	}
 
 	#[test]
@@ -2199,15 +2067,19 @@ mod tests {
 		messages.push(msg("user")); // 9
 		messages.push(msg("assistant")); // 10
 
-		// first_prompt_idx=Some(2) points to the assistant with tool_calls
+		// first_prompt_idx=Some(2) points to the assistant with tool_calls.
+		// With the anchor-move-back fix, start_idx moves to idx-1=1 (user).
+		// The assistant with tool_calls and its tool result are both in the drain range.
 		let (start_idx, end_idx) = find_compression_range(&messages, Some(2), false).unwrap();
 
-		// Must advance past tool result at index 3
-		assert!(
-			start_idx >= 4,
-			"start_idx must advance past tool results even with first_prompt_idx. Got {start_idx}"
+		assert_eq!(
+			start_idx, 1,
+			"anchor moves back to user at idx 1 — tool_calls asst at 2 is in drain range"
 		);
 		assert!(end_idx > start_idx, "must have valid range");
+		// Both the assistant with tool_calls (idx 2) and its tool result (idx 3) are
+		// in drain range [2..=end_idx] — no orphaned tool_use blocks.
+		assert!(end_idx >= 3, "drain must include tool result at idx 3");
 	}
 
 	// ============================================================================
@@ -2475,7 +2347,7 @@ mod tests {
 
 		let (start_idx, end_idx) = find_compression_range(&messages, None, false).unwrap();
 		assert_eq!(start_idx, 1); // Large message
-		assert_eq!(end_idx, 4); // Last small message
+		assert_eq!(end_idx, 8); // compress-all: last message
 
 		// What calculate_range_tokens ACTUALLY counts (CURRENT BUG)
 		let tokens_counted_by_function: u64 = messages[(start_idx + 1)..=end_idx]
@@ -3124,37 +2996,22 @@ mod tests {
 	}
 
 	#[test]
-	fn bootstrap_with_many_messages_compresses_correctly() {
-		// More messages to make the bug clearly visible.
-		// With bootstrap messages [1, 2] before start_idx=3, the old code would
-		// count them toward compress_count, leaving fewer messages actually compressed.
+	fn bootstrap_with_many_messages_compresses_all() {
+		// With instructions at idx 2, anchor moves back to 2.
+		// Compress-all: everything from anchor+1 to end gets compressed.
 		let mut messages = vec![
 			msg("system"),    // 0
 			msg("assistant"), // 1 - welcome
 			msg("user"),      // 2 - instructions
 			msg("user"),      // 3 - first_prompt_idx
 		];
-		// 10 alternating assistant/user messages
 		for i in 0..10 {
 			messages.push(msg(if i % 2 == 0 { "assistant" } else { "user" }));
 		} // 4-13
 
 		let (start_idx, end_idx) = find_compression_range(&messages, Some(3), false).unwrap();
-
-		assert_eq!(start_idx, 3);
-		// Conversation indices at/after 3: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] (11 items)
-		// Keep last 4: [10, 11, 12, 13]
-		// compress_count = 7, first preserved = conversation_indices[7] = 10 (assistant)
-		// "first preserved must be user" advances to conversation_indices[8] = 11 (user)
-		// compress_count = 8, end_idx = 11 - 1 = 10
-		assert_eq!(
-			end_idx, 10,
-			"Must compress up to index 10 (everything before preserved user at 11)"
-		);
-
-		// OLD BUG would have: conversation_indices includes [1, 2] → 13 items
-		// compress_count = 13 - 4 = 9, first preserved = conversation_indices[9] = 12
-		// end_idx = 12 - 1 = 11 — TOO HIGH, would compress messages that should be preserved!
+		assert_eq!(start_idx, 2, "anchor must be instructions file at idx 2");
+		assert_eq!(end_idx, 13, "compress-all: end_idx = last message");
 	}
 
 	#[test]
@@ -3457,59 +3314,33 @@ mod tests {
 	}
 
 	#[test]
-	fn test_compression_never_removes_last_user_message() {
-		// The RECENT window must always protect the last few messages.
-		// end_idx must be strictly less than messages.len()-1 so the final user
-		// message (the ongoing task) is never included in the drain range.
+	fn compress_all_includes_last_message() {
+		// Compress-all: end_idx = last message. Recent user messages are extracted
+		// and re-injected by the caller, not protected by find_compression_range.
 		let mut messages: Vec<Message> = Vec::new();
 		messages.push(msg("system")); // 0
 		messages.push(msg("user")); // 1 ← anchor
 		for i in 0..20 {
 			messages.push(msg(if i % 2 == 0 { "assistant" } else { "user" }));
 		} // 2-21
-	// The very last message is the "ongoing task" user message
-		messages.push(msg("user")); // 22 ← must never be in drain range
+		messages.push(msg("user")); // 22
 
-		let (_, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
-
-		assert!(
-			end_idx < messages.len() - 1,
-			"end_idx ({}) must be < last message index ({}) — last user message must be protected",
-			end_idx,
-			messages.len() - 1
-		);
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
+		assert_eq!(start_idx, 1);
+		assert_eq!(end_idx, 22, "compress-all: end_idx must be last message");
 	}
 
 	#[test]
-	fn second_compression_preserves_last_user_prompt_in_tool_loop() {
-		// Reproduces the critical bug: after first compression + more tool calls,
-		// the preserved zone (last 4 conversation messages) is all assistant messages.
-		// The user's 2nd prompt (the active request) was in the compression range
-		// and got compressed away, causing the AI to lose all context about what
-		// the user asked for.
-		//
-		// Layout after first compression + continued tool calls:
-		// [0] system
-		// [1] assistant (welcome)
-		// [2] user (instructions)
-		// [3] user (1st prompt) ← first_prompt_idx
-		// [4] assistant (compressed summary from 1st pass)
-		// [5] user (2nd prompt) ← MUST be preserved
-		// [6] assistant (tool_calls)
-		// [7] tool
-		// [8] tool
-		// [9] assistant (tool_calls)
-		// [10] tool
-		// [11] assistant (response)
-		// [13] tool
-		// [14] assistant (response)
+	fn compress_all_with_tool_loop_after_user_prompt() {
+		// Compress-all: everything is compressed. The user's 2nd prompt at index 5
+		// is in the drain range but will be extracted and re-injected by the caller.
 		let messages = vec![
 			msg("system"),    // 0
 			msg("assistant"), // 1 welcome
 			msg("user"),      // 2 instructions
-			msg("user"),      // 3 first prompt (anchor)
+			msg("user"),      // 3 first prompt
 			msg("assistant"), // 4 compressed summary
-			msg("user"),      // 5 second prompt ← MUST survive
+			msg("user"),      // 5 second prompt
 			msg("assistant"), // 6 tool_calls
 			msg("tool"),      // 7
 			msg("tool"),      // 8
@@ -3522,14 +3353,8 @@ mod tests {
 		];
 
 		let (start_idx, end_idx) = find_compression_range(&messages, Some(3), false).unwrap();
-
-		// The 2nd user prompt at index 5 must NOT be in the drain range (start_idx+1..=end_idx)
-		assert!(
-			end_idx < 5,
-			"end_idx ({}) must be < 5 — the user's 2nd prompt at index 5 must never be compressed away",
-			end_idx
-		);
-		assert_eq!(start_idx, 3, "anchor must remain at first_prompt_idx");
+		assert_eq!(start_idx, 2, "anchor at instructions");
+		assert_eq!(end_idx, 14, "compress-all: end_idx = last message");
 	}
 
 	#[test]
@@ -3554,76 +3379,9 @@ mod tests {
 		assert_eq!(recent_medium, 8, "RECENT window must be 8 at 32 messages");
 	}
 	#[test]
-	fn first_preserved_must_be_user_not_assistant() {
-		// Reproduces the exact bug from the session log:
-		// After compression, the compressed summary (assistant) is inserted, and the first
-		// preserved conversation message is also an assistant — creating two consecutive
-		// assistant messages. Anthropic rejects this with:
-		// "tool_use ids were found without tool_result blocks immediately after"
-		//
-		// The fix: find_compression_range must advance compress_count past any leading
-		// assistant messages in the preserved zone so the first preserved is always a user.
-		let mut messages = Vec::new();
-		messages.push(msg("system")); // 0
-		messages.push(msg("user")); // 1 (first_prompt_idx)
-
-		// First tool cycle
-		let mut a2 = msg("assistant"); // 2
-		a2.tool_calls = Some(json!([
-			{"id": "call_1", "type": "function", "function": {"name": "view", "arguments": "{}"}}
-		]));
-		messages.push(a2);
-		let mut t3 = msg("tool"); // 3
-		t3.tool_call_id = Some("call_1".to_string());
-		messages.push(t3);
-
-		// Second tool cycle (no user between — AI continuation)
-		let mut a4 = msg("assistant"); // 4
-		a4.tool_calls = Some(json!([
-			{"id": "call_2", "type": "function", "function": {"name": "shell", "arguments": "{}"}}
-		]));
-		messages.push(a4);
-		let mut t5 = msg("tool"); // 5
-		t5.tool_call_id = Some("call_2".to_string());
-		messages.push(t5);
-
-		messages.push(msg("assistant")); // 6 (text response)
-		messages.push(msg("user")); // 7
-
-		// Third tool cycle — this assistant will be first preserved if bug exists
-		let mut a8 = msg("assistant"); // 8
-		a8.tool_calls = Some(json!([
-			{"id": "call_3a", "type": "function", "function": {"name": "view", "arguments": "{}"}},
-			{"id": "call_3b", "type": "function", "function": {"name": "shell", "arguments": "{}"}},
-			{"id": "call_3c", "type": "function", "function": {"name": "ast_grep", "arguments": "{}"}}
-		]));
-		messages.push(a8);
-		let mut t9 = msg("tool"); // 9
-		t9.tool_call_id = Some("call_3a".to_string());
-		messages.push(t9);
-		let mut t10 = msg("tool"); // 10
-		t10.tool_call_id = Some("call_3b".to_string());
-		messages.push(t10);
-		let mut t11 = msg("tool"); // 11
-		t11.tool_call_id = Some("call_3c".to_string());
-		messages.push(t11);
-
-		messages.push(msg("assistant")); // 12 (continuation)
-		messages.push(msg("user")); // 13
-		messages.push(msg("assistant")); // 14
-		messages.push(msg("user")); // 15
-		messages.push(msg("assistant")); // 16
-
-		// conversation_indices = [1, 2, 4, 6, 7, 8, 12, 13, 14, 15, 16] (11 items)
-		// preserve_count = 4
-		// compress_count = 11 - 4 = 7
-		// Last 4 preserved: conversation_indices[7..11] = [13, 14, 15, 16]
-		// BUT conversation_indices[7] = 13 is a user — that's fine.
-		//
-		// Let's adjust to trigger the bug: we need the first preserved to be an assistant.
-		// With the current layout, conversation_indices[7] = 13 (user). Let me restructure.
-
-		// Actually, let me build a cleaner scenario that definitely triggers it.
+	fn compress_all_with_tool_cycles() {
+		// Compress-all: no preserved zone concept. Everything is compressed,
+		// recent user messages are extracted and re-injected by the caller.
 		let mut messages = vec![
 			msg("system"),    // 0
 			msg("user"),      // 1 (first_prompt_idx)
@@ -3631,84 +3389,44 @@ mod tests {
 			msg("user"),      // 3
 			msg("assistant"), // 4
 			msg("user"),      // 5
+			msg("assistant"), // 6
+			msg("user"),      // 7
+			msg("assistant"), // 8
 		];
-		// This assistant with tool_calls should be the first preserved conversation message
-		let mut a6 = msg("assistant"); // 6
-		a6.tool_calls = Some(json!([
-			{"id": "call_A", "type": "function", "function": {"name": "view", "arguments": "{}"}},
-			{"id": "call_B", "type": "function", "function": {"name": "shell", "arguments": "{}"}},
-			{"id": "call_C", "type": "function", "function": {"name": "ast_grep", "arguments": "{}"}}
-		]));
-		messages.push(a6);
-		let mut t7 = msg("tool"); // 7
-		t7.tool_call_id = Some("call_A".to_string());
-		messages.push(t7);
-		let mut t8 = msg("tool"); // 8
-		t8.tool_call_id = Some("call_B".to_string());
-		messages.push(t8);
-		let mut t9 = msg("tool"); // 9
-		t9.tool_call_id = Some("call_C".to_string());
-		messages.push(t9);
-
-		messages.push(msg("assistant")); // 10 (continuation after tools)
-		messages.push(msg("user")); // 11
-		messages.push(msg("assistant")); // 12
-
-		// conversation_indices = [1, 2, 3, 4, 5, 6, 10, 11, 12] (9 items)
-		// preserve_count = 4
-		// compress_count = 9 - 4 = 5
-		// Last 4 preserved: conversation_indices[5..9] = [6, 10, 11, 12]
-		// First preserved: conversation_indices[5] = 6 (assistant with tool_calls!)
-		// end_idx = 6 - 1 = 5
 
 		let (start_idx, end_idx) = find_compression_range(&messages, Some(1), false).unwrap();
+		assert_eq!(start_idx, 1);
+		assert_eq!(end_idx, 8, "compress-all: end_idx = last message");
 
-		// The first preserved message must be a user, not an assistant.
-		// If the first preserved conversation message is an assistant, the compressed
-		// summary (also assistant) creates consecutive assistants — API rejection.
-		let first_preserved_idx = end_idx + 1;
-		assert_eq!(
-			messages[first_preserved_idx].role, "user",
-			"First preserved message after compression must be 'user', not '{}' at index {}. \
-			 Consecutive assistants (compressed summary + preserved assistant) break the API.",
-			messages[first_preserved_idx].role, first_preserved_idx
-		);
+		// Simulate compress-all + user extraction: drain, insert summary, re-inject users
+		let recent_users: Vec<Message> = messages[start_idx + 1..=end_idx]
+			.iter()
+			.rev()
+			.filter(|m| m.role == "user")
+			.take(2)
+			.cloned()
+			.collect::<Vec<_>>()
+			.into_iter()
+			.rev()
+			.collect();
 
-		// Simulate compression: drain start_idx+1..=end_idx, insert summary
 		let mut after = messages.clone();
 		after.drain(start_idx + 1..=end_idx);
 		let mut summary = msg("assistant");
 		summary.content = "## Conversation Summary [COMPRESSED: test]".to_string();
 		after.insert(start_idx + 1, summary);
-
-		// Validate: no consecutive assistant messages
-		for i in 1..after.len() {
-			if after[i].role == "assistant" && after[i - 1].role == "assistant" {
-				panic!(
-					"Consecutive assistants at indices {} and {}: \
-					 prev={:?} (tool_calls={:?}), curr={:?} (tool_calls={:?})",
-					i - 1,
-					i,
-					after[i - 1].role,
-					after[i - 1].tool_calls.is_some(),
-					after[i].role,
-					after[i].tool_calls.is_some(),
-				);
-			}
+		// Re-inject recent user messages
+		for (i, user_msg) in recent_users.iter().enumerate() {
+			after.insert(start_idx + 2 + i, user_msg.clone());
 		}
 
-		// Validate: every assistant with tool_calls has tool results immediately after
-		for i in 0..after.len() {
-			if after[i].role == "assistant" && after[i].tool_calls.is_some() {
-				assert!(
-					i + 1 < after.len() && after[i + 1].role == "tool",
-					"Assistant with tool_calls at index {} must be followed by tool result, \
-					 but next is {:?}",
-					i,
-					after.get(i + 1).map(|m| &m.role)
-				);
-			}
-		}
+		// Result: [system, user(anchor), summary(asst), user(5), user(7)]
+		assert_eq!(after.len(), 5);
+		assert_eq!(after[0].role, "system");
+		assert_eq!(after[1].role, "user"); // anchor
+		assert_eq!(after[2].role, "assistant"); // summary
+		assert_eq!(after[3].role, "user"); // extracted user from idx 5
+		assert_eq!(after[4].role, "user"); // extracted user from idx 7
 	}
 
 	#[test]
@@ -3751,13 +3469,14 @@ mod tests {
 			"Tool-loop session must produce valid compression range, got ({start_idx}, {end_idx})"
 		);
 
-		// start_idx = first_prompt_idx = 1 (user message is the anchor)
+		// start_idx = first_prompt_idx = 1 (tool-loop: single user, no instructions)
 		assert_eq!(start_idx, 1, "start_idx must be first_prompt_idx = 1");
 
-		// end_idx must be before the preserved zone
-		assert!(
-			end_idx < messages.len() - 1,
-			"end_idx ({end_idx}) must leave some messages preserved"
+		// compress-all: end_idx = last message
+		assert_eq!(
+			end_idx,
+			messages.len() - 1,
+			"compress-all: end_idx must be last message"
 		);
 	}
 
@@ -3911,190 +3630,5 @@ mod tests {
 			"'knowledge' key must not be present — persistence reads 'content'"
 		);
 		assert_eq!(entry["content"].as_str().unwrap(), "test knowledge");
-	}
-
-	// ── Task-aware compression tests ──────────────────────────────────────
-
-	#[test]
-	fn extract_done_tasks_parses_single_task() {
-		let content = "Summary text\n<done>\ntask1\n</done>\nMore text";
-		let tasks = super::extract_done_tasks(content);
-		assert_eq!(tasks, vec!["task1"]);
-	}
-
-	#[test]
-	fn extract_done_tasks_parses_multiple_tasks() {
-		let content = "<done>\ntask1\ntask3\ntask5\n</done>";
-		let tasks = super::extract_done_tasks(content);
-		assert_eq!(tasks, vec!["task1", "task3", "task5"]);
-	}
-
-	#[test]
-	fn extract_done_tasks_empty_when_no_done_block() {
-		let content = "Just a summary with no done block";
-		let tasks = super::extract_done_tasks(content);
-		assert!(tasks.is_empty());
-	}
-
-	#[test]
-	fn extract_done_tasks_skips_blank_lines() {
-		let content = "<done>\n\ntask2\n\n</done>";
-		let tasks = super::extract_done_tasks(content);
-		assert_eq!(tasks, vec!["task2"]);
-	}
-
-	#[test]
-	fn strip_done_tags_removes_block() {
-		let content = "Before\n<done>\ntask1\ntask2\n</done>\nAfter";
-		let stripped = super::strip_done_tags(content);
-		assert_eq!(stripped, "Before\n\nAfter");
-	}
-
-	#[test]
-	fn strip_done_tags_handles_no_block() {
-		let content = "No done block here";
-		let stripped = super::strip_done_tags(content);
-		assert_eq!(stripped, "No done block here");
-	}
-
-	#[test]
-	fn strip_done_tags_removes_multiple_blocks() {
-		let content = "<done>\ntask1\n</done> middle <done>\ntask2\n</done>";
-		let stripped = super::strip_done_tags(content);
-		assert_eq!(stripped, "middle");
-	}
-
-	#[test]
-	fn task_map_built_from_preserved_zone_user_messages() {
-		// Simulate build_compression_prompt's task collection logic:
-		// Messages: [sys, user1, asst1, user2, asst2, user3, asst3]
-		// If end_idx=3 (compress up to asst1), preserved zone starts at idx 4.
-		// user2 is at idx 3 (in compression zone), user3 is at idx 5 (preserved).
-		let mut task_map = std::collections::HashMap::new();
-		let end_idx = 3usize;
-
-		// Simulate: iterate preserved zone (end_idx+1..)
-		let roles = [
-			"system",
-			"user",
-			"assistant",
-			"user",
-			"assistant",
-			"user",
-			"assistant",
-		];
-		let mut task_num = 0u32;
-		for (idx, &role) in roles.iter().enumerate().skip(end_idx + 1) {
-			if role == "user" {
-				task_num += 1;
-				task_map.insert(format!("task{}", task_num), idx);
-			}
-		}
-
-		assert_eq!(task_map.len(), 1); // only user at idx 5
-		assert_eq!(task_map.get("task1"), Some(&5));
-	}
-
-	#[test]
-	fn done_task_drain_skips_tasks_in_compression_zone() {
-		// If AI marks a task as done but its index is within the compression zone,
-		// it should be skipped (already compressed).
-		let task_map: std::collections::HashMap<String, usize> = [
-			("task1".to_string(), 2usize), // in compression zone (end_idx=4)
-			("task2".to_string(), 6usize), // in preserved zone
-		]
-		.into_iter()
-		.collect();
-
-		let end_idx = 4usize;
-		let done_tasks = vec!["task1".to_string(), "task2".to_string()];
-
-		let mut drain_candidates = Vec::new();
-		for task_id in &done_tasks {
-			if let Some(&abs_idx) = task_map.get(task_id.as_str()) {
-				if abs_idx <= end_idx {
-					continue; // skip — in compression zone
-				}
-				drain_candidates.push(abs_idx);
-			}
-		}
-
-		assert_eq!(drain_candidates, vec![6]); // only task2 is drainable
-	}
-
-	#[test]
-	fn done_task_drain_collects_full_chain() {
-		// A task chain = user message + all following non-user messages until next user.
-		// Roles: [sys, user, asst, tool, asst, user, asst, user, asst]
-		//         0    1     2     3     4     5     6     7     8
-		// If task at idx 5 is done, chain = [5, 6] (stops before user at 7).
-		let roles = [
-			"system",
-			"user",
-			"assistant",
-			"tool",
-			"assistant",
-			"user",
-			"assistant",
-			"user",
-			"assistant",
-		];
-		let task_idx = 5usize;
-
-		let mut chain = vec![task_idx];
-		for (i, &role) in roles.iter().enumerate().skip(task_idx + 1) {
-			if role == "user" {
-				break;
-			}
-			chain.push(i);
-		}
-
-		assert_eq!(chain, vec![5, 6]);
-	}
-
-	#[test]
-	fn done_task_drain_last_task_collects_to_end() {
-		// If the done task is the last user message, chain extends to end of messages.
-		// Roles: [sys, user, asst, user, asst, tool, asst]
-		//         0    1     2     3     4     5     6
-		// Task at idx 3 is done, chain = [3, 4, 5, 6].
-		let roles = [
-			"system",
-			"user",
-			"assistant",
-			"user",
-			"assistant",
-			"tool",
-			"assistant",
-		];
-		let task_idx = 3usize;
-
-		let mut chain = vec![task_idx];
-		for (i, &role) in roles.iter().enumerate().skip(task_idx + 1) {
-			if role == "user" {
-				break;
-			}
-			chain.push(i);
-		}
-
-		assert_eq!(chain, vec![3, 4, 5, 6]);
-	}
-
-	#[test]
-	fn done_task_index_adjustment_after_compression_drain() {
-		// After compression drain removes messages start_idx+1..=end_idx,
-		// preserved-zone indices shift down by (end_idx - start_idx).
-		let start_idx = 1usize;
-		let end_idx = 5usize;
-		let shift = end_idx - start_idx; // 4
-
-		let original_task_idx = 8usize; // was at index 8 before drain
-		let adjusted = original_task_idx - shift; // should be 4
-
-		assert_eq!(adjusted, 4);
-		assert!(
-			original_task_idx > end_idx,
-			"task must be in preserved zone"
-		);
 	}
 }
