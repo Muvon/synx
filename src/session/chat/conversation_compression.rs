@@ -78,9 +78,11 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 			.collect::<Vec<_>>()
 	);
 
-	// RATIO SELECTION: Pick the best matching pressure level by token count.
-	// Levels are used purely for ratio selection — the threshold determines which
-	// compression strength to use, NOT whether compression happens (cooldown does that).
+	// RATIO SELECTION: Pick pressure level by token threshold, then escalate
+	// based on consecutive compressions (without user interaction).
+	// Each consecutive compression bumps to the next level (round-robin).
+	// This prevents infinite loops at level 0 when compress-all drops context
+	// hard and it grows back to the same threshold repeatedly.
 	let matched_level = config
 		.compression
 		.pressure_levels
@@ -88,8 +90,19 @@ pub async fn should_check_compression(session: &mut ChatSession, config: &Config
 		.filter(|l| current_tokens >= l.threshold)
 		.max_by(|a, b| a.threshold.cmp(&b.threshold));
 
+	let num_levels = config.compression.pressure_levels.len();
+	if num_levels == 0 {
+		log_debug!("No pressure levels configured - compression disabled");
+		return (false, 2.0);
+	}
+
 	let level = match matched_level {
-		Some(l) => l,
+		Some(_) => {
+			// Escalate: use consecutive_compressions to index into levels (round-robin)
+			let n = session.session.info.consecutive_compressions as usize;
+			let escalated_idx = n % num_levels;
+			&config.compression.pressure_levels[escalated_idx]
+		}
 		None => {
 			log_debug!(
 				"No threshold exceeded (current: {}, lowest threshold: {})",
