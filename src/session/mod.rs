@@ -75,6 +75,8 @@ pub struct Message {
 	pub timestamp: u64,
 	#[serde(default = "default_cache_marker")]
 	pub cached: bool, // Marks if this message is a cache breakpoint
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub cache_ttl: Option<String>, // Cache TTL override (e.g. "1h") — only Anthropic supports this
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub tool_call_id: Option<String>, // For tool messages: the ID of the tool call
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -106,6 +108,7 @@ impl Default for Message {
 			content: String::new(),
 			timestamp: current_timestamp(),
 			cached: false,
+			cache_ttl: None,
 			tool_call_id: None,
 			name: None,
 			tool_calls: None,
@@ -463,6 +466,7 @@ mod tests {
 			content: content.to_string(),
 			timestamp: 1234567890,
 			cached: false,
+			cache_ttl: None,
 			tool_call_id,
 			name: None,
 			tool_calls,

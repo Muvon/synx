@@ -967,6 +967,7 @@ impl ChatSession {
 			// The compressed block is the new stable history boundary — cached only
 			// when the model actually supports cache markers.
 			cached: supports_caching,
+			cache_ttl: None,
 			tool_call_id: None,
 			name: Some("plan_compression".to_string()),
 			tool_calls: None,

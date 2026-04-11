@@ -45,6 +45,7 @@ mod session_restore_tests {
 			content: content.to_string(),
 			timestamp,
 			cached: false,
+			cache_ttl: None,
 			tool_call_id: None,
 			name: None,
 			tool_calls: None,

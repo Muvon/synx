@@ -809,6 +809,7 @@ pub async fn check_and_compress_conversation(
 		current_context_tokens,
 		user_tasks_msgs,
 		last_user_message,
+		config.use_long_system_cache,
 	)
 	.await?;
 
@@ -1240,6 +1241,7 @@ async fn call_ai_for_decision(
 			content: system_content,
 			timestamp: now,
 			cached: false,
+			cache_ttl: None,
 			tool_call_id: None,
 			name: None,
 			tool_calls: None,
@@ -1253,6 +1255,7 @@ async fn call_ai_for_decision(
 			content: user_content,
 			timestamp: now,
 			cached: false,
+			cache_ttl: None,
 			tool_call_id: None,
 			name: None,
 			tool_calls: None,
@@ -1386,6 +1389,7 @@ async fn apply_compression(
 	current_context_tokens: u64,
 	user_tasks_msgs: Vec<String>,
 	last_user_message: Option<crate::session::Message>,
+	use_long_cache: bool,
 ) -> Result<()> {
 	// Parse file contexts from AI summary (AI may request specific file ranges to re-inject)
 	let file_contexts = super::file_context::parse_file_contexts(context_summary);
@@ -1437,10 +1441,22 @@ async fn apply_compression(
 	// Cache markers: marker #1 on summary, marker #2 on re-injected user message.
 	// Evict existing content markers first to enforce the 2-marker limit.
 	let supports_caching = crate::session::model_supports_caching(&session.session.info.model);
+	// Evict stale content markers — but preserve the anchor's marker.
+	// The anchor (instructions) keeps its cache marker from session start.
+	// Set 1h TTL on anchor when long cache is enabled — stable prefix, rarely changes.
 	if supports_caching {
-		for msg in session.session.messages.iter_mut() {
-			if msg.cached && msg.role != "system" {
+		for (i, msg) in session.session.messages.iter_mut().enumerate() {
+			if i == start_idx {
+				// Anchor: keep marker, set long TTL if supported
+				msg.cached = true;
+				msg.cache_ttl = if use_long_cache {
+					Some("1h".to_string())
+				} else {
+					None
+				};
+			} else if msg.cached && msg.role != "system" {
 				msg.cached = false;
+				msg.cache_ttl = None;
 			}
 		}
 	}
@@ -1450,12 +1466,7 @@ async fn apply_compression(
 		.unwrap_or_default()
 		.as_secs();
 
-	// Marker #1: anchor (before summary) — stable bootstrap cache boundary
-	if let Some(anchor) = session.session.messages.get_mut(start_idx) {
-		anchor.cached = supports_caching;
-	}
-
-	// Summary message (no cache marker — sits between the two markers)
+	// Summary message (no cache marker — sits between anchor marker and user marker)
 	let summary_msg = crate::session::Message {
 		role: "assistant".to_string(),
 		content: compressed_entry,
@@ -3382,7 +3393,7 @@ mod tests {
 	fn compress_all_with_tool_cycles() {
 		// Compress-all: no preserved zone concept. Everything is compressed,
 		// recent user messages are extracted and re-injected by the caller.
-		let mut messages = vec![
+		let messages = vec![
 			msg("system"),    // 0
 			msg("user"),      // 1 (first_prompt_idx)
 			msg("assistant"), // 2

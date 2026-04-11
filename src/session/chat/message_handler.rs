@@ -59,6 +59,7 @@ impl MessageHandler {
 				.unwrap_or_default()
 				.as_secs(),
 			cached: false,
+			cache_ttl: None,
 			tool_call_id: None,
 			name: None,
 			tool_calls: original_tool_calls,

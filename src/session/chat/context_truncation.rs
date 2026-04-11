@@ -247,6 +247,7 @@ mod tests {
 			content: content.to_string(),
 			timestamp: 0,
 			cached: false,
+			cache_ttl: None,
 			tool_call_id,
 			name,
 			tool_calls,

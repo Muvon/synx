@@ -129,6 +129,16 @@ impl<'a> ChatCompletionParams<'a> {
 
 		let mut octolib_messages = octolib_messages?;
 
+		// Set long cache TTL on system message when configured
+		if self.config.use_long_system_cache {
+			if let Some(sys_msg) = octolib_messages
+				.iter_mut()
+				.find(|m| m.role == "system" && m.cached)
+			{
+				sys_msg.cache_ttl = Some("1h".to_string());
+			}
+		}
+
 		// Some providers (e.g. Gemini, Mistral) require the last message to be from the user.
 		// After conversation compression the last message can be an assistant summary, which
 		// causes those providers to return an error.  Appending a lightweight "Please continue."
@@ -162,7 +172,8 @@ impl<'a> ChatCompletionParams<'a> {
 			self.max_tokens,
 		)
 		.with_max_retries(self.max_retries)
-		.with_retry_timeout(self.retry_timeout);
+		.with_retry_timeout(self.retry_timeout)
+		.with_long_cache(self.config.use_long_system_cache);
 
 		if let Some(token) = &self.cancellation_token {
 			params = params.with_cancellation_token(token.clone());
@@ -267,9 +278,12 @@ fn convert_message_to_octolib(
 		builder = builder.id(id);
 	}
 
-	// Set cache marker if needed
+	// Set cache marker and TTL if needed
 	if msg.cached {
 		builder = builder.cached();
+		if let Some(ref ttl) = msg.cache_ttl {
+			builder = builder.cache_ttl(ttl);
+		}
 	}
 
 	// Convert images if present

@@ -123,6 +123,7 @@ fn handle_final_response(
 			.unwrap_or_default()
 			.as_secs(),
 		cached: false,
+		cache_ttl: None,
 		tool_call_id: None,
 		name: None,
 		tool_calls: None,
@@ -294,6 +295,7 @@ fn add_assistant_message_with_tool_calls(
 			.unwrap_or_default()
 			.as_secs(),
 		cached: false,
+		cache_ttl: None,
 		tool_call_id: None,
 		name: None,
 		tool_calls: original_tool_calls.clone(),

@@ -259,6 +259,7 @@ pub fn clean_interrupted_tool_calls(
 				content: "[Tool execution was interrupted by user]".to_string(),
 				timestamp: crate::utils::time::now_secs(),
 				cached: false,
+				cache_ttl: None,
 				tool_call_id: Some(call_id),
 				name: Some(tool_name),
 				tool_calls: None,
