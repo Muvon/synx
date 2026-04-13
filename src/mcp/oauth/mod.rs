@@ -1,35 +1,18 @@
-// Copyright 2026 Muvon Un Limited
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 //! OAuth 2.1 + PKCE Authentication for MCP Servers
 //!
-//! Supports both:
-//! - MCP Authorization Discovery (RFC 9728) - automatic OAuth endpoint discovery
-//! - Device Flow (RFC 8628) - for CLI tools without web browser
-//! - Manual OAuth configuration - fallback for non-MCP-compliant servers
+//! Supports MCP Authorization Discovery (RFC 9728) - automatic OAuth endpoint discovery.
+//! All OAuth configuration is discovered automatically via RFC 9728/8414 metadata;
+//! no manual user configuration is needed.
 
 pub mod callback_server;
-pub mod device_flow;
+pub mod cimd;
 pub mod discovery;
 pub mod flow;
 pub mod token_store;
 
 // Re-export commonly used types
 pub use callback_server::{start_callback_server, OAuthCallbackResult};
-pub use device_flow::{
-	execute_device_flow, start_device_flow, DeviceCodeResponse, DeviceTokenResponse,
-};
+pub use cimd::{resolve_client_id, stop_cimd_server};
 pub use discovery::{
 	clear_all_discovered_oauth_cache, clear_discovered_oauth_cache, discover_oauth_from_mcp_server,
 };
@@ -41,10 +24,128 @@ pub use token_store::{
 	clear_token, get_valid_token, load_token, save_token, TokenMetadata, TokenResult,
 };
 
-use crate::config::OAuthConfig;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use url::Url;
+
+/// Internal OAuth 2.1 + PKCE configuration for MCP servers.
+///
+/// This struct is built automatically from RFC 9728/8414 discovery metadata.
+/// It is NOT user-configurable — all fields come from the authorization server.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct OAuthConfig {
+	/// The OAuth client ID (from CIMD, DCR, or known public client).
+	pub client_id: String,
+
+	/// The OAuth client secret (empty for public clients using PKCE).
+	#[serde(default)]
+	pub client_secret: String,
+
+	/// The OAuth authorization endpoint URL.
+	pub authorization_url: String,
+
+	/// The OAuth token endpoint URL.
+	pub token_url: String,
+
+	/// The OAuth authorization callback URL (local callback server).
+	pub callback_url: String,
+
+	/// List of OAuth scopes to request.
+	#[serde(default)]
+	pub scopes: Vec<String>,
+
+	/// Optional state parameter for CSRF protection.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub state: Option<String>,
+
+	/// Token refresh buffer in seconds before expiry.
+	#[serde(default = "default_refresh_buffer")]
+	pub refresh_buffer_seconds: u64,
+}
+
+fn default_refresh_buffer() -> u64 {
+	300
+}
+
+impl OAuthConfig {
+	/// Creates a new OAuthConfig with all required fields.
+	pub fn new(
+		client_id: String,
+		client_secret: String,
+		authorization_url: String,
+		token_url: String,
+		callback_url: String,
+		scopes: Vec<String>,
+	) -> Self {
+		Self {
+			client_id,
+			client_secret,
+			authorization_url,
+			token_url,
+			callback_url,
+			scopes,
+			state: None,
+			refresh_buffer_seconds: default_refresh_buffer(),
+		}
+	}
+
+	/// Validates the OAuth configuration.
+	pub fn validate(&self) -> Result<(), String> {
+		if self.client_id.trim().is_empty() {
+			return Err("OAuth client_id cannot be empty".to_string());
+		}
+
+		let auth_url = Url::parse(&self.authorization_url).map_err(|e| {
+			format!(
+				"OAuth authorization_url is invalid: {}. Must be a valid URL",
+				e
+			)
+		})?;
+
+		if auth_url.scheme() != "https"
+			&& auth_url.host_str() != Some("localhost")
+			&& auth_url.host_str() != Some("127.0.0.1")
+		{
+			return Err(
+				"OAuth authorization_url must use HTTPS or http://localhost/http://127.0.0.1"
+					.to_string(),
+			);
+		}
+
+		let token_url = Url::parse(&self.token_url)
+			.map_err(|e| format!("OAuth token_url is invalid: {}. Must be a valid URL", e))?;
+
+		if token_url.scheme() != "https"
+			&& token_url.host_str() != Some("localhost")
+			&& token_url.host_str() != Some("127.0.0.1")
+		{
+			return Err(
+				"OAuth token_url must use HTTPS or http://localhost/http://127.0.0.1".to_string(),
+			);
+		}
+
+		let callback_url = Url::parse(&self.callback_url)
+			.map_err(|e| format!("OAuth callback_url is invalid: {}. Must be a valid URL", e))?;
+
+		if callback_url.scheme() != "http" && callback_url.scheme() != "https" {
+			return Err("OAuth callback_url must use HTTP or HTTPS".to_string());
+		}
+
+		for scope in &self.scopes {
+			if scope.trim().is_empty() {
+				return Err("OAuth scopes cannot contain empty strings".to_string());
+			}
+		}
+
+		if self.refresh_buffer_seconds < 60 {
+			return Err("OAuth refresh_buffer_seconds must be at least 60 seconds".to_string());
+		}
+
+		Ok(())
+	}
+}
 
 // Global lock to prevent concurrent OAuth flows for the same client_id
 lazy_static::lazy_static! {
@@ -70,7 +171,7 @@ pub async fn start_oauth_flow(config: &OAuthConfig) -> Result<OAuthCallbackResul
 /// Uses a per-server lock to prevent concurrent OAuth flows.
 ///
 /// # Arguments
-/// * `config` - OAuth configuration (either discovered or manual)
+/// * `config` - OAuth configuration (discovered via RFC 9728)
 /// * `server_name` - Server name for token storage (each server has separate token)
 /// * `force_refresh` - Force token refresh even if valid token exists
 pub async fn get_access_token(
@@ -111,80 +212,7 @@ pub async fn get_access_token(
 		}
 	}
 
-	// No valid token - start OAuth flow (protected by lock)
-
-	// Use Device Flow for GitHub (RFC 8628) - best for CLI tools
-	let issuer = &config.authorization_url;
-	if issuer.contains("github.com") {
-		crate::log_debug!(
-			"🔍 Using GitHub Device Flow for authentication, server_name='{}'",
-			server_name
-		);
-		crate::log_debug!(
-			"Using GitHub Device Flow for authentication, server_name='{}'",
-			server_name
-		);
-
-		crate::log_debug!("🔍 Calling execute_device_flow...");
-		let access_token = execute_device_flow(config, server_name)
-			.await
-			.map_err(|e| anyhow::anyhow!("Device flow failed: {}", e))?;
-
-		crate::log_debug!(
-			"✅ Device flow returned! access_token prefix='{}...'",
-			access_token.chars().take(10).collect::<String>()
-		);
-		crate::log_debug!(
-			"Device flow completed, access_token prefix='{}...'",
-			access_token.chars().take(10).collect::<String>()
-		);
-
-		// Save the token
-		let metadata = TokenMetadata {
-			server_name: server_name.to_string(),
-			access_token: access_token.clone(),
-			refresh_token: None,
-			expires_at: 0, // GitHub tokens don't expire
-			scopes: config.scopes.clone(),
-		};
-
-		crate::log_debug!("🔍 Saving token for server_name='{}'...", server_name);
-		if let Err(e) = save_token(server_name, &metadata).await {
-			crate::log_debug!("❌ Failed to save token: {}", e);
-			crate::log_error!("Failed to save token: {}", e);
-		} else {
-			crate::log_debug!("✅ Token save completed");
-		}
-
-		// Verify the token was saved
-		crate::log_debug!("🔍 Verifying token was saved...");
-		match load_token(server_name).await {
-			Ok(Some(saved)) => {
-				crate::log_debug!(
-					"✅ Token verified saved: server_name='{}', token_prefix='{}...'",
-					server_name,
-					saved.access_token.chars().take(10).collect::<String>()
-				);
-				crate::log_debug!(
-					"Token verified saved: server_name='{}', token_prefix='{}...'",
-					server_name,
-					saved.access_token.chars().take(10).collect::<String>()
-				);
-			}
-			Ok(None) => {
-				crate::log_debug!("❌ Token was NOT found in storage after save attempt!");
-				crate::log_error!("Token was NOT found in storage after save attempt!");
-			}
-			Err(e) => {
-				crate::log_debug!("❌ Failed to verify token storage: {}", e);
-				crate::log_error!("Failed to verify token storage: {}", e);
-			}
-		}
-
-		return Ok(Some(access_token));
-	}
-
-	// Use regular web flow for other providers
+	// No valid token - start standard web OAuth flow (PKCE + callback)
 	let result = start_oauth_flow(config).await?;
 
 	match result {

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::oauth_config::OAuthConfig;
 use serde::{Deserialize, Serialize};
 
 // Type-specific MCP server configuration using tagged enums
@@ -33,12 +32,6 @@ pub enum McpServerConfig {
 	Http {
 		name: String,
 		url: String,
-		#[serde(skip_serializing_if = "Option::is_none")]
-		auth_token: Option<String>,
-		/// OAuth 2.1 + PKCE configuration for this server.
-		/// When set, authentication will use OAuth instead of static auth_token.
-		#[serde(skip_serializing_if = "Option::is_none")]
-		oauth: Option<OAuthConfig>,
 		timeout_seconds: u64,
 		tools: Vec<String>,
 		/// Roles that should automatically include this server (without explicit server_refs)
@@ -134,49 +127,6 @@ impl McpServerConfig {
 		}
 	}
 
-	/// Get auth token for HTTP servers (if available)
-	///
-	/// Returns the static auth_token if set, regardless of OAuth configuration.
-	/// For OAuth-based authentication, use `get_oauth_token()` instead.
-	pub fn auth_token(&self) -> Option<&str> {
-		match self {
-			McpServerConfig::Http { auth_token, .. } => auth_token.as_deref(),
-			_ => None,
-		}
-	}
-
-	/// Get OAuth configuration for HTTP servers (if available)
-	///
-	/// Returns `Some(OAuthConfig)` if OAuth is configured, `None` otherwise.
-	pub fn oauth_config(&self) -> Option<&OAuthConfig> {
-		match self {
-			McpServerConfig::Http { oauth, .. } => oauth.as_ref(),
-			_ => None,
-		}
-	}
-
-	/// Check if OAuth is configured for this server
-	///
-	/// Returns `true` if OAuth configuration exists (regardless of enabled status).
-	pub fn has_oauth_config(&self) -> bool {
-		self.oauth_config().is_some()
-	}
-
-	/// Check if OAuth is enabled for this server
-	///
-	/// Returns `true` if OAuth configuration exists.
-	/// The presence of an oauth section in config means OAuth is enabled.
-	pub fn is_oauth_enabled(&self) -> bool {
-		self.oauth_config().is_some()
-	}
-
-	/// Check if this server requires authentication
-	///
-	/// Returns `true` if either static auth_token or OAuth is configured.
-	pub fn requires_auth(&self) -> bool {
-		self.auth_token().is_some() || self.is_oauth_enabled()
-	}
-
 	/// Get command for command-based servers (if available)
 	pub fn command(&self) -> Option<&str> {
 		match self {
@@ -204,28 +154,10 @@ impl McpServerConfig {
 	}
 
 	/// Create an HTTP server configuration
-	///
-	/// # Arguments
-	///
-	/// * `name` - Unique name for this server
-	/// * `url` - The MCP server URL (can be localhost or remote)
-	/// * `timeout_seconds` - Request timeout in seconds
-	/// * `tools` - List of allowed tools (empty = all tools)
-	/// * `auth_token` - Static Bearer token (optional, used if OAuth not configured)
-	/// * `oauth` - OAuth 2.1 + PKCE configuration (optional)
-	pub fn http(
-		name: &str,
-		url: &str,
-		timeout_seconds: u64,
-		tools: Vec<String>,
-		auth_token: Option<String>,
-		oauth: Option<OAuthConfig>,
-	) -> Self {
+	pub fn http(name: &str, url: &str, timeout_seconds: u64, tools: Vec<String>) -> Self {
 		Self::Http {
 			name: name.to_string(),
 			url: url.to_string(),
-			auth_token,
-			oauth,
 			timeout_seconds,
 			tools,
 			auto_bind: None,
@@ -269,16 +201,12 @@ impl McpServerConfig {
 			McpServerConfig::Http {
 				name,
 				url,
-				auth_token,
-				oauth,
 				timeout_seconds,
 				tools,
 				..
 			} => McpServerConfig::Http {
 				name: name.clone(),
 				url: url.clone(),
-				auth_token: auth_token.clone(),
-				oauth: oauth.clone(),
 				timeout_seconds: *timeout_seconds,
 				tools: tools.clone(),
 				auto_bind,
@@ -301,11 +229,6 @@ impl McpServerConfig {
 		}
 	}
 	/// Validate the server configuration
-	///
-	/// Returns `Ok(())` if valid, or `Err(String)` with error message.
-	///
-	/// For HTTP servers with OAuth configuration:
-	/// - Validates OAuth config if present
 	pub fn validate(&self) -> Result<(), String> {
 		match self {
 			McpServerConfig::Builtin { name, .. } => {
@@ -313,20 +236,12 @@ impl McpServerConfig {
 					return Err("Builtin server name cannot be empty".to_string());
 				}
 			}
-			McpServerConfig::Http {
-				name, url, oauth, ..
-			} => {
+			McpServerConfig::Http { name, url, .. } => {
 				if name.is_empty() {
 					return Err("HTTP server name cannot be empty".to_string());
 				}
 				if url.is_empty() {
 					return Err("HTTP server URL cannot be empty".to_string());
-				}
-				// Validate OAuth config if present
-				if let Some(oauth_config) = oauth {
-					oauth_config
-						.validate()
-						.map_err(|e| format!("OAuth configuration validation failed: {}", e))?;
 				}
 			}
 			McpServerConfig::Stdin { name, command, .. } => {
@@ -411,16 +326,12 @@ impl RoleMcpConfig {
 						McpServerConfig::Http {
 							name,
 							url,
-							auth_token,
-							oauth,
 							timeout_seconds,
 							auto_bind,
 							tools: _,
 						} => McpServerConfig::Http {
 							name,
 							url,
-							auth_token,
-							oauth,
 							timeout_seconds,
 							tools: filtered_tools,
 							auto_bind,

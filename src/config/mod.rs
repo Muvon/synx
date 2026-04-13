@@ -39,9 +39,6 @@ pub mod mcp;
 
 pub mod migrations;
 
-// OAuth 2.1 + PKCE configuration
-pub mod oauth_config;
-
 pub mod providers;
 
 pub mod roles;
@@ -61,7 +58,6 @@ pub mod workflows;
 pub use hooks::*;
 pub use layers::*;
 pub use mcp::*;
-pub use oauth_config::*; // OAuth 2.1 + PKCE configuration types
 pub use pipelines::*;
 pub use providers::*;
 pub use registry::*;
@@ -359,16 +355,12 @@ impl McpConfig {
 					McpServerConfig::Http {
 						name: _,
 						url,
-						auth_token,
-						oauth,
 						timeout_seconds,
 						tools,
 						auto_bind,
 					} => McpServerConfig::Http {
 						name,
 						url,
-						auth_token,
-						oauth,
 						timeout_seconds,
 						tools,
 						auto_bind,

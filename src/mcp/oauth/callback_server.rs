@@ -2,7 +2,7 @@
 //
 // OAuth 2.1 Callback Server
 
-use crate::config::OAuthConfig;
+use super::OAuthConfig;
 use crate::mcp::oauth::flow::exchange_code_for_token;
 use crate::mcp::oauth::token_store::{save_token, TokenMetadata};
 use anyhow::{anyhow, Result};

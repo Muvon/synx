@@ -2,7 +2,7 @@
 //
 // OAuth 2.1 + PKCE Flow Implementation
 
-use crate::config::OAuthConfig;
+use super::OAuthConfig;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};

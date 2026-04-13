@@ -466,13 +466,7 @@ async fn perform_http_health_check(
 			reqwest::header::HeaderValue::from_static("application/json"),
 		);
 
-		// Add authentication - Use the same priority as main server:
-		// 1. RFC 9728 MCP Authorization Discovery (dynamic discovery)
-		// 2. Manually configured OAuth
-		// 3. Static Bearer token
-		let mut oauth_attempted = false;
-
-		// Step 1: Try MCP Authorization Discovery (RFC 9728) - same as main server
+		// Add authentication via MCP Authorization Discovery (RFC 9728)
 		match crate::mcp::oauth::discover_oauth_from_mcp_server(health_url, server.name()).await {
 			Ok(discovered_oauth) => {
 				crate::log_debug!(
@@ -493,14 +487,12 @@ async fn perform_http_health_check(
 							server.name(),
 							token.chars().take(10).collect::<String>()
 						);
-						oauth_attempted = true;
 					}
 					Ok(None) => {
 						crate::log_debug!(
 							"HEALTH_CHECK: OAuth authentication was cancelled for server '{}'",
 							server.name()
 						);
-						oauth_attempted = true;
 					}
 					Err(e) => {
 						crate::log_debug!(
@@ -508,69 +500,14 @@ async fn perform_http_health_check(
 							server.name(),
 							e
 						);
-						oauth_attempted = true;
 					}
 				}
 			}
 			Err(e) => {
 				crate::log_debug!(
-					"HEALTH_CHECK: MCP Authorization discovery failed for server '{}': {}, trying manual OAuth",
+					"HEALTH_CHECK: MCP Authorization discovery failed for server '{}': {}",
 					server.name(),
 					e
-				);
-			}
-		}
-
-		// Step 2: Fallback to manual OAuth configuration if discovery failed
-		if !oauth_attempted && server.is_oauth_enabled() {
-			if let Some(oauth_config) = server.oauth_config() {
-				match crate::mcp::oauth::token_store::get_valid_token(
-					server.name(),
-					oauth_config.refresh_buffer_seconds,
-				)
-				.await
-				{
-					Ok(Some(metadata)) => {
-						headers.insert(
-							reqwest::header::AUTHORIZATION,
-							reqwest::header::HeaderValue::from_str(&format!(
-								"Bearer {}",
-								metadata.access_token
-							))?,
-						);
-						crate::log_debug!(
-							"HEALTH_CHECK: Using manual OAuth token for server '{}', token_prefix='{}...'",
-							server.name(),
-							metadata.access_token.chars().take(10).collect::<String>()
-						);
-					}
-					Ok(None) => {
-						crate::log_debug!(
-							"HEALTH_CHECK: No valid OAuth token found for server '{}'",
-							server.name()
-						);
-					}
-					Err(e) => {
-						crate::log_debug!(
-							"HEALTH_CHECK: Failed to load OAuth token for server '{}': {}",
-							server.name(),
-							e
-						);
-					}
-				}
-			}
-		}
-
-		// Step 3: Fallback to static Bearer token if no OAuth
-		if !oauth_attempted && !server.is_oauth_enabled() {
-			if let Some(token) = server.auth_token() {
-				headers.insert(
-					reqwest::header::AUTHORIZATION,
-					reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))?,
-				);
-				crate::log_debug!(
-					"HEALTH_CHECK: Using static Bearer token for server '{}'",
-					server.name()
 				);
 			}
 		}

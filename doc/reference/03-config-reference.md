@@ -139,7 +139,8 @@ MCP server definitions. Three types supported: `builtin`, `http`, `stdio`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `url` | string | yes | Server endpoint URL |
-| `auth_token` | string | no | Static bearer token |
+
+> **OAuth Authentication:** HTTP servers requiring authentication are handled automatically via MCP Authorization Discovery (RFC 9728). No manual configuration needed — just provide the URL and Octomind will discover OAuth endpoints, register via CIMD/DCR, and authenticate using PKCE.
 
 #### Stdio-Specific Fields
 
@@ -148,61 +149,6 @@ MCP server definitions. Three types supported: `builtin`, `http`, `stdio`.
 | `command` | string | yes | Executable to run |
 | `args` | string[] | no | Command arguments |
 
-#### `[mcp.servers.oauth]`
-
-OAuth 2.1 + PKCE authentication for HTTP servers.
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `client_id` | string | yes | OAuth client ID |
-| `client_secret` | string | yes | OAuth client secret |
-| `authorization_url` | string | yes | Authorization endpoint (must be HTTPS or localhost) |
-| `token_url` | string | yes | Token exchange endpoint (must be HTTPS or localhost) |
-| `callback_url` | string | no | Local callback URL (default: `http://localhost:34567/oauth/callback`) |
-| `scopes` | string[] | no | OAuth scopes to request |
-| `refresh_buffer_seconds` | u32 | no | Seconds before expiry to refresh token (default: 300, min: 60) |
-
-```toml
-[mcp]
-allowed_tools = []
-
-[[mcp.servers]]
-name = "core"
-type = "builtin"
-timeout_seconds = 30
-tools = []
-
-[[mcp.servers]]
-name = "agent"
-type = "builtin"
-timeout_seconds = 30
-tools = []
-
-# External stdio server
-[[mcp.servers]]
-name = "octocode"
-type = "stdio"
-command = "octocode"
-args = ["mcp", "--path=."]
-timeout_seconds = 240
-tools = []
-
-# External HTTP server with OAuth
-[[mcp.servers]]
-name = "github_mcp"
-type = "http"
-url = "https://api.github.com/mcp"
-timeout_seconds = 30
-tools = []
-
-[mcp.servers.oauth]
-client_id = "your-oauth-client-id"
-client_secret = "your-oauth-client-secret"
-authorization_url = "https://github.com/login/oauth/authorize"
-token_url = "https://github.com/login/oauth/access_token"
-callback_url = "http://localhost:34567/oauth/callback"
-scopes = ["repo", "read:org"]
-```
 
 ## `[[hooks]]`
 

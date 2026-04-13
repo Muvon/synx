@@ -535,10 +535,6 @@ pub fn get_mcp_tool_function() -> McpFunction {
 					"type": "string",
 					"description": "HTTP endpoint of MCP server (e.g., 'http://localhost:3000'). Required for http type."
 				},
-				"auth_token": {
-					"type": "string",
-					"description": "Bearer token for authentication (optional, for http type)"
-				},
 				"timeout_seconds": {
 					"type": "number",
 					"description": "How long to wait for server response (default: 60)"
@@ -772,15 +768,9 @@ async fn handle_add(call: &crate::mcp::McpToolCall) -> Result<McpToolResult> {
 				}
 			};
 
-			let auth_token = params
-				.get("auth_token")
-				.and_then(|v| v.as_str())
-				.map(String::from);
 			McpServerConfig::Http {
 				name,
 				url,
-				auth_token,
-				oauth: None,
 				timeout_seconds,
 				tools,
 				auto_bind: None,
@@ -795,7 +785,6 @@ async fn handle_add(call: &crate::mcp::McpToolCall) -> Result<McpToolResult> {
 		}
 	};
 
-	// Register the server config (no connection yet)
 	match register_server(server_config) {
 		Ok(()) => Ok(McpToolResult::success(
 			call.tool_name.clone(),

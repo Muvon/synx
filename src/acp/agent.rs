@@ -95,7 +95,7 @@ fn build_config_with_injected_servers(
 					vec![],
 				)
 			}
-			McpServer::Http(s) => McpServerConfig::http(&s.name, &s.url, 30, vec![], None, None),
+			McpServer::Http(s) => McpServerConfig::http(&s.name, &s.url, 30, vec![]),
 			McpServer::Sse(s) => {
 				// SSE is not a supported transport in our MCP stack — skip
 				log_info!("ACP: skipping SSE MCP server '{}' (not supported)", s.name);

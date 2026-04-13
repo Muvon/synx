@@ -248,10 +248,7 @@ pub async fn get_server_functions(server: &McpServerConfig) -> Result<Vec<McpFun
 			);
 			headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-			// Add authentication - Try MCP Authorization discovery first, then manual OAuth, then static token
-			let mut oauth_attempted = false;
-
-			// Step 1: Try MCP Authorization Discovery (RFC 9728)
+			// Add authentication via MCP Authorization Discovery (RFC 9728)
 			match oauth::discover_oauth_from_mcp_server(&server_url, server.name()).await {
 				Ok(discovered_oauth) => {
 					crate::log_debug!(
@@ -269,14 +266,12 @@ pub async fn get_server_functions(server: &McpServerConfig) -> Result<Vec<McpFun
 								"Using discovered OAuth access token for HTTP server '{}'",
 								server.name()
 							);
-							oauth_attempted = true;
 						}
 						Ok(None) => {
 							crate::log_error!(
 								"OAuth authentication was cancelled for server '{}'",
 								server.name()
 							);
-							oauth_attempted = true;
 						}
 						Err(e) => {
 							crate::log_error!(
@@ -284,7 +279,6 @@ pub async fn get_server_functions(server: &McpServerConfig) -> Result<Vec<McpFun
 								server.name(),
 								e
 							);
-							oauth_attempted = true;
 						}
 					}
 				}
@@ -293,56 +287,6 @@ pub async fn get_server_functions(server: &McpServerConfig) -> Result<Vec<McpFun
 						"MCP Authorization discovery failed for server '{}': {}",
 						server.name(),
 						e
-					);
-				}
-			}
-
-			// Step 2: Fallback to manual OAuth configuration if discovery failed
-			if !oauth_attempted && server.is_oauth_enabled() {
-				// OAuth authentication - get or refresh access token
-				if let Some(oauth_config) = server.oauth_config() {
-					crate::log_debug!(
-						"Using manual OAuth configuration for server '{}'",
-						server.name()
-					);
-
-					match oauth::get_access_token(oauth_config, server.name(), false).await {
-						Ok(Some(token)) => {
-							headers.insert(
-								AUTHORIZATION,
-								HeaderValue::from_str(&format!("Bearer {}", token))?,
-							);
-							crate::log_debug!(
-								"Using manual OAuth access token for HTTP server '{}'",
-								server.name()
-							);
-						}
-						Ok(None) => {
-							crate::log_error!(
-								"OAuth authentication was cancelled for server '{}'",
-								server.name()
-							);
-						}
-						Err(e) => {
-							crate::log_error!(
-								"Failed to get OAuth access token for server '{}': {}",
-								server.name(),
-								e
-							);
-						}
-					}
-				}
-			} else if !oauth_attempted {
-				// Step 3: Fallback to static Bearer token if no OAuth
-				if let Some(token) = server.auth_token() {
-					// Static Bearer token authentication
-					headers.insert(
-						AUTHORIZATION,
-						HeaderValue::from_str(&format!("Bearer {}", token))?,
-					);
-					crate::log_debug!(
-						"Using static Bearer token for HTTP server '{}'",
-						server.name()
 					);
 				}
 			}
@@ -521,32 +465,29 @@ pub async fn get_server_functions_cached(server: &McpServerConfig) -> Result<Vec
 	};
 
 	if should_fetch {
-		// Check if we have a cached token for OAuth servers before attempting fetch
+		// Check if we have a cached OAuth token before attempting fetch
 		// This prevents triggering OAuth flow during tool map initialization
-		if server.is_oauth_enabled() {
-			if let Some(oauth_config) = server.oauth_config() {
-				match token_store::get_valid_token(server_id, oauth_config.refresh_buffer_seconds)
-					.await
-				{
-					Ok(None) => {
-						// No valid token - don't trigger OAuth, return empty
-						crate::log_debug!(
-							"Server '{}' requires OAuth but no token available - skipping cache fetch",
-							server_id
-						);
-						return Ok(Vec::new());
-					}
-					Err(e) => {
-						crate::log_debug!(
-							"Failed to check OAuth token for server '{}': {} - skipping cache fetch",
-							server_id,
-							e
-						);
-						return Ok(Vec::new());
-					}
-					Ok(Some(_)) => {
-						// Token exists, proceed with fetch
-					}
+		// Only check for servers that have been discovered to require OAuth
+		if crate::mcp::oauth::discovery::has_cached_discovery(server_id) {
+			match token_store::get_valid_token(server_id, 300).await {
+				Ok(None) => {
+					// No valid token - don't trigger OAuth, return empty
+					crate::log_debug!(
+						"Server '{}' requires OAuth but no token available - skipping cache fetch",
+						server_id
+					);
+					return Ok(Vec::new());
+				}
+				Err(e) => {
+					crate::log_debug!(
+						"Failed to check OAuth token for server '{}': {} - skipping cache fetch",
+						server_id,
+						e
+					);
+					return Ok(Vec::new());
+				}
+				Ok(Some(_)) => {
+					// Token exists, proceed with fetch
 				}
 			}
 		}
@@ -911,9 +852,7 @@ async fn execute_tool_with_cancellation(
 			headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
 			// Add authentication - Try MCP Authorization discovery first, then manual OAuth, then static token
-			let mut oauth_attempted = false;
-
-			// Step 1: Try MCP Authorization Discovery (RFC 9728)
+			// Add authentication via MCP Authorization Discovery (RFC 9728)
 			match oauth::discover_oauth_from_mcp_server(&server_url, server.name()).await {
 				Ok(discovered_oauth) => {
 					crate::log_debug!(
@@ -931,14 +870,12 @@ async fn execute_tool_with_cancellation(
 							"Using discovered OAuth access token for HTTP server '{}' tool execution",
 							server.name()
 						);
-							oauth_attempted = true;
 						}
 						Ok(None) => {
 							crate::log_error!(
 								"OAuth authentication was cancelled for server '{}'",
 								server.name()
 							);
-							oauth_attempted = true;
 						}
 						Err(e) => {
 							crate::log_error!(
@@ -946,7 +883,6 @@ async fn execute_tool_with_cancellation(
 								server.name(),
 								e
 							);
-							oauth_attempted = true;
 						}
 					}
 				}
@@ -955,47 +891,6 @@ async fn execute_tool_with_cancellation(
 						"MCP Authorization discovery failed for server '{}' tool execution: {}",
 						server.name(),
 						e
-					);
-				}
-			}
-
-			// Step 2: Fallback to manual OAuth configuration if discovery failed
-			if !oauth_attempted && server.is_oauth_enabled() {
-				// OAuth authentication - get or refresh access token
-				if let Some(oauth_config) = server.oauth_config() {
-					match oauth::get_access_token(oauth_config, server.name(), false).await {
-						Ok(Some(token)) => {
-							headers.insert(
-								AUTHORIZATION,
-								HeaderValue::from_str(&format!("Bearer {}", token))?,
-							);
-							crate::log_debug!(
-							"Using manual OAuth access token for HTTP server '{}' tool execution",
-							server.name()
-						);
-						}
-						Ok(None) => {
-							crate::log_error!(
-								"OAuth authentication was cancelled for server '{}'",
-								server.name()
-							);
-						}
-						Err(e) => {
-							crate::log_error!(
-								"Failed to get OAuth access token for server '{}': {}",
-								server.name(),
-								e
-							);
-						}
-					}
-				}
-			} else if !oauth_attempted {
-				// Step 3: Fallback to static Bearer token if no OAuth
-				if let Some(token) = server.auth_token() {
-					// Static Bearer token authentication
-					headers.insert(
-						AUTHORIZATION,
-						HeaderValue::from_str(&format!("Bearer {}", token))?,
 					);
 				}
 			}

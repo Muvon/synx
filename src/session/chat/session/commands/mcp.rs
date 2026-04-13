@@ -465,13 +465,6 @@ async fn perform_http_health_check_sync(server: &crate::config::McpServerConfig)
 			reqwest::header::HeaderValue::from_static("application/json"),
 		);
 
-		if let Some(token) = server.auth_token() {
-			headers.insert(
-				reqwest::header::AUTHORIZATION,
-				reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))?,
-			);
-		}
-
 		// Use tools/list for health check (same as main functionality)
 		let jsonrpc_request = crate::mcp::server::create_tools_list_request();
 

@@ -238,7 +238,6 @@ pub fn execute(args: &ConfigArgs, mut config: Config) -> Result<(), anyhow::Erro
 			let mut url: Option<String> = None;
 			let mut command: Option<String> = None;
 			let mut args: Vec<String> = Vec::new();
-			let mut auth_token: Option<String> = None;
 			let mut timeout_seconds: u64 = 30;
 			let mut connection_type = McpConnectionType::Http; // Default to HTTP
 
@@ -262,9 +261,6 @@ pub fn execute(args: &ConfigArgs, mut config: Config) -> Result<(), anyhow::Erro
 								.map(|s| s.trim().to_string())
 								.filter(|s| !s.is_empty())
 								.collect();
-						}
-						"token" | "auth_token" => {
-							auth_token = Some(value.to_string());
 						}
 						"type" => match value.to_lowercase().as_str() {
 							"http" => connection_type = McpConnectionType::Http,
@@ -294,14 +290,7 @@ pub fn execute(args: &ConfigArgs, mut config: Config) -> Result<(), anyhow::Erro
 				McpConnectionType::Http => {
 					if let Some(url) = url {
 						// HTTP server - just needs a URL
-						McpServerConfig::http(
-							&name,
-							&url,
-							timeout_seconds,
-							Vec::new(),
-							auth_token,
-							None, // OAuth config - not set via CLI
-						)
+						McpServerConfig::http(&name, &url, timeout_seconds, Vec::new())
 					} else {
 						println!("Error: URL must be specified for HTTP MCP server");
 						return Ok(());

@@ -64,7 +64,6 @@ Manage MCP servers at runtime without editing config.
 - `command` (string): Executable (for stdio)
 - `args` (array): Arguments (for stdio)
 - `url` (string): Endpoint (for http)
-- `auth_token` (string): Bearer token (for http)
 - `timeout_seconds` (number): Timeout (default: 60)
 - `tools` (array): Tool filter (empty = all, supports wildcards like `"github_*"`)
 
@@ -285,7 +284,6 @@ Max concurrent async jobs is configurable. Jobs cancelled on session exit.
 name = "custom_api"
 type = "http"
 url = "https://api.example.com/mcp"
-auth_token = "your_token"
 timeout_seconds = 30
 tools = []
 ```

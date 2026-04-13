@@ -27,7 +27,6 @@ src/
     validation.rs            # Config validation (thresholds, hooks, etc.)
     roles.rs                 # Role configuration
     mcp.rs                   # MCP server config (Builtin/Http/Stdio)
-    oauth_config.rs          # OAuth 2.1 + PKCE validation
     hooks.rs                 # Webhook hook config
     workflows.rs             # Workflow + step definitions
     pipelines.rs             # Pipeline step definitions and parsing

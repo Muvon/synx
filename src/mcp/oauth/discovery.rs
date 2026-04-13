@@ -19,12 +19,13 @@
 //! - RFC 8414: OAuth 2.0 Authorization Server Metadata Discovery
 //!
 //! Flow:
-//! 1. Client requests MCP server without auth → 401 Unauthorized
-//! 2. Parse WWW-Authenticate header for resource_metadata URL
-//! 3. Fetch Protected Resource Metadata document
-//! 4. Extract authorization_servers\[0\] (primary auth server)
-//! 5. Fetch Authorization Server Metadata from /.well-known/oauth-authorization-server
-//! 6. Build OAuthConfig from discovered endpoints
+//! 1. Try pre-discovery: GET {server_url}/.well-known/oauth-protected-resource
+//! 2. If no pre-discovery, make request to MCP server → expect 401 Unauthorized
+//! 3. Parse WWW-Authenticate header for resource_metadata URL
+//! 4. Fetch Protected Resource Metadata document
+//! 5. Extract authorization_servers[0] (primary auth server)
+//! 6. Fetch Authorization Server Metadata from {issuer}/.well-known/oauth-authorization-server
+//! 7. Build OAuthConfig from discovered endpoints (client_id from CIMD/DCR)
 
 use anyhow::{anyhow, Context, Result};
 use regex::Regex;
@@ -34,12 +35,21 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::Duration;
 
+use super::cimd::resolve_client_id;
 use super::OAuthConfig;
 
 // Cache for discovered OAuth configurations to avoid repeated discovery
 // Key: server_name, Value: discovered OAuthConfig
 lazy_static::lazy_static! {
 	static ref DISCOVERED_OAUTH_CACHE: RwLock<HashMap<String, OAuthConfig>> = RwLock::new(HashMap::new());
+}
+
+/// Check if a server has a cached OAuth discovery configuration
+pub fn has_cached_discovery(server_name: &str) -> bool {
+	DISCOVERED_OAUTH_CACHE
+		.read()
+		.map(|cache| cache.contains_key(server_name))
+		.unwrap_or(false)
 }
 
 /// Protected Resource Metadata (RFC 9728)
@@ -78,6 +88,15 @@ pub struct AuthServerMetadata {
 	/// Optional list of PKCE code challenge methods supported
 	#[serde(default)]
 	pub code_challenge_methods_supported: Option<Vec<String>>,
+
+	/// Optional URL for Dynamic Client Registration (RFC 7591)
+	#[serde(default)]
+	pub registration_endpoint: Option<String>,
+
+	/// Whether the authorization server supports Client ID Metadata Documents (CIMD)
+	/// When true, client_id can be a URL pointing to a client metadata document.
+	#[serde(default)]
+	pub client_id_metadata_document_supported: Option<bool>,
 }
 
 /// Parse WWW-Authenticate header to extract resource_metadata URL
@@ -159,42 +178,59 @@ pub async fn fetch_protected_resource_metadata(
 	Ok(metadata)
 }
 
-/// Build Authorization Server Metadata from the issuer URL
+/// Fetch Authorization Server Metadata via RFC 8414 discovery
 ///
-/// For GitHub and other providers that don't support RFC 8414 discovery,
-/// we construct the OAuth endpoints using standard patterns.
+/// GET {issuer}/.well-known/oauth-authorization-server
 ///
 /// # Arguments
-/// * `issuer` - The authorization server URL (e.g., "<https://github.com/login/oauth>")
+/// * `issuer` - The authorization server issuer URL
 ///
 /// # Returns
-/// * `Ok(AuthServerMetadata)` - Constructed metadata with OAuth endpoints
-pub fn build_auth_server_metadata(issuer: &str) -> Result<AuthServerMetadata> {
+/// * `Ok(AuthServerMetadata)` - Discovered metadata
+/// * `Err` - If RFC 8414 discovery fails
+pub async fn fetch_auth_server_metadata(issuer: &str) -> Result<AuthServerMetadata> {
 	let issuer_trimmed = issuer.trim_end_matches('/');
 
-	crate::log_debug!(
-		"Building Authorization Server Metadata for: {}",
-		issuer_trimmed
-	);
-
-	// GitHub pattern: https://github.com/login/oauth
-	// Endpoints: /authorize and /access_token
-	let authorization_endpoint = format!("{}/authorize", issuer_trimmed);
-	let token_endpoint = format!("{}/access_token", issuer_trimmed);
+	// RFC 8414: Authorization server metadata is at
+	// {issuer}/.well-known/oauth-authorization-server
+	let metadata_url = format!("{}/.well-known/oauth-authorization-server", issuer_trimmed);
 
 	crate::log_debug!(
-		"Constructed OAuth endpoints: auth={}, token={}",
-		authorization_endpoint,
-		token_endpoint
+		"Fetching Authorization Server Metadata from: {}",
+		metadata_url
 	);
 
-	Ok(AuthServerMetadata {
-		issuer: issuer_trimmed.to_string(),
-		authorization_endpoint,
-		token_endpoint,
-		scopes_supported: None,
-		code_challenge_methods_supported: Some(vec!["S256".to_string()]),
-	})
+	let client = reqwest::Client::builder()
+		.timeout(Duration::from_secs(10))
+		.build()
+		.context("Failed to create HTTP client")?;
+
+	let response = client.get(&metadata_url).send().await.context(format!(
+		"Failed to fetch Authorization Server Metadata from {}",
+		metadata_url
+	))?;
+
+	if !response.status().is_success() {
+		return Err(anyhow!(
+			"Authorization Server Metadata request failed with status: {} (RFC 8414 discovery at {})",
+			response.status(),
+			metadata_url
+		));
+	}
+
+	let metadata: AuthServerMetadata = response
+		.json()
+		.await
+		.context("Failed to parse Authorization Server Metadata JSON")?;
+
+	crate::log_debug!(
+		"Authorization Server Metadata: issuer={}, auth_endpoint={}, token_endpoint={}",
+		metadata.issuer,
+		metadata.authorization_endpoint,
+		metadata.token_endpoint
+	);
+
+	Ok(metadata)
 }
 
 /// Build OAuthConfig from discovered metadata
@@ -202,19 +238,16 @@ pub fn build_auth_server_metadata(issuer: &str) -> Result<AuthServerMetadata> {
 /// # Arguments
 /// * `auth_metadata` - Authorization Server Metadata
 /// * `resource_metadata` - Protected Resource Metadata
-/// * `server_name` - Name of the MCP server (for known client_id lookup)
 ///
 /// # Returns
 /// * `OAuthConfig` - Ready-to-use OAuth configuration
+///
+/// Note: client_id is set to a placeholder. It must be resolved via CIMD or DCR
+/// before the OAuth flow can proceed. See cimd.rs for CIMD/DCR resolution.
 pub fn build_oauth_config_from_metadata(
 	auth_metadata: &AuthServerMetadata,
 	resource_metadata: &ProtectedResourceMetadata,
-	server_name: &str,
 ) -> OAuthConfig {
-	// Use known public client_id for recognized OAuth providers
-	// For public clients (PKCE flow), client_id is not a secret
-	let client_id = get_known_client_id(&auth_metadata.issuer, server_name);
-
 	// Combine scopes from both metadata documents
 	let scopes = resource_metadata
 		.scopes_supported
@@ -223,45 +256,18 @@ pub fn build_oauth_config_from_metadata(
 		.cloned()
 		.unwrap_or_default();
 
-	crate::log_debug!(
-		"Building OAuthConfig: client_id={}, scopes={:?}",
-		client_id,
-		scopes
-	);
+	crate::log_debug!("Building OAuthConfig: scopes={:?}", scopes);
 
 	OAuthConfig {
-		client_id,
-		client_secret: String::new(), // Public client - no secret
+		client_id: String::new(), // Placeholder — resolved by CIMD/DCR
+		client_secret: String::new(),
 		authorization_url: auth_metadata.authorization_endpoint.clone(),
 		token_url: auth_metadata.token_endpoint.clone(),
-		callback_url: "http://localhost:34562/oauth/callback".to_string(),
+		callback_url: "http://localhost:34567/oauth/callback".to_string(),
 		scopes,
-		state: None,                 // State will be generated during OAuth flow
-		refresh_buffer_seconds: 300, // 5 minutes buffer for token refresh
+		state: None,
+		refresh_buffer_seconds: 300,
 	}
-}
-
-/// Get known public client_id for recognized OAuth providers
-///
-/// For public OAuth clients (using PKCE), the client_id is not a secret.
-/// We maintain a list of known client_ids for popular MCP servers.
-///
-/// # Arguments
-/// * `issuer` - The OAuth authorization server issuer URL
-/// * `server_name` - The MCP server name
-///
-/// # Returns
-/// * `String` - The client_id to use (known or from config)
-fn get_known_client_id(issuer: &str, server_name: &str) -> String {
-	// Check for user-configured client_id via environment variable
-	// Format: OCTOMIND_GITHUB_CLIENT_ID or OCTOMIND_MCP_GITHUB_CLIENT_ID
-	if issuer.contains("github.com") {
-		return "Ov23liejzQjOFLw2t6PR".to_string();
-	}
-
-	// For unknown providers, generate a client_id based on server name
-	// This may not work without proper registration, but provides a fallback
-	format!("octomind-mcp-{}", server_name)
 }
 
 /// Discover OAuth configuration from MCP server using RFC 9728 flow
@@ -271,17 +277,18 @@ fn get_known_client_id(issuer: &str, server_name: &str) -> String {
 ///
 /// # Flow
 /// 1. Check cache for previously discovered config
-/// 2. Make initial request to MCP server (expect 401)
-/// 3. Parse WWW-Authenticate header for resource_metadata URL
-/// 4. Fetch Protected Resource Metadata
-/// 5. Extract primary authorization server
-/// 6. Fetch Authorization Server Metadata
-/// 7. Build OAuthConfig from discovered endpoints
-/// 8. Cache the result for future use
+/// 2. Try pre-discovery: GET {server_url}/.well-known/oauth-protected-resource
+/// 3. If no pre-discovery, make request to MCP server → expect 401
+/// 4. Parse WWW-Authenticate header for resource_metadata URL
+/// 5. Fetch Protected Resource Metadata
+/// 6. Extract primary authorization server
+/// 7. Fetch Authorization Server Metadata via RFC 8414
+/// 8. Build OAuthConfig from discovered endpoints
+/// 9. Cache the result for future use
 ///
 /// # Arguments
-/// * `server_url` - The MCP server URL (e.g., "<https://api.githubcopilot.com/mcp/>")
-/// * `server_name` - The server name for logging and client_id
+/// * `server_url` - The MCP server URL (e.g., "https://api.githubcopilot.com/mcp/")
+/// * `server_name` - The server name for logging and caching
 ///
 /// # Returns
 /// * `Ok(OAuthConfig)` - Discovered OAuth configuration (from cache or fresh discovery)
@@ -308,68 +315,97 @@ pub async fn discover_oauth_from_mcp_server(
 		server_url
 	);
 
-	// Step 1: Create HTTP client with timeout
+	// Create HTTP client with timeout
 	let client = reqwest::Client::builder()
 		.timeout(Duration::from_secs(10))
 		.build()
 		.context("Failed to create HTTP client for MCP discovery")?;
 
-	// Step 2: Make initial request without authentication (expect 401)
-	// MCP servers expect POST with JSON-RPC payload, not GET
-	crate::log_debug!("Making initial JSON-RPC request to MCP server (expecting 401)...");
+	// Step 1: Try pre-discovery via .well-known endpoint
+	// RFC 9728: Protected resource metadata may be available without auth
+	let server_url_trimmed = server_url.trim_end_matches('/');
+	let pre_discovery_url = format!(
+		"{}/.well-known/oauth-protected-resource",
+		server_url_trimmed
+	);
 
-	// Create a tools/list JSON-RPC request (same as health check)
-	let jsonrpc_request = serde_json::json!({
-		"jsonrpc": "2.0",
-		"id": 1,
-		"method": "tools/list",
-		"params": {}
-	});
+	crate::log_debug!("Trying pre-discovery at: {}", pre_discovery_url);
 
-	let response = client
-		.post(server_url)
-		.header("Content-Type", "application/json")
-		.json(&jsonrpc_request)
-		.send()
-		.await
-		.context(format!("Failed to connect to MCP server at {}", server_url))?;
+	let resource_metadata = match fetch_protected_resource_metadata(&pre_discovery_url).await {
+		Ok(metadata) => {
+			crate::log_debug!("Pre-discovery successful for server '{}'", server_name);
+			Some(metadata)
+		}
+		Err(e) => {
+			crate::log_debug!(
+				"Pre-discovery failed for server '{}': {}, falling back to 401 flow",
+				server_name,
+				e
+			);
+			None
+		}
+	};
 
-	// Step 3: Check for 401 Unauthorized
-	if response.status() != reqwest::StatusCode::UNAUTHORIZED {
-		return Err(anyhow!(
-			"MCP Authorization discovery requires 401 Unauthorized response, got: {}. \
-             Server may not support MCP Authorization (RFC 9728).",
-			response.status()
-		));
-	}
+	// Step 2: If pre-discovery failed, make initial request expecting 401
+	let resource_metadata = match resource_metadata {
+		Some(m) => m,
+		None => {
+			crate::log_debug!("Making initial JSON-RPC request to MCP server (expecting 401)...");
 
-	crate::log_debug!("Received 401 Unauthorized, proceeding with discovery...");
+			// Create a tools/list JSON-RPC request (same as health check)
+			let jsonrpc_request = serde_json::json!({
+				"jsonrpc": "2.0",
+				"id": 1,
+				"method": "tools/list",
+				"params": {}
+			});
 
-	// Step 4: Extract WWW-Authenticate header
-	let www_auth_header = response
-		.headers()
-		.get("WWW-Authenticate")
-		.ok_or_else(|| {
-			anyhow!(
-				"MCP server returned 401 but missing WWW-Authenticate header. \
-             Server does not support MCP Authorization (RFC 9728)."
-			)
-		})?
-		.to_str()
-		.context("WWW-Authenticate header contains invalid UTF-8")?;
+			let response = client
+				.post(server_url)
+				.header("Content-Type", "application/json")
+				.json(&jsonrpc_request)
+				.send()
+				.await
+				.context(format!("Failed to connect to MCP server at {}", server_url))?;
 
-	crate::log_debug!("WWW-Authenticate header: {}", www_auth_header);
+			// Check for 401 Unauthorized
+			if response.status() != reqwest::StatusCode::UNAUTHORIZED {
+				return Err(anyhow!(
+					"MCP Authorization discovery requires 401 Unauthorized response, got: {}. \
+                    Server may not support MCP Authorization (RFC 9728).",
+					response.status()
+				));
+			}
 
-	// Step 5: Parse resource_metadata URL
-	let resource_metadata_url = parse_www_authenticate_header(www_auth_header)
-		.context("Failed to parse WWW-Authenticate header")?;
+			crate::log_debug!("Received 401 Unauthorized, proceeding with discovery...");
 
-	// Step 6: Fetch Protected Resource Metadata
-	let resource_metadata = fetch_protected_resource_metadata(&resource_metadata_url)
-		.await
-		.context("Failed to fetch Protected Resource Metadata")?;
+			// Extract WWW-Authenticate header
+			let www_auth_header = response
+				.headers()
+				.get("WWW-Authenticate")
+				.ok_or_else(|| {
+					anyhow!(
+						"MCP server returned 401 but missing WWW-Authenticate header. \
+                        Server does not support MCP Authorization (RFC 9728)."
+					)
+				})?
+				.to_str()
+				.context("WWW-Authenticate header contains invalid UTF-8")?;
 
-	// Step 7: Extract primary authorization server
+			crate::log_debug!("WWW-Authenticate header: {}", www_auth_header);
+
+			// Parse resource_metadata URL
+			let resource_metadata_url = parse_www_authenticate_header(www_auth_header)
+				.context("Failed to parse WWW-Authenticate header")?;
+
+			// Fetch Protected Resource Metadata
+			fetch_protected_resource_metadata(&resource_metadata_url)
+				.await
+				.context("Failed to fetch Protected Resource Metadata")?
+		}
+	};
+
+	// Step 3: Extract primary authorization server
 	let auth_server_issuer = resource_metadata
 		.authorization_servers
 		.first()
@@ -377,19 +413,27 @@ pub async fn discover_oauth_from_mcp_server(
 
 	crate::log_debug!("Using authorization server: {}", auth_server_issuer);
 
-	// Step 8: Build Authorization Server Metadata from the issuer URL
-	// GitHub and other providers don't support RFC 8414 discovery,
-	// so we construct endpoints using standard OAuth patterns
-	let auth_metadata = build_auth_server_metadata(auth_server_issuer)
-		.context("Failed to build Authorization Server Metadata")?;
+	// Step 4: Fetch Authorization Server Metadata via RFC 8414
+	let auth_metadata = fetch_auth_server_metadata(auth_server_issuer)
+		.await
+		.context("Failed to fetch Authorization Server Metadata via RFC 8414")?;
 
-	// Step 9: Build OAuthConfig
-	let oauth_config =
-		build_oauth_config_from_metadata(&auth_metadata, &resource_metadata, server_name);
+	// Step 5: Build OAuthConfig from discovered metadata (client_id is placeholder)
+	let oauth_config = build_oauth_config_from_metadata(&auth_metadata, &resource_metadata);
+
+	// Step 6: Resolve client_id via CIMD or DCR
+	let oauth_config = resolve_client_id(oauth_config, &auth_metadata)
+		.await
+		.context("Failed to resolve OAuth client_id via CIMD/DCR")?;
 
 	crate::log_debug!(
-		"MCP Authorization discovery completed successfully for '{}'",
-		server_name
+		"MCP Authorization discovery completed successfully for '{}' (client_id: {})",
+		server_name,
+		if oauth_config.client_id.len() > 50 {
+			format!("{}...", &oauth_config.client_id[..50])
+		} else {
+			oauth_config.client_id.clone()
+		}
 	);
 
 	// Cache the discovered config for future use
@@ -452,11 +496,13 @@ mod tests {
 	#[test]
 	fn test_build_oauth_config() {
 		let auth_metadata = AuthServerMetadata {
-			issuer: "https://api.example.com".to_string(), // Use non-GitHub issuer
+			issuer: "https://api.example.com".to_string(),
 			authorization_endpoint: "https://api.example.com/oauth/authorize".to_string(),
 			token_endpoint: "https://api.example.com/oauth/token".to_string(),
 			scopes_supported: Some(vec!["read".to_string(), "write".to_string()]),
 			code_challenge_methods_supported: Some(vec!["S256".to_string()]),
+			registration_endpoint: None,
+			client_id_metadata_document_supported: None,
 		};
 
 		let resource_metadata = ProtectedResourceMetadata {
@@ -465,11 +511,10 @@ mod tests {
 			scopes_supported: None,
 		};
 
-		let config =
-			build_oauth_config_from_metadata(&auth_metadata, &resource_metadata, "test-server");
+		let config = build_oauth_config_from_metadata(&auth_metadata, &resource_metadata);
 
-		// For non-GitHub issuers, client_id is generated from server name
-		assert_eq!(config.client_id, "octomind-mcp-test-server");
+		// client_id is empty placeholder — resolved by CIMD/DCR
+		assert!(config.client_id.is_empty());
 		assert_eq!(
 			config.authorization_url,
 			"https://api.example.com/oauth/authorize"
