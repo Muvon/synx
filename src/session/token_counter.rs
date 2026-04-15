@@ -47,9 +47,10 @@ pub fn truncate_to_tokens(text: &str, max_tokens: usize) -> String {
 		return text.to_string();
 	}
 	tokens.truncate(max_tokens);
-	tokenizer
-		.decode(tokens)
-		.unwrap_or_else(|_| text[..text.len() / 2].to_string())
+	tokenizer.decode(tokens).unwrap_or_else(|_| {
+		let boundary = crate::utils::truncation::floor_char_boundary(text, text.len() / 2);
+		text[..boundary].to_string()
+	})
 }
 
 /// Calculate tokens for a single message including ALL fields

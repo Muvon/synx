@@ -14,6 +14,21 @@
 
 // Shared truncation utilities for smart content display across MCP tools
 
+/// Find the largest byte index ≤ `index` that is a valid UTF-8 char boundary.
+/// Equivalent to `str::floor_char_boundary` (stable in Rust 1.91+), provided here
+/// for MSRV 1.82 compatibility.
+#[inline]
+pub fn floor_char_boundary(s: &str, index: usize) -> usize {
+	if index >= s.len() {
+		s.len()
+	} else {
+		let mut i = index;
+		while i > 0 && !s.is_char_boundary(i) {
+			i -= 1;
+		}
+		i
+	}
+}
 use crate::session::estimate_tokens;
 
 /// Format content with line numbers and smart elision for display

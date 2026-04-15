@@ -206,7 +206,7 @@ fn parse_lesson_tags(response: &str, role: &str, project: &str, source: &str) ->
 			if evidence.is_none() || evidence.as_ref().is_some_and(|e| e.trim().is_empty()) {
 				crate::log_debug!(
 					"Learning rejected (no evidence): {}",
-					&content[..content.len().min(80)]
+					&content[..crate::utils::truncation::floor_char_boundary(content, 80)]
 				);
 				remaining = &after_open[end_tag + 9..];
 				continue;
@@ -229,10 +229,7 @@ fn parse_lesson_tags(response: &str, role: &str, project: &str, source: &str) ->
 			let title = if content.len() <= 80 {
 				content.to_string()
 			} else {
-				let mut end = 80;
-				while !content.is_char_boundary(end) {
-					end -= 1;
-				}
+				let end = crate::utils::truncation::floor_char_boundary(content, 80);
 				let truncated = &content[..end];
 				truncated
 					.rfind(' ')

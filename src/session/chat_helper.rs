@@ -113,7 +113,8 @@ impl<'a> CommandCompleter<'a> {
 	}
 
 	fn find_at_query(line: &str, pos: usize) -> Option<(usize, &str)> {
-		let before_cursor = &line[..pos.min(line.len())];
+		let safe_pos = crate::utils::truncation::floor_char_boundary(line, pos.min(line.len()));
+		let before_cursor = &line[..safe_pos];
 		let at_pos = before_cursor.rfind('@')?;
 		let before_at = before_cursor[..at_pos].chars().last();
 		if at_pos == 0 || before_at.map(char::is_whitespace).unwrap_or(true) {
@@ -355,6 +356,8 @@ impl<'a> CommandCompleter<'a> {
 
 impl<'a> CommandCompleter<'a> {
 	pub(crate) fn complete(&self, line: &str, pos: usize) -> (usize, Vec<Pair>) {
+		// Guard cursor position to nearest char boundary (reedline passes byte offsets)
+		let pos = crate::utils::truncation::floor_char_boundary(line, pos.min(line.len()));
 		if let Some((start, query)) = Self::find_at_query(line, pos) {
 			let candidates = Self::fuzzy_match_files(query, 10);
 			return (start, candidates);
@@ -572,7 +575,7 @@ impl<'a> CommandCompleter<'a> {
 			(0, vec![])
 		} else {
 			// Handle regular command completion with cursor position awareness
-			let command_part = &line[..pos.min(line.len())];
+			let command_part = &line[..pos];
 			let candidates: Vec<Pair> = self
 				.commands
 				.iter()

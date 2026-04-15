@@ -119,7 +119,10 @@ impl EditMode for EmacsWithShortcutHelp {
 			if code == KeyCode::Char('u') && modifiers == KeyModifiers::CONTROL {
 				let state = self.line_state.lock().ok();
 				if let Some(state) = state {
-					let cursor = state.cursor.min(state.buffer.len());
+					let cursor = crate::utils::truncation::floor_char_boundary(
+						&state.buffer,
+						state.cursor.min(state.buffer.len()),
+					);
 					let line_start = state.buffer[..cursor]
 						.rfind('\n')
 						.map(|idx| idx + 1)
