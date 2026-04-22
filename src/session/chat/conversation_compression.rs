@@ -745,14 +745,39 @@ pub async fn check_and_compress_conversation(
 		return Ok(false);
 	}
 
+	// SKILL PRESERVATION: skill injections land as user-role messages with
+	// content wrapped in <skill name="..."> tags (see add_user_message in
+	// skill_auto::load_env_skills and skill::execute_use → inbox). If they
+	// fall inside the drain range they get wiped by compression, and the AI
+	// loses the domain guidance that was active. Extract them here so
+	// apply_compression can re-insert them between the anchor and the summary.
+	// Only preserve skills that are still registered as active — a skill the
+	// user explicitly forgot must NOT come back.
+	let active_skill_names: Vec<String> = crate::session::context::current_session_id()
+		.map(|sid| crate::session::context::get_active_skills(&sid))
+		.unwrap_or_default();
+	let preserved_skills = collect_preserved_skills(
+		&session.session.messages,
+		start_idx + 1,
+		end_idx,
+		&active_skill_names,
+	);
+
 	// COMPRESS-ALL: Extract user messages BEFORE compression.
 	// - Last user message → re-injected as raw session message after summary
 	// - Last 4 user messages (excluding the appended one) → USER TASKS section in summary
 	// No intersection: the appended message is NOT in USER TASKS.
+	// Skill messages are filtered out — they're preserved verbatim via
+	// preserved_skills and must never show up as "user tasks" or get
+	// re-injected as the raw user prompt after the summary.
 	let all_user_msgs: Vec<&crate::session::Message> = session.session.messages
 		[start_idx + 1..=end_idx]
 		.iter()
-		.filter(|m| m.role == "user" && !m.content.trim().is_empty())
+		.filter(|m| {
+			m.role == "user"
+				&& !m.content.trim().is_empty()
+				&& !crate::mcp::core::skill::is_skill_message(&m.content)
+		})
 		.collect();
 
 	// Last user message for raw re-injection after summary
@@ -792,9 +817,15 @@ pub async fn check_and_compress_conversation(
 	// Calculate tokens before compression (all messages that will be removed)
 	let tokens_before = calculate_range_tokens(session, start_idx + 1, end_idx)?;
 
-	// ALL messages go into compression input — summary captures everything
-	let messages_to_compress: Vec<crate::session::Message> =
-		session.session.messages[start_idx + 1..=end_idx].to_vec();
+	// Skill messages are preserved verbatim (see preserved_skills above) —
+	// exclude them from the AI summarizer input so we don't burn tokens
+	// paraphrasing instructions we'll re-inject word-for-word.
+	let messages_to_compress: Vec<crate::session::Message> = session.session.messages
+		[start_idx + 1..=end_idx]
+		.iter()
+		.filter(|m| !(m.role == "user" && crate::mcp::core::skill::is_skill_message(&m.content)))
+		.cloned()
+		.collect();
 
 	// Clone for learning extraction after compression (operation_rx is moved into the AI call)
 	let learning_rx = operation_rx.clone();
@@ -828,6 +859,7 @@ pub async fn check_and_compress_conversation(
 		current_context_tokens,
 		user_tasks_msgs,
 		last_user_message,
+		preserved_skills,
 		config.use_long_system_cache,
 	)
 	.await?;
@@ -1408,6 +1440,7 @@ async fn apply_compression(
 	current_context_tokens: u64,
 	user_tasks_msgs: Vec<String>,
 	last_user_message: Option<crate::session::Message>,
+	preserved_skills: Vec<crate::session::Message>,
 	use_long_cache: bool,
 ) -> Result<()> {
 	// Parse file contexts from AI summary (AI may request specific file ranges to re-inject)
@@ -1497,6 +1530,29 @@ async fn apply_compression(
 		.unwrap_or_default()
 		.as_secs();
 
+	// Insert preserved active skills FIRST, between the anchor (which keeps
+	// cache marker #1) and the summary. Skills carry no cache markers — the
+	// two-marker budget is reserved for anchor + re-injected user. Order is
+	// preserved relative to each other, matching the user's expectation that
+	// active skills sit at the top of the recovered context:
+	//   [system, anchor(marker#1), skill1, skill2, …, summary, user(marker#2), …]
+	let skill_count = preserved_skills.len();
+	for (i, mut skill_msg) in preserved_skills.into_iter().enumerate() {
+		// Defensive: clear cache markers so we never blow the 2-marker budget.
+		skill_msg.cached = false;
+		skill_msg.cache_ttl = None;
+		session
+			.session
+			.messages
+			.insert(start_idx + 1 + i, skill_msg);
+	}
+	if skill_count > 0 {
+		log_debug!(
+			"Compression: preserved {} active skill message(s) across compression",
+			skill_count
+		);
+	}
+
 	// Summary message (no cache marker — sits between anchor marker and user marker)
 	let summary_msg = crate::session::Message {
 		role: "assistant".to_string(),
@@ -1506,7 +1562,10 @@ async fn apply_compression(
 		name: Some("plan_compression".to_string()),
 		..Default::default()
 	};
-	session.session.messages.insert(start_idx + 1, summary_msg);
+	session
+		.session
+		.messages
+		.insert(start_idx + 1 + skill_count, summary_msg);
 
 	// Marker #2: re-injected user message — full content cache boundary
 	let user_msg = match last_user_message {
@@ -1522,7 +1581,10 @@ async fn apply_compression(
 			..Default::default()
 		},
 	};
-	session.session.messages.insert(start_idx + 2, user_msg);
+	session
+		.session
+		.messages
+		.insert(start_idx + 2 + skill_count, user_msg);
 	log_debug!(
 		"Re-injected last user message after compressed summary (USER TASKS: {})",
 		user_tasks_msgs.len()
@@ -1714,6 +1776,58 @@ fn strip_knowledge_tags(content: &str) -> String {
 
 /// Parse all <done>...</done> tags from AI compression response.
 /// Returns task IDs (e.g. "task1", "task2") that the AI marked as fully completed.
+/// Collect active skill messages from a compression drain range so they can be
+/// re-inserted after the summary. Skill messages are user-role entries whose
+/// content is wrapped in `<skill name="...">…</skill>` tags.
+///
+/// Only skills in `active_skill_names` are preserved — a skill the user
+/// explicitly forgot (or that was never registered as active) is dropped.
+///
+/// Duplicate skill names (same skill injected multiple times) are deduped
+/// keeping the LAST occurrence in the range, preserving the freshest content.
+/// Relative order of distinct skills is preserved (by last-seen position).
+fn collect_preserved_skills(
+	messages: &[crate::session::Message],
+	range_start: usize,
+	range_end: usize,
+	active_skill_names: &[String],
+) -> Vec<crate::session::Message> {
+	if range_start > range_end || range_end >= messages.len() {
+		return Vec::new();
+	}
+
+	// Walk the range once, recording the last index per skill name.
+	// Using a Vec<(name, idx)> to preserve insertion order of first-seen names
+	// while still letting us update the idx to the latest occurrence.
+	let mut order: Vec<String> = Vec::new();
+	let mut last_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+	for (offset, msg) in messages[range_start..=range_end].iter().enumerate() {
+		if msg.role != "user" {
+			continue;
+		}
+		if !crate::mcp::core::skill::is_skill_message(&msg.content) {
+			continue;
+		}
+		let name = match crate::mcp::core::skill::extract_skill_name(&msg.content) {
+			Some(n) => n.to_string(),
+			None => continue,
+		};
+		if !active_skill_names.iter().any(|n| n == &name) {
+			continue;
+		}
+		let idx = range_start + offset;
+		if last_idx.insert(name.clone(), idx).is_none() {
+			order.push(name);
+		}
+	}
+
+	order
+		.into_iter()
+		.filter_map(|name| last_idx.get(&name).map(|&i| messages[i].clone()))
+		.collect()
+}
+
 /// Find the compression range: anchor to last message (compress-all approach).
 ///
 /// CRITICAL: Must not cut between assistant with tool_calls and its tool results
@@ -1856,7 +1970,9 @@ fn calculate_range_tokens(session: &ChatSession, start_idx: usize, end_idx: usiz
 
 #[cfg(test)]
 mod tests {
-	use super::{find_compression_range, strip_file_context_from_summary};
+	use super::{
+		collect_preserved_skills, find_compression_range, strip_file_context_from_summary,
+	};
 	use crate::session::Message;
 	use serde_json::json;
 
@@ -1866,6 +1982,204 @@ mod tests {
 			content: String::new(),
 			..Default::default()
 		}
+	}
+
+	fn skill_msg(name: &str) -> Message {
+		Message {
+			role: "user".to_string(),
+			content: format!(
+				"<skill name=\"{}\" description=\"test skill\">\nbody for {}\n</skill>",
+				name, name
+			),
+			..Default::default()
+		}
+	}
+
+	#[test]
+	fn preserves_active_skill_in_drain_range() {
+		// Layout: [system, welcome, instructions, user_req1, asst,
+		//         skill(rust), user_req2, asst, user_req3, asst]
+		let mut messages = vec![
+			msg("system"),    // 0
+			msg("assistant"), // 1 welcome
+			{
+				let mut m = msg("user"); // 2 instructions
+				m.content = "instructions".into();
+				m
+			},
+			{
+				let mut m = msg("user"); // 3 user_req1
+				m.content = "first request".into();
+				m
+			},
+			{
+				let mut m = msg("assistant"); // 4
+				m.content = "reply 1".into();
+				m
+			},
+			skill_msg("programming-rust"), // 5
+			{
+				let mut m = msg("user"); // 6 user_req2
+				m.content = "second request".into();
+				m
+			},
+			{
+				let mut m = msg("assistant"); // 7
+				m.content = "reply 2".into();
+				m
+			},
+			{
+				let mut m = msg("user"); // 8 user_req3
+				m.content = "third request".into();
+				m
+			},
+			{
+				let mut m = msg("assistant"); // 9
+				m.content = "reply 3".into();
+				m
+			},
+		];
+
+		// first_prompt_idx = 3 (first real user prompt).
+		// find_compression_range moves anchor to idx-1 = 2 (instructions).
+		// Drain range: 3..=9.
+		let (start_idx, end_idx) = find_compression_range(&messages, Some(3), false).unwrap();
+		assert_eq!(start_idx, 2, "anchor on instructions");
+		assert_eq!(end_idx, 9);
+
+		let active = vec!["programming-rust".to_string()];
+		let preserved = collect_preserved_skills(&messages, start_idx + 1, end_idx, &active);
+		assert_eq!(preserved.len(), 1);
+		assert!(preserved[0]
+			.content
+			.contains("<skill name=\"programming-rust\""));
+
+		// Filter mirrors check_and_compress_conversation: user messages that are
+		// NOT skill messages, non-empty.
+		let user_tasks: Vec<String> = messages[start_idx + 1..=end_idx]
+			.iter()
+			.filter(|m| {
+				m.role == "user"
+					&& !m.content.trim().is_empty()
+					&& !crate::mcp::core::skill::is_skill_message(&m.content)
+			})
+			.map(|m| m.content.clone())
+			.collect();
+
+		// Last is re-injected raw, prior entries become USER TASKS.
+		assert_eq!(
+			user_tasks,
+			vec![
+				"first request".to_string(),
+				"second request".to_string(),
+				"third request".to_string(),
+			],
+			"skill content must NOT appear as a user task"
+		);
+		assert_eq!(
+			user_tasks.last().unwrap(),
+			"third request",
+			"last user message for re-injection is the real request, not the skill"
+		);
+
+		// Simulate apply_compression placement: drain 3..=9, insert skills at
+		// start_idx+1, then summary at start_idx+1+skill_count, then user.
+		messages.drain(start_idx + 1..=end_idx);
+		for (i, mut s) in preserved.into_iter().enumerate() {
+			s.cached = false;
+			s.cache_ttl = None;
+			messages.insert(start_idx + 1 + i, s);
+		}
+		let skill_count = 1;
+		messages.insert(start_idx + 1 + skill_count, {
+			let mut m = msg("assistant");
+			m.content = "SUMMARY".into();
+			m
+		});
+		messages.insert(start_idx + 2 + skill_count, {
+			let mut m = msg("user");
+			m.content = "third request".into();
+			m
+		});
+
+		// Expected post-compression layout:
+		// [system, welcome, instructions(anchor), skill, SUMMARY, user_req3]
+		assert_eq!(messages.len(), 6);
+		assert_eq!(messages[2].content, "instructions");
+		assert!(
+			crate::mcp::core::skill::is_skill_message(&messages[3].content),
+			"skill comes right after anchor"
+		);
+		assert_eq!(messages[4].content, "SUMMARY");
+		assert_eq!(messages[5].content, "third request");
+	}
+
+	#[test]
+	fn drops_forgotten_skill_from_preservation() {
+		// Skill is in range but not in active list → must be dropped.
+		let messages = vec![
+			msg("system"),
+			msg("user"),
+			skill_msg("programming-rust"),
+			msg("assistant"),
+			msg("user"),
+			msg("assistant"),
+		];
+		let active: Vec<String> = Vec::new(); // user forgot the skill
+		let preserved = collect_preserved_skills(&messages, 1, 5, &active);
+		assert!(preserved.is_empty(), "forgotten skills are not preserved");
+	}
+
+	#[test]
+	fn dedupes_duplicate_skill_keeping_latest() {
+		// Same skill injected twice in range — keep the second (latest) copy.
+		let mut first = skill_msg("programming-rust");
+		first.content =
+			"<skill name=\"programming-rust\" description=\"v1\">\nold body\n</skill>".to_string();
+		let mut second = skill_msg("programming-rust");
+		second.content =
+			"<skill name=\"programming-rust\" description=\"v2\">\nnew body\n</skill>".to_string();
+
+		let messages = vec![
+			msg("system"),
+			msg("user"),
+			first,
+			msg("assistant"),
+			second,
+			msg("assistant"),
+		];
+		let active = vec!["programming-rust".to_string()];
+		let preserved = collect_preserved_skills(&messages, 1, 5, &active);
+		assert_eq!(preserved.len(), 1);
+		assert!(
+			preserved[0].content.contains("new body"),
+			"latest injection wins on dedup"
+		);
+	}
+
+	#[test]
+	fn preserves_multiple_distinct_skills_in_order() {
+		let messages = vec![
+			msg("system"),
+			msg("user"),
+			skill_msg("programming-rust"),
+			msg("assistant"),
+			skill_msg("git-workflow"),
+			msg("user"),
+			msg("assistant"),
+		];
+		let active = vec!["programming-rust".to_string(), "git-workflow".to_string()];
+		let preserved = collect_preserved_skills(&messages, 1, 6, &active);
+		assert_eq!(preserved.len(), 2);
+		assert!(preserved[0].content.contains("programming-rust"));
+		assert!(preserved[1].content.contains("git-workflow"));
+	}
+
+	#[test]
+	fn empty_range_returns_empty() {
+		let messages = vec![msg("system")];
+		let preserved = collect_preserved_skills(&messages, 5, 10, &["foo".to_string()]);
+		assert!(preserved.is_empty());
 	}
 
 	#[test]
