@@ -1,5 +1,80 @@
 # Changelog
 
+## [0.25.0] - 2026-04-22
+
+### 📋 Release Summary
+
+This release overhauls skill management by introducing declarative activation rules and a new `/skill` command while streamlining the CLI and session recovery process (64ccb7e, 85b8553, a165791, b5b862a). Session reliability is significantly improved through plan persistence, automated skill validation, and robust context compression that prevents data loss and infinite loops (34e46c1, d79630c, aabe16b, f41e547). Additionally, the update strengthens MCP integrations with OAuth discovery support and resolves various UI lags and server deadlocks to ensure a smoother interactive experience (633eef2, 294f760, 914f9cb, f71c760).
+
+
+### 🚨 Breaking Changes
+
+⚠️ **Important**: This release contains breaking changes that may require code updates.
+
+- **skills**: use declarative activation rules `64ccb7eb`
+- **session**: add /skill and remove /save `85b8553b`
+- **session**: remove /save and improve logging `0a56bf7d`
+- **mcp**: implement declarative skill activation `726c5762`
+- **skill**: simplify CLI and session resume `a1657911`
+- **skill**: implement toggle-based management `69d41aad`
+
+### ✨ New Features & Enhancements
+
+- **session**: add plan persistence and recovery `34e46c19`
+- **agent**: implement tag-based agent resolution `52fa80ab`
+- **skill**: add support for universal skill directories `1c09341b`
+- **config**: add script timeout and retry options `6917d84d`
+- **skill**: expose trigger rules on activation `0bac20c5`
+- **skills**: add auto-validation and status info `0d0b6c66`
+- **config**: add provider HTTP request timeout `3c9fb840`
+- **rules**: add bin, session, and workdir rules `181510d0`
+- **skill**: add pagination and glob pattern filtering `5702b5e5`
+- **skill**: implement refcounted MCP server management `9ab63bc1`
+- **chat**: expand skill automation to all events `af38b9c5`
+- **session**: add skill validation and context tags `dcb0d81e`
+- **acp**: load env skills on session creation `b207f7a4`
+- **skill**: enhance command UI and session setup `864539f1`
+- **skill**: implement silent activation and injection `46f9984f`
+- **session**: add skills to session entry points `a57d175a`
+- **skills**: support environment-based activation `7406651b`
+- **mcp**: support full activation for env skills `a27feb57`
+- **skills**: implement skill management and /skill command `b5b862aa`
+- **mcp**: implement skill automation config limits `a402dbe1`
+- **skill**: implement auto-activation and validation `d77f0336`
+- **mcp**: implement RFC 9728 OAuth discovery `633eef2c`
+- **cache**: add configurable long system cache TTL `c4e341a3`
+- **mcp**: add workdir to MCP server initialization context `043ff2cb`
+
+### 🔧 Improvements & Optimizations
+
+- **session**: use is_multiple_of for parity check `db13182e`
+- **config**: enable learning and tune limits `0d4ba6d6`
+- **chat**: reset animation state `95ab56ee`
+- **session**: streamline session logging `8c0d3bb0`
+- **session**: improve animation and sorting `9a34c7fa`
+- optimize storage and remove mutability `6a46f07c`
+- **session**: compress-all strategy with user re-injection `ef150542`
+- **ci**: add PR brief generation workflow `474d65fb`
+
+### 🐛 Bug Fixes & Stability
+
+- **session**: persist assistant response to file `d79630c4`
+- **session**: persist state after compression `826a494f`
+- **compression**: prevent orphaned tool calls `aabe16b4`
+- **mcp**: prevent data loss on partial line reads `294f760b`
+- **mcp**: prevent deadlocks in server status checks `914f9cbb`
+- **chat**: stop spinner before user prompt `90e8d764`
+- resolve compression errors and CLI artifacts `ae71cca6`
+- **core**: resolve chat lag and update docs `f71c760a`
+- **skill_auto**: reset validator retry counters `2d793ba0`
+- **deps**: resolve security vulnerabilities `79c3521d`
+- **utils**: prevent UTF-8 boundary panics `776e409c`
+- **session**: prevent infinite compression loops with escalation `f41e5473`
+
+### 🔄 Other Changes
+
+7 maintenance, dependency, and tooling updates not listed individually.
+
 ## [0.24.0] - 2026-04-10
 
 ### 📋 Release Summary
