@@ -50,12 +50,23 @@ src/
     persistence.rs           # Session save/restore
     inbox.rs                 # Unified inbox (schedule, agent, skill, inject, webhook)
     inject_listener.rs       # Unix socket for message injection
+    webhook_listener.rs      # HTTP webhook → inbox injection
+    completion.rs            # Chat completion orchestration
+    chat_helper.rs           # Helper functions for chat
+    report.rs                # Session usage reporting
+    background_jobs.rs       # Async agent job tracking
+    smart_summarizer.rs      # Smart text summarization
+    modal.rs                 # Terminal modal overlay system
+    output.rs                # OutputMode, OutputSink trait
 
     chat/
       mod.rs                 # Chat orchestration
       session/
         core.rs              # Session state management
-        commands/             # /help, /info, /report, /model, etc.
+        commands/           # 24 command handlers: help, info, model, role, loglevel, copy, clear, plan, truncate, summarize, context, image, video, prompt, done, list, run, workflow, mcp, report, session, skill, exit, utils
+        setup.rs             # Session setup & initialization
+        params.rs           # CLI parameter parsing
+        main_loop.rs        # Interactive & non-interactive session loops
       response.rs            # Response processing, compression checks
       conversation_compression.rs  # Compression engine
       semantic_chunking.rs   # Discourse-aware chunking
@@ -63,12 +74,22 @@ src/
       context_truncation.rs  # Context trimming
       file_context.rs        # Active file tracking
       tool_error_tracker.rs  # Tool error tracking
+      formatting.rs          # Response formatting
+      markdown.rs            # Markdown processing
+      syntax.rs              # Syntax highlighting
+      tool_display.rs        # Tool output display
+      history/
+        mod.rs               # History management
+      prompt.rs              # Prompt management
 
     cache.rs                 # Cache marker management
-    layers/                  # Layer execution engine
+    layers/
+      mod.rs                 # Layer trait & processor
+      types/
+        mod.rs              # Layer type definitions
     workflows/               # Workflow orchestrator (with step timing)
     pipelines/               # Deterministic script pipeline executor
-    output.rs                # OutputMode, OutputSink trait
+    project_context.rs       # Project context management
 
   mcp/
     mod.rs                   # MCP coordinator
@@ -76,20 +97,31 @@ src/
     process.rs               # Process lifecycle, health, registries
     health_monitor.rs        # Background health checking
     workdir.rs               # Thread-local working directory
+    hint_accumulator.rs      # MCP misuse hint accumulation
+    tool_map.rs              # Global TOOL_MAP: tool name → server config
+    shared_utils.rs          # Shared MCP utilities
 
     core/
       mod.rs                 # Core server: plan, mcp, agent, schedule, skill
       plan/                  # Plan tool + compression
+        mod.rs, core.rs, compression.rs, storage.rs, memory_storage.rs, plan_tests.rs
+      schedule/              # Schedule tool
+        mod.rs, core.rs, storage.rs
       skill.rs               # Skill management
+      skill_auto.rs          # Skill auto-activation & validation hooks
+      dynamic.rs             # Dynamic MCP server management (add/remove at runtime)
+      dynamic_agents.rs      # Dynamic agent tool registration
 
     agent/
       mod.rs                 # Agent server: agent_* tools
+      functions.rs           # Agent tool implementations
 
     oauth/
+      mod.rs                 # OAuth module
       discovery.rs           # OAuth provider discovery
       flow.rs                # Authorization flow
       callback_server.rs     # Local callback HTTP server
-      device_flow.rs         # Device code flow (headless)
+      cimd.rs                # CIMD flow
       token_store.rs         # Keyring + file fallback
 
   agent/

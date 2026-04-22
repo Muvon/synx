@@ -8,10 +8,11 @@ Session-based AI development assistant in Rust. Interactive chat sessions with M
 src/
   acp/              # Agent Communication Protocol server
   agent/            # Agent registry, taps, inputs, dependency resolution
-  config/           # Config loading, roles, MCP, layers, pipelines, hooks, migrations
+  commands/         # CLI subcommands (acp, complete, config, mod, run, send, server, tap, untap, vars)
+  config/           # Config loading, roles, MCP, layers, pipelines, hooks, agents, providers, validation, registry, env_source
   directories.rs    # Path constants (data dir, config dir, sessions, logs, cache)
   learning/         # Cross-session lesson extraction, storage, injection
-  logging.rs        # Logging infrastructure
+  logging.rs        # Logging infrastructure (with acp_error.rs, tracing_setup.rs)
   mcp/              # MCP protocol implementation
     core/           # Builtin tools: plan, mcp, agent, schedule, skill
       dynamic.rs   # Dynamic MCP server management (add/remove at runtime)
@@ -26,6 +27,8 @@ src/
     tool_map.rs     # Global TOOL_MAP: tool name → server config
     utils.rs        # Tool call parsing, response formatting
     workdir.rs      # Per-thread working directory tracking
+    shared_utils.rs # Shared MCP utilities
+    oauth/          # OAuth 2.1 + PKCE (mod, discovery, flow, callback_server, cimd, token_store)
   providers.rs      # Thin wrapper over octolib (ChatCompletionParams, schemas)
   sandbox/          # Platform sandboxing (Linux Landlock, macOS Seatbelt)
   session/          # Session management
@@ -33,40 +36,50 @@ src/
     cache.rs            # CacheManager for prompt caching
     cancellation.rs     # Cancellation tokens
     chat/               # Chat session logic
+      completion.rs     # Chat completion orchestration
+      chat_helper.rs    # Helper functions for chat
       conversation_compression.rs  # Context compression (task/phase/project/conversation)
+      formatting.rs     # Response formatting
+      markdown.rs       # Markdown processing
+      response.rs       # Response processing
+      syntax.rs         # Syntax highlighting
       session/
+        commands/       # 25 session commands (help, info, model, role, loglevel, copy, clear, plan, truncate, summarize, context, image, video, prompt, done, list, run, workflow, mcp, report, session, skill, exit, utils)
         core.rs          # ChatSession struct, SessionInitParams builder
         main_loop.rs    # Interactive & non-interactive session loops
-        commands/       # 25 session commands (clear, context, copy, display, done, exit, help, image, info, list, loglevel, mcp, model, plan, prompt, report, role, run, session, skill, summarize, truncate, utils, video, workflow)
         params.rs       # CLI parameter parsing
         setup.rs        # Session setup & initialization
+      tool_display.rs   # Tool output display
+      tool_error_tracker.rs  # Tool error tracking
     context.rs         # Session-scoped context (init_session_services)
     helper_functions.rs # Context summarization helpers
-    history.rs         # Role-based history management
+    history/           # Role-based history management
     inbox.rs           # InboxQueue (schedule + webhook message injection)
     inject_listener.rs # Unix Domain Socket for external message injection
     layers/            # Layer trait, LayerProcessor, LayerDefinition
+      types/           # Layer type definitions
     modal.rs           # Terminal modal overlay system
     output.rs          # Output abstraction (JSONL, WebSocket, Silent sinks)
+    persistence.rs     # Session save/restore
     pipelines/         # Deterministic script pipeline (orchestrator, executor)
+    project_context.rs # Project context management
     report.rs          # Session usage reporting
     smart_summarizer.rs # Smart text summarization
     workflows/         # WorkflowOrchestrator, StepExecutor, PatternParser
     webhook_listener.rs # HTTP webhook → inbox injection
   state.rs           # IndexState (current_directory, graphrag_blocks)
   utils/              # file_parser, file_renderer, glob, terminal_output, time, truncation
-  websocket/          # WebSocket server (handle_session_message)
-cli/
-  src/
-    commands/        # CLI subcommands (acp, config, run, send, server, tap, untap, vars)
+  websocket/          # WebSocket server (mod, protocol, server)
 config-templates/
-  default.toml       # Single source of truth for all config defaults (782 lines)
+  default.toml       # Single source of truth for all config defaults (794 lines)
+  agents/            # Agent template files
 doc/
-  usage/             # End-user docs (01-12)
+  usage/             # End-user docs (01-15)
   integration/       # Integration docs (01-04)
   dev/               # Contributor docs (01-03)
   troubleshooting/   # Troubleshooting & migration (01-02)
   reference/         # CLI, commands, config, env vars (01-04)
+  use-cases/         # Use case documentation (01-10)
 ```
 
 ## Where to Look
@@ -101,17 +114,16 @@ doc/
 | MCP health monitor | `src/mcp/health_monitor.rs` |
 | MCP server connections | `src/mcp/server.rs` |
 | Agent registry & capabilities | `src/agent/registry.rs` → `parse_capability_toml()` |
-| Tap registry & discovery | `src/agent/taps.rs` |
-| Agent inputs & placeholders | `src/agent/inputs.rs` ({{INPUT:KEY}}, {{ENV:KEY}}) |
+| CLI commands | `src/commands/` |
 | Agent dependency resolution | `src/agent/deps.rs` |
 | AI provider bridge | `src/providers.rs` |
 | Structured output (schema) | `src/providers.rs` → `ChatCompletionParams::with_schema()`, `src/session/mod.rs` → `chat_completion_with_provider()` |
 | CLI schema flag parsing | `src/session/chat/session/params.rs`, `setup.rs` |
-| Learning (extract, store, inject) | `src/learning/mod.rs`, `extract/`, `backends/`, `inject.rs` |
+| Learning (extract, store, inject) | `src/learning/mod.rs`, `src/learning/extract.rs`, `src/learning/backend/`, `src/learning/inject.rs` |
 | Inbox (schedule + webhook) | `src/session/inbox.rs` |
 | Background jobs | `src/session/background_jobs.rs` |
 | Session context init | `src/session/context.rs` → `init_session_services()` |
-| Sandbox | `src/sandbox/mod.rs` (Linux: seccomp, macOS: sandbox-exec) |
+| Sandbox | `src/sandbox/mod.rs`, `src/sandbox/linux.rs`, `src/sandbox/macos.rs` |
 | ACP server | `src/acp/agent.rs`, `src/acp/commands.rs` |
 | WebSocket server | `src/websocket/server.rs` |
 | File read/write helpers | `src/utils/file_parser.rs`, `src/utils/file_renderer.rs` |
@@ -140,10 +152,10 @@ All session modes share the same initialization. When adding session-scoped stat
 | Mode | File | Function |
 |------|------|----------|
 | Interactive CLI | `src/session/chat/session/main_loop.rs:100` | `run_interactive_session()` |
-| Non-interactive CLI | `src/session/chat/session/main_loop.rs:959` | `run_interactive_session_with_input()` |
-| ACP new_session | `src/acp/agent.rs:469` | `AcpAgent` — first `with_session_id` block |
-| ACP initialize | `src/acp/agent.rs:917` | `AcpAgent` — second `with_session_id` block |
-| WebSocket server | `src/websocket/server.rs:609` | `handle_session_message()` |
+| Non-interactive CLI | `src/session/chat/session/main_loop.rs:1039` | `run_interactive_session_with_input()` |
+| ACP new_session | `src/acp/agent.rs:471` | `AcpAgent` — first `with_session_id` block |
+| ACP initialize | `src/acp/agent.rs:934` | `AcpAgent` — second `with_session_id` block |
+| WebSocket server | `src/websocket/server.rs:525` | `handle_session_message()` at line 525, first session context at line 610 |
 
 **Required initialization** (inside `with_session_id` context):
 ```rust
@@ -160,8 +172,6 @@ crate::mcp::core::skill_auto::run_activation(Event::User, &input, &current_dir).
 ```rust
 crate::mcp::core::skill_auto::run_validators(Event::Turn, &content, &workdir).await
 ```
-
-**If you add a new session entry point or session-scoped state, grep for `init_inbox_for_session` to find all locations that need updating.**
 
 ### Session Command Dispatch
 
@@ -196,7 +206,7 @@ Every `.rs` file must have:
 ```
 - New files: use current year
 - Modified files: update year if outdated
-- Check: `rg -l "Copyright 2025" --type rust` should return nothing for files modified in the current year
+- Check: `rg "Copyright 2025" --type rust -l` to find files needing year update (16 files currently need 2026)
 
 ### Build & Lint
 
