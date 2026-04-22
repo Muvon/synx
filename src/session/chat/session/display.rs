@@ -637,7 +637,7 @@ impl ChatSession {
 				} else {
 					// Calculate median
 					token_counts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-					let median = if token_counts.len() % 2 == 0 {
+					let median = if token_counts.len().is_multiple_of(2) {
 						(token_counts[token_counts.len() / 2 - 1]
 							+ token_counts[token_counts.len() / 2])
 							/ 2.0
@@ -729,7 +729,7 @@ impl ChatSession {
 
 			// Calculate median
 			token_counts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-			let median = if token_counts.len() % 2 == 0 {
+			let median = if token_counts.len().is_multiple_of(2) {
 				(token_counts[token_counts.len() / 2 - 1] + token_counts[token_counts.len() / 2])
 					/ 2.0
 			} else {
