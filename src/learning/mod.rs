@@ -111,7 +111,7 @@ impl Lesson {
 pub struct RetrievalContext {
 	/// The user's task/input text.
 	pub query: String,
-	/// Current role (e.g. "developer:rust").
+	/// Current role (e.g. "developer:general").
 	pub role: String,
 	/// Current project basename.
 	pub project: String,

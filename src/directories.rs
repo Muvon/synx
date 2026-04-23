@@ -120,7 +120,7 @@ pub fn get_cache_dir() -> Result<PathBuf> {
 /// Get the learning directory for a project and role.
 /// Structure: `learning/{project}/{role_base}/` — project-first because learning
 /// is project-scoped, role is a secondary filter.
-/// Role uses only the base part before `:` (e.g. "developer" from "developer:rust"),
+/// Role uses only the base part before `:` (e.g. "developer" from "developer:general"),
 /// matching how capabilities are sent to MCP servers.
 pub fn get_learning_dir(role: &str, project: &str) -> Result<PathBuf> {
 	let data_dir = get_octomind_data_dir()?;

@@ -56,16 +56,14 @@ Map of tap agent tag to model override. Set a preferred model for specific tap a
 
 ```toml
 [taps]
-"developer:rust" = "ollama:glm-5"
+"developer:general" = "ollama:glm-5"
 "octomind:assistant" = "openai:gpt-4o"
 ```
 
 **Priority:** CLI `--model` > taps override > role.model > config.model
-
-When you run `octomind run developer:rust`, the model is resolved in this order:
+When you run `octomind run developer:general`, the model is resolved in this order:
 1. `--model` CLI flag (if provided)
-2. `[taps]` override for `"developer:rust"` (if configured)
-3. Role's `model` field (if defined in manifest)
+2. `[taps]` override for `"developer:general"` (if configured)
 4. Global `model` in config
 
 Empty by default. Only applies to tap agents (tags with `:`). Plain role names use role.model or config.model.
@@ -364,6 +362,27 @@ prompt = """Please review the code above focusing on:
 - Code quality and best practices
 - Security considerations
 - Performance implications"""
+```
+
+## `[skills]`
+
+Automatic skill activation and validation.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `auto_activation` | bool | `true` | Enable declarative rule-based activation (checks on every user message) |
+| `auto_validation` | bool | `false` | Enable validate script execution at end of assistant turns |
+| `activation_timeout` | u64 | `3` | Reserved. Rules evaluate in-process (no timeout needed) |
+| `validation_timeout` | u64 | `60` | Seconds per validate script. `0` = unlimited |
+| `max_retries` | u32 | `3` | Max validation retries per skill before giving up |
+
+```toml
+[skills]
+auto_activation = true
+auto_validation = false
+activation_timeout = 3
+validation_timeout = 60
+max_retries = 3
 ```
 
 ## `[compression]`

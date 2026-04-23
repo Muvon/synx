@@ -13,8 +13,7 @@ octomind run developer
 
 # Tap agent
 octomind run octomind:assistant
-octomind run developer:rust
-
+octomind run developer:general
 # Named session
 octomind run --name feature-auth
 

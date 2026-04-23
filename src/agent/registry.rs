@@ -15,7 +15,7 @@
 //! Registry client: fetch and cache agent manifests.
 //!
 //! Tag format: `category:variant` or `category:variant@version`
-//! Example:    `developer:rust`, `developer:rust@1.2`
+//! Example:    `developer:general`, `developer:general@1.2`
 //!
 //! Manifests are cached at `~/.local/share/octomind/agents/<category>/<variant>.toml`.
 //! If the cached file is older than `cache_ttl_hours`, it is refreshed in the background
@@ -33,8 +33,8 @@ use crate::config::registry::RegistryConfig;
 
 /// Parse a tag string into `(category, variant, version)`.
 ///
-/// - `developer:rust`      → `("developer", "rust", None)`
-/// - `developer:rust@1.2`  → `("developer", "rust", Some("1.2"))`
+/// - `developer:general`      → `("developer", "rust", None)`
+/// - `developer:general@1.2`  → `("developer", "rust", Some("1.2"))`
 pub fn parse_tag(tag: &str) -> Result<(String, String, Option<String>)> {
 	let (name_part, version) = if let Some((n, v)) = tag.split_once('@') {
 		(n, Some(v.to_string()))

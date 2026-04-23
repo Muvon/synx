@@ -59,14 +59,8 @@ Octomind is different. It's not a framework you configure. It's a **runtime** fo
 curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
 export OPENROUTER_API_KEY="your_key"
 
-# Run any community-built specialist — zero setup
-octomind run developer:rust       # Senior Rust dev, full toolchain pre-wired
-octomind run doctor:blood          # Medical lab analyst, reads your actual results
-octomind run devops:kubernetes     # K8s operator with kubectl + helm ready
-octomind run security:pentest      # Security specialist, offensive tooling attached
-octomind run legal:contracts       # Contract reviewer, jurisdiction-aware
-octomind run finance:analyst       # Financial analyst, wired to your data sources
-```
+octomind run developer            # General dev, language skills auto-activate
+  # (programming-rust, programming-python, etc. activate based on project type)
 
 ### What Happens When You Run `octomind run doctor:blood`
 
@@ -93,10 +87,13 @@ The tap is a community-driven Git registry. Each agent is a complete, battle-tes
 - ✅ Credential management — asks once, stores permanently
 
 **Not a prompt file. Not a skill injection. The full stack, configured by the community, ready to run.**
+octomind run developer:general
+octomind run doctor:nutrition
 
+# Add any community or team tap
 ```bash
 # Official tap included by default — just run
-octomind run developer:rust
+octomind run developer:general
 octomind run doctor:blood
 octomind run doctor:nutrition
 
@@ -106,12 +103,12 @@ octomind tap yourteam/internal ~/path  # local tap for private agents
 
 # Agents from your new tap are immediately available
 octomind run finance:analyst
-octomind run legal:contracts
+octomind run lawyer:general
 ```
 
 Each tap is a Git repo. Each agent is one TOML file. Pull requests are contributions.
 
-> **Want to add your expertise?** A `developer:golang` agent, a `doctor:ecg` agent, a `lawyer:gdpr` agent — one file, and everyone benefits. [How to write a tap agent →](https://github.com/muvon/octomind-tap)
+> **Want to add your expertise?** A `developer:general` agent, a `doctor:medications` agent, a `lawyer:general` agent — one file, and everyone benefits. [How to write a tap agent →](https://github.com/muvon/octomind-tap)
 
 ---
 
@@ -125,16 +122,15 @@ curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | 
 export OPENROUTER_API_KEY="your_key"
 
 # Start with a specialist agent — no setup required
-octomind run developer:rust
+octomind run developer
+# Language skills (programming-rust, programming-python, etc.) auto-activate based on project type
 ```
 
-That's it. You're in an interactive session with a Rust specialist that can read your code, run commands, and edit files.
+That's it. You're in an interactive session with a specialist that can read your code, run commands, and edit files.
 
 ---
 
 ## How It Works
-
-### Core MCP Tools
 
 Octomind has 5 built-in MCP tools that every agent has access to:
 
@@ -278,26 +274,11 @@ Real-time cost tracking per session and per request. Know exactly what you're sp
 
 Octomind isn't just an interactive terminal tool. It runs in every context you need:
 
-```bash
 # Interactive — daily driver
-octomind run developer:rust
-
-# Non-interactive — pipe tasks directly from scripts or CI/CD
-echo "review this PR for security issues" | octomind run --format jsonl
-
-# Daemon mode — long-running background agent
-octomind run --name myagent --daemon --format plain
-
-# Send messages to running daemon from anywhere
-echo "check the build status" | octomind send --name myagent
-
-# WebSocket server — connect IDE plugins, dashboards, automation
-octomind server --port 8080
+octomind run developer
 
 # ACP protocol — drop into any multi-agent system as a sub-agent
-octomind acp developer:rust
-```
-
+octomind acp developer:general
 | Mode | Use For |
 |------|---------|
 | Interactive CLI | Daily work, any domain |
@@ -377,11 +358,8 @@ octomind run
 octomind run --name my-feature
 
 # Resume a session
-octomind run --resume my-feature
-
 # Tap agent (fetches specialized config)
-octomind run developer:rust
-```
+octomind run developer:general
 
 ### Non-Interactive Mode
 
@@ -463,9 +441,9 @@ See [Architecture](doc/dev/02-architecture.md) for detailed internals.
 
 The most impactful contribution isn't code — **it's agents.**
 
-Every domain expert who publishes a specialist makes Octomind useful for an entirely new audience. A cardiologist publishing `doctor:ecg`. A tax attorney publishing `lawyer:tax`. A genomics researcher publishing `scientist:genomics`. One TOML file — and everyone with that problem gets a specialist-grade AI instantly.
+Every domain expert who publishes a specialist makes Octomind useful for an entirely new audience. A cardiologist publishing `doctor:medications`. A tax attorney publishing `lawyer:general`. A security researcher publishing `security:owasp`. One TOML file — and everyone with that problem gets a specialist-grade AI instantly.
 
-`accountant:tax`, `devops:terraform`, `designer:ux-review`, `scientist:genomics` — the registry grows one file at a time.
+`doctor:nutrition`, `devops:terraform`, `lawyer:us`, `security:owasp` — the registry grows one file at a time.
 
 - [How to write a tap agent](https://github.com/muvon/octomind-tap)
 - [Open issues](https://github.com/muvon/octomind/issues)

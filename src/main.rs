@@ -38,7 +38,7 @@ enum Commands {
 	Config(commands::ConfigArgs),
 
 	/// Run an agent or start an interactive session.
-	/// TAG can be a registry agent (e.g. `developer:rust`) or a role name (e.g. `developer`).
+	/// TAG can be a registry agent (e.g. `developer:general`) or a role name (e.g. `developer`).
 	/// Use --format to run non-interactively.
 	Run(commands::RunArgs),
 
@@ -231,7 +231,7 @@ fn patch_zsh(script: &str) -> String {
 	// Strategy: keep #compdef on line 1, then inject the helper right after it.
 	//
 	// Use compadd instead of _describe: _describe treats ':' as the
-	// completion:description separator, which breaks tags like 'developer:rust'.
+	// completion:description separator, which breaks tags like 'developer:general'.
 	let helper = "\n_octomind_complete_run() {\n  local -a tags\n  tags=(${(f)\"$(octomind complete run 2>/dev/null)\"})\n  compadd -a tags\n}\n";
 
 	// Find the end of the first line (#compdef octomind).

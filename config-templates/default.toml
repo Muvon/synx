@@ -112,12 +112,12 @@ max_request_spending_threshold = 0.0
 [capabilities]
 
 # Tap model overrides for specific agents
-# Each key is a tap agent tag (e.g., "developer:rust"), value is the model to use
+# Each key is a tap agent tag (e.g., "developer:general"), value is the model to use
 # This allows setting a preferred model for specific tap agents.
 # Priority: CLI --model > taps override > role.model > config.model
 # Example:
 # [taps]
-# "developer:rust" = "ollama:glm-5"
+# "developer:general" = "ollama:glm-5"
 # "octomind:assistant" = "openai:gpt-4o"
 # Leave empty to use default model for all tap agents
 [taps]

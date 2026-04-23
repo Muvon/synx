@@ -20,7 +20,7 @@ use std::io::{self, IsTerminal, Read};
 
 #[derive(Args, Debug)]
 pub struct RunArgs {
-	/// Agent tag (e.g. `developer:rust`) or role name (e.g. `developer`).
+	/// Agent tag (e.g. `developer:general`) or role name (e.g. `developer`).
 	/// Omit to use the default role from config.
 	#[arg(value_name = "TAG")]
 	pub tag: Option<String>,

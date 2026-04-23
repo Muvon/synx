@@ -61,11 +61,8 @@ When multiple taps provide the same agent tag, priority is:
 
 Run a tap agent with `domain:spec` format:
 
-```bash
 octomind run octomind:assistant
-octomind run octomind:developer
-octomind run developer:rust
-```
+octomind run developer:general
 
 When you specify a tag with `:`, Octomind:
 1. Searches taps for a matching agent manifest
@@ -79,11 +76,10 @@ Set a preferred model for specific tap agents in your config:
 
 ```toml
 [taps]
-"developer:rust" = "ollama:glm-5"
+"developer:general" = "ollama:glm-5"
 ```
 
-This overrides the model for `octomind run developer:rust` while leaving other agents unchanged.
-
+This overrides the model for `octomind run developer:general` while leaving other agents unchanged.
 **Priority:** CLI `--model` > `[taps]` override > role.model > config.model
 
 ## Agent Manifests
@@ -92,10 +88,10 @@ This overrides the model for `octomind run developer:rust` while leaving other a
 Agent manifests are TOML files in `agents/<category>/<variant>.toml`:
 
 ```toml
-# agents/developer/rust.toml
+# agents/developer/general.toml
 [[roles]]
 name = "developer"
-system = "You are a Rust development expert..."
+system = "You are an expert software developer..."
 temperature = 0.3
 
 [roles.mcp]

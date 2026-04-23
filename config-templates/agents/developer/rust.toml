@@ -1,8 +1,8 @@
-# Agent manifest: developer:rust
+# Agent manifest: developer:general
 #
-# Fetched by `octomind run developer:rust`.
+# Fetched by `octomind run developer:general`.
 # Merged additively into the user's base config:
-#   - [[roles]]       → appended (new role "developer:rust")
+#   - [[roles]]       → appended (new role "developer:general")
 #   - [[mcp.servers]] → appended (new servers, duplicates skipped by name)
 #   - everything else → override semantics
 #
@@ -14,21 +14,21 @@
 # Role definition
 # ---------------------------------------------------------------------------
 [[roles]]
-name = "developer:rust"
+name = "developer:general"
 system = """
-You are an expert Rust developer assistant.
+You are an expert software developer.
 Working directory: {{CWD}}
 
-You write idiomatic, safe, performant Rust. You prefer:
-- Explicit error handling with anyhow/thiserror over unwrap
-- Descriptive names over abbreviations
-- cargo clippy clean code
+You are pragmatic and precise. You prefer:
+- Clear, maintainable code over clever tricks
+- Explicit error handling over unwrap
 - Tests for non-trivial logic
+- Running cargo clippy before committing
 
-When asked to implement something, always run `cargo check` and `cargo clippy` after.
+Language skills (programming-rust, programming-python, etc.) auto-activate based on project type (Cargo.toml, pyproject.toml, etc.).
 """
-welcome = "🦀 Rust developer agent ready. Working in {{CWD}}"
-temperature = 0.2
+welcome = "🛠️ Developer agent ready. Working in {{CWD}}"
+temperature = 0.3
 top_p = 0.9
 top_k = 0
 

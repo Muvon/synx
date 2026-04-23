@@ -190,10 +190,10 @@ Required `[skills]` section in config:
 ```toml
 [skills]
 auto_activation = true       # enable/disable auto-activation via declarative rules
-auto_validation = true       # enable/disable auto-validation via validate scripts
-activation_timeout = 3        # reserved (rules are in-process, no timeout needed)
-validation_timeout = 60       # seconds per validate script, 0 = unlimited
-max_retries = 3               # max validation retries per skill before giving up
+auto_validation = false      # enable/disable auto-validation via validate scripts (default: false)
+activation_timeout = 3      # reserved (rules are in-process, no timeout needed)
+validation_timeout = 60      # seconds per validate script, 0 = unlimited
+max_retries = 3              # max validation retries per skill before giving up
 ```
 
 All fields are required. The `[skills]` section must be present in the config file.

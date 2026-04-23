@@ -325,8 +325,8 @@ pub struct Config {
 
 	// Tap model overrides (tap_tag → model)
 	// Allows setting preferred model for specific tap agents.
-	// Example: taps = { "developer:rust" = "ollama:glm-5" }
-	// When running `octomind run developer:rust`, uses ollama:glm-5 instead of default.
+	// Example: taps = { "developer:general" = "ollama:glm-5" }
+	// When running `octomind run developer:general`, uses ollama:glm-5 instead of default.
 	#[serde(default)]
 	pub taps: HashMap<String, String>,
 

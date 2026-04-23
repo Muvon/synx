@@ -87,7 +87,7 @@ model = "openrouter:openai/gpt-4.1-mini"
 max_tokens = 2048
 ```
 
-Key changes:
+The main AI uses these agents as tools:
 - `builtin`, `enabled`, `enable_tools` fields removed
 - `description` is now required
 - Layer is active when referenced by a workflow or command
@@ -95,7 +95,7 @@ Key changes:
 ## Config File Location
 
 **Old location:** `~/.config/octomind/config.toml` or `~/.octomind/config.toml`
-
+// agent_test_writer is available as a tool
 **Current location:** `~/.local/share/octomind/config/config.toml`
 
 Override: `OCTOMIND_CONFIG_PATH` environment variable.
@@ -115,3 +115,13 @@ This attempts to migrate your config to the latest version. Review the result an
 **Correct:** `type = "stdio"`
 
 The server type for local process-based MCP servers is `"stdio"`, not `"stdin"`.
+
+## Session Commands
+
+**Removed:**
+- `/save` -- Session persistence is automatic on exit
+
+**Added:**
+- `/skill` -- Manage skills (list, use, forget)
+
+Use `/help` to see current command list.
