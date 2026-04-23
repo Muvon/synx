@@ -77,7 +77,6 @@ pub async fn process_tool_results(
 	let supports_caching = crate::session::model_supports_caching(&chat_session.model);
 
 	let mut cache_check_time = 0u128;
-	let mut accumulated_content_size = 0usize;
 
 	for tool_result in &tool_results {
 		// CRITICAL FIX: Extract ONLY the actual tool output, not our custom JSON wrapper
@@ -105,37 +104,20 @@ pub async fn process_tool_results(
 			}
 		}
 
-		// PERFORMANCE OPTIMIZATION: Check size before moving content
-		let content_size = tool_content.len();
-		accumulated_content_size += content_size;
-		let accumulated_is_large = accumulated_content_size > 50000; // 50KB+ total
-
 		// Use the new add_tool_message method which handles token tracking properly
+		// NOTE: Compression intentionally does NOT run mid-loop here. Compressing while
+		// we are still adding tool_results for the current assistant's tool_calls would
+		// orphan the tool_use blocks (drain the parent assistant message) and leave
+		// subsequent tool_results with no matching tool_use — the API would then reject
+		// the follow-up request. Compression is safely handled after the full batch is
+		// added (see check_and_compress_conversation call below) and before the next
+		// API request (see api_prep.rs).
 		chat_session.add_tool_message(
 			&tool_content,
 			&tool_result.tool_id,
 			&tool_result.tool_name,
 			config,
 		)?;
-
-		if accumulated_is_large {
-			// Run conversation compression when accumulated output is large
-			if let Err(e) =
-				crate::session::chat::conversation_compression::check_and_compress_conversation(
-					chat_session,
-					config,
-					operation_cancelled.clone(),
-					false,
-				)
-				.await
-			{
-				log_debug!(
-					"Conversation compression failed during large tool output: {}. Continuing.",
-					e
-				);
-			}
-			accumulated_content_size = 0;
-		}
 	}
 
 	// 🗜️ PLAN-DRIVEN COMPRESSION: Process any pending compression requests
