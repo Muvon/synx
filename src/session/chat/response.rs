@@ -631,7 +631,11 @@ pub async fn process_response<S: OutputSink>(
 		params.mode,
 	)?;
 
-	// Run skill validators on assistant response
+	// Run skill validators on assistant response.
+	// Failures are pushed to the inbox so the session loop (interactive or
+	// non-interactive) auto-continues with a new API turn — without this,
+	// validator errors would sit in memory and the loop would block waiting
+	// for user input.
 	{
 		let workdir = crate::mcp::get_thread_working_directory();
 		let failures =
@@ -641,7 +645,12 @@ pub async fn process_response<S: OutputSink>(
 				"Validation failed ({}): {}\nPlease fix the issue.",
 				skill_name, error
 			);
-			params.chat_session.add_user_message(&error_msg)?;
+			crate::session::inbox::push_inbox_message(crate::session::inbox::InboxMessage {
+				source: crate::session::inbox::InboxSource::SkillValidator {
+					name: skill_name.clone(),
+				},
+				content: error_msg,
+			});
 			log_info!("Validator '{}' failed on assistant event", skill_name);
 		}
 	}

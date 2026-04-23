@@ -47,9 +47,14 @@ fn get_pool() -> &'static Arc<RwLock<Option<SkillPool>>> {
 	SKILL_POOL.get_or_init(|| Arc::new(RwLock::new(None)))
 }
 
-/// Load skills from OCTOMIND_SKILLS env var. Called at session start.
-/// Format: comma-delimited skill names, e.g. "programming-rust,git-workflow"
-/// On resume: removes stale skill messages and re-injects fresh content.
+/// Load skills from OCTOMIND_SKILLS env var (if set). Called at session start from all five entry points.
+///
+/// When resuming a session that already had these skills (from previous run or /skill use), we guard against
+/// re-injection using the active_skills registry. This prevents duplicate <skill name="..."> messages in the
+/// conversation history. The legacy message scan is kept as fallback for restored sessions that may not have
+/// populated the registry yet.
+///
+/// Skills from OCTOMIND_SKILLS are always marked active (even if already present).
 pub async fn load_env_skills(session: &mut crate::session::chat::session::ChatSession) {
 	let env_val = match std::env::var("OCTOMIND_SKILLS") {
 		Ok(v) if !v.trim().is_empty() => v,
@@ -65,6 +70,8 @@ pub async fn load_env_skills(session: &mut crate::session::chat::session::ChatSe
 		return;
 	}
 
+	let session_id = crate::session::context::current_session_id();
+
 	// Collect skill IDs already in session (from previous run / resume)
 	let existing: std::collections::HashSet<String> = session
 		.session
@@ -75,13 +82,28 @@ pub async fn load_env_skills(session: &mut crate::session::chat::session::ChatSe
 		.collect();
 
 	for name in &skill_names {
-		if existing.contains(*name) {
-			// Already injected from previous session — just register as active
-			if let Some(sid) = crate::session::context::current_session_id() {
-				crate::session::context::add_active_skill(&sid, name);
+		let name_str = (*name).to_string();
+
+		// Primary guard: if already active in this session (from resume, /skill, or prior load_env_skills), skip injection
+		if session_id
+			.as_ref()
+			.is_some_and(|sid| crate::session::context::has_active_skill(sid, &name_str))
+		{
+			// Still ensure it is registered (harmless if duplicate)
+			if let Some(sid) = &session_id {
+				crate::session::context::add_active_skill(sid, &name_str);
 			}
 			continue;
 		}
+
+		if existing.contains(*name) {
+			// Legacy path for restored sessions without active registry entry
+			if let Some(sid) = &session_id {
+				crate::session::context::add_active_skill(sid, &name_str);
+			}
+			continue;
+		}
+
 		let call = crate::mcp::McpToolCall {
 			tool_name: "skill".to_string(),
 			tool_id: format!("env_{}", name),

@@ -45,6 +45,8 @@ pub enum InboxSource {
 	BackgroundAgent { name: String },
 	/// A `skill(use)` activation that needs its content injected.
 	Skill { name: String },
+	/// A skill validator failure that needs to be fed back to the AI.
+	SkillValidator { name: String },
 	/// An external injection via `octomind inject` CLI command.
 	Inject,
 	/// A webhook hook that received an HTTP request.
@@ -184,6 +186,9 @@ pub fn peek_inbox_preview(session_id: &str) -> Option<String> {
 		}
 		InboxSource::Skill { name } => {
 			return Some(format!("skill '{name}'"));
+		}
+		InboxSource::SkillValidator { name } => {
+			return Some(format!("skill validator '{name}' failed"));
 		}
 		InboxSource::Inject => "external inject",
 		InboxSource::Webhook { hook } => {
