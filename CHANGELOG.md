@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.26.0] - 2026-04-28
+
+### 📋 Release Summary
+
+This release introduces expanded AI model support for Featherless, NVIDIA NIM, Groq, and BytePlus, alongside enhanced multimodal capabilities including clipboard image pasting and optimized media previews (6cf59b30, 4dba526f, 494df4d9, 287baeba). The session experience is significantly improved through a refined skill persistence system during context compression, unified MCP tool management, and new real-time performance metrics for token usage and throughput (333248d5, 3e4dded7, 92efb57a, 42abaa45). System stability is further bolstered by streamlined configuration validation, more robust skill lifecycle management, and several fixes to tool parameter handling and session naming (77fd2b3f, f6464a32, 5d697741).
+
+
+### ✨ New Features & Enhancements
+
+- **provider**: add featherless support via octolib `6cf59b30`
+- **chat**: add token usage averages to info command `92efb57a`
+- **chat**: add throughput metrics to info command `42abaa45`
+- **session**: enhance skill persistence during compression `333248d5`
+- **core**: enhance config validation and session naming `77fd2b3f`
+- **octolib**: support Groq, BytePlus, and new AI models `e4ed32f3`
+- **proctitle**: add process and terminal title support `3cb24a2f`
+- **chat**: add inline image previews for clipboard paste `494df4d9`
+- **chat**: intercept paste events for media files `0840301b`
+- **chat**: add Ctrl+V support for clipboard media attachments `287baeba`
+- add nvidia nim provider support `4dba526f`
+- **skill**: emit skill lifecycle events via WebSocket `7fd5eaf5`
+- **mcp**: unify server management and add tools retrieval `3e4dded7`
+- **config**: support mcp-*.toml override configs and fix auto-bind tracking `eb1e2433`
+- **agents**: generalize developer and add skill system `687fd836`
+- **chat**: preserve skills during compression `e1f7517e`
+
+### 🔧 Improvements & Optimizations
+
+- **skill**: remove forced compression on skill forget `ddcbb255`
+- **core**: migrate layers to ACP protocol and update docs `fe8c245a`
+- **session**: shorten and reorder session name components `13a1ca9a`
+- **session**: downscale inline image previews `321d00e8`
+- **acp**: replace save and cache with skill command `004c56dc`
+- **config, layers, session**: restructure layers to roles architecture `d529770f`
+- **website**: remove website and deployment logic `9467f35f`
+
+### 🐛 Bug Fixes & Stability
+
+- **config**: require command field for ACP layers `0d99d363`
+- **mcp**: ensure MCP function parameters have type field `5d697741`
+- **mcp**: honor dynamic server enable/disable per session `ae78b3d3`
+- **skill**: prevent duplicates and fix validation `f6464a32`
+- **session**: prevent mid-loop tool compression `ff66fd8b`
+
+### 📚 Documentation & Examples
+
+- **session**: clarify skill lifecycle and compression `557e42e0`
+- **pipeline**: expand provider, compression, and workflow documentation `6a1e2a4d`
+- **map**: sync project map and architecture docs `23996626`
+
+### 🔄 Other Changes
+
+3 maintenance, dependency, and tooling updates not listed individually.
+
 ## [0.25.0] - 2026-04-22
 
 ### 📋 Release Summary
