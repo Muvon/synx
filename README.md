@@ -3,8 +3,8 @@
     <img src="doc/assets/banner.png" width="720" alt="Octomind — AI Agent Runtime" />
   </a>
   <br /><br />
-  <strong>Specialist AI agents that just work.</strong><br />
-  <em>The open-source runtime for community-built experts — any domain, zero setup.</em>
+  <strong>Specialist AI agents with cost guardrails and sessions that don't break at hour 4.</strong><br />
+  <em>Plug-and-play domain experts. Adaptive compaction. Real spending limits.</em>
   <br /><br />
 
   [![License](https://img.shields.io/badge/license-Apache%202.0-7c3aed?style=flat-square)](LICENSE)
@@ -13,7 +13,7 @@
 
   <br />
 
-  [Documentation](https://octomind.run/docs/) · [Community Tap](https://github.com/muvon/octomind-tap) · [Website](https://octomind.run)
+  [Documentation](https://octomind.run/docs/) · [Tap Registry](https://github.com/muvon/octomind-tap) · [Website](https://octomind.run)
 </div>
 
 ---
@@ -21,13 +21,15 @@
 ## Table of Contents
 
 - [The Problem](#the-problem)
-- [The Solution: Tap Agents](#the-solution-tap-agents)
+- [Three Pillars](#three-pillars)
+- [Pillar 1 — Cost as a Control Plane](#pillar-1--cost-as-a-control-plane)
+- [Pillar 2 — Zero-Config Specialist Agents](#pillar-2--zero-config-specialist-agents)
+- [Pillar 3 — Sessions That Don't Break at Hour 4](#pillar-3--sessions-that-dont-break-at-hour-4)
 - [Quick Start](#quick-start)
 - [How It Works](#how-it-works)
-- [Runtime Self-Extension](#runtime-self-extension)
-- [Key Features](#key-features)
+- [Power Users — Roles, Workflows, Layers](#power-users--roles-workflows-layers)
+- [Embedders — ACP, WebSocket, Daemon](#embedders--acp-websocket-daemon)
 - [Installation](#installation)
-- [Usage](#usage)
 - [Configuration](#configuration)
 - [Architecture](#architecture)
 - [Contributing](#contributing)
@@ -37,78 +39,137 @@
 
 ## The Problem
 
-You want an AI that actually knows your domain. Instead you get:
+You want an AI that knows your domain, costs what you expected, and remembers what it decided an hour ago. In 2026 you get:
 
-- **45 minutes of setup** — MCP servers, system prompts, tool configs, wiring everything together
-- **Rate limit walls mid-task** — Claude Code throttles you, Cursor burns your budget, you lose the thread
-- **Context rot** — session fills up, agent forgets decisions from an hour ago, you restart from zero
-- **One-size-fits-all** — the same generic assistant whether you're debugging Rust, interpreting a blood test, or reviewing a contract
+- **45 minutes of setup per domain** — MCP servers, system prompts, tool configs, credentials, all wired by hand, every time.
+- **Surprise bills.** Cursor users posting $7K daily overages. Claude Code rate-limiting mid-task. No per-task budget, no simulator, no kill switch.
+- **Context rot at hour 2-4.** Naive truncation drops the decisions you need. Quality collapses. You restart.
+- **One generic assistant** for every task — Rust debugging, blood-test interpretation, contract review — same prompt, same tools.
 
-Every AI tool in 2026 is a coding assistant that lets you swap models. **That's it.**
+Every coding agent in 2026 swaps models and calls it a feature. Octomind solves the three things they don't.
 
 ---
 
-## The Solution: Tap Agents
+## Three Pillars
 
-Octomind is different. It's not a framework you configure. It's a **runtime** for specialist agents — any domain — where the community has already done the hard work.
+| Pillar | What it gives you | Built on |
+|---|---|---|
+| **Cost as a control plane** | Per-request and per-session spending limits, real-time cost tracking, cache-aware accounting. | `src/config/roles.rs`, spending threshold enforcement |
+| **Zero-config specialist agents** | `octomind run aws-debug` → prompts + MCP servers + tools, all pre-wired. Agents auto-enable new MCP servers mid-session and spawn sub-agents. | Tap registry, `mcp` and `agent` built-in tools, runtime self-extension |
+| **Sessions that don't break at hour 4** | SOTA adaptive compaction: cache-aware, structurally preserving. Smaller context = faster responses + lower cost. | `src/mcp/core/plan/compression.rs` |
 
-**You just run it.**
+---
+
+## Pillar 1 — Cost as a Control Plane
+
+Cost is treated as infrastructure, not an afterthought.
+
+```toml
+# Hard spending limits — enforced, not advisory
+max_request_spending_threshold = 0.50    # USD per request
+max_session_spending_threshold = 5.00    # USD per session
+
+# Per-role model selection — pay Opus only where it's worth it
+[[roles]]
+name = "researcher"
+model = "google:gemini-2.5-flash"   # cheap broad context
+
+[[roles]]
+name = "reviewer"
+model = "anthropic:claude-opus-4"   # precision where it counts
+```
+
+What's already shipped:
+- Real-time cost tracking per request and per session.
+- Cache-aware token accounting (`cache_read_tokens`, `cache_write_tokens` separated from input/output).
+- Hard spending thresholds with enforcement.
+- Per-role and per-layer model selection — different roles can run on different providers.
+
+What's in flight:
+- Cost simulator (`octomind cost simulate <agent> --runs N`).
+- Provider arbitrage — dynamic routing on cost-per-quality-point.
+- Per-provider budgets and alerts.
+
+> Cursor users get $7,000 surprise bills. Octomind agents trip a budget and stop, fall back, or warn — before the bill, not after.
+
+---
+
+## Pillar 2 — Zero-Config Specialist Agents
+
+Most agent tools force you to assemble a system prompt, choose MCP servers, set up role config, and manage credentials — for every domain, on every machine, every time. Octomind ships specialists ready to run.
 
 ```bash
-# Install once
-curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
-export OPENROUTER_API_KEY="your_key"
+octomind run developer            # general dev, language skills auto-activate
+octomind run doctor:blood         # blood-test interpretation specialist
+octomind run doctor:nutrition     # nutrition specialist
+```
 
-octomind run developer            # General dev, language skills auto-activate
-  # (programming-rust, programming-python, etc. activate based on project type)
-
-### What Happens When You Run `octomind run doctor:blood`
+### What happens when you run a specialist
 
 ```
 → Fetches the agent manifest from the tap registry
 → Installs required binaries automatically (skips if already present)
-→ Prompts once for any credentials → saves permanently, never asks again
+→ Prompts once for any credentials, saves permanently
 → Spins up the right MCP servers for this domain
 → Loads specialist model config, system prompt, tool permissions
-→ Ready in ~5 seconds. Not 45 minutes.
+→ Ready in ~5 seconds, not 45 minutes
 ```
 
-This isn't a prompt or a skill. It's **packaged expertise** — ready to run.
+This is **packaged expertise** — not a prompt file, not a skill injection. The full stack, configured by the community, ready to run.
 
-### The Tap Registry
+### Specialists grow at runtime
 
-The tap is a community-driven Git registry. Each agent is a complete, battle-tested configuration built by a domain expert:
+Every agent has two built-in power tools that let it acquire new capabilities and spawn sub-agents mid-session, without restart:
 
-- ✅ The optimal model for that field
-- ✅ The right MCP servers pre-wired (databases, APIs, domain tools)
-- ✅ A specialist system prompt written by someone who knows the domain
-- ✅ Tool permissions scoped correctly
-- ✅ Dependencies that auto-install on first run
-- ✅ Credential management — asks once, stores permanently
+| Tool | What it does |
+|---|---|
+| `mcp` | Enable or disable MCP servers on the fly. Agent picks the server it needs and registers it mid-conversation. |
+| `agent` | Spawn a specialist sub-agent for a sub-task. Sub-agent runs, returns, parent continues. |
 
-**Not a prompt file. Not a skill injection. The full stack, configured by the community, ready to run.**
-octomind run developer:general
-octomind run doctor:nutrition
+```
+User: "Cross-reference our Postgres metrics with the deployment log"
 
-# Add any community or team tap
+Agent:
+  → mcp.enable(postgres-mcp)        # auto-detected need, no user prompt
+  → agent.spawn(log_reader)         # delegates log parsing
+  → results merge mid-session
+  → mcp.disable(postgres-mcp)       # cleans up
+  → presents the analysis
+```
+
+OpenClaw pre-loads 5,700 skills into every agent. Octomind starts focused for the domain and grows only when needed. **Smaller context, lower cost, faster responses, no surprise tools.**
+
+### Add your own taps
+
 ```bash
-# Official tap included by default — just run
-octomind run developer:general
-octomind run doctor:blood
-octomind run doctor:nutrition
+octomind tap yourteam/tap                 # clones github.com/yourteam/octomind-tap
+octomind tap yourteam/internal ~/path     # local tap for private agents
 
-# Add any community or team tap
-octomind tap yourteam/tap              # clones github.com/yourteam/octomind-tap
-octomind tap yourteam/internal ~/path  # local tap for private agents
-
-# Agents from your new tap are immediately available
-octomind run finance:analyst
-octomind run lawyer:general
+octomind run finance:analyst              # available immediately
+octomind run security:owasp
 ```
 
 Each tap is a Git repo. Each agent is one TOML file. Pull requests are contributions.
 
-> **Want to add your expertise?** A `developer:general` agent, a `doctor:medications` agent, a `lawyer:general` agent — one file, and everyone benefits. [How to write a tap agent →](https://github.com/muvon/octomind-tap)
+> Want to publish your expertise? A `doctor:medications`, a `lawyer:us`, a `devops:terraform`. One file, and everyone with that problem gets a specialist instantly. [How to write a tap agent →](https://github.com/muvon/octomind-tap)
+
+---
+
+## Pillar 3 — Sessions That Don't Break at Hour 4
+
+Every coding agent degrades after a few hours. Context fills. Decisions get truncated. The agent forgets why it started.
+
+Octomind's adaptive compaction engine runs automatically:
+
+- **Cache-aware** — calculates if compaction is worth it *before* paying for it. Never breaks the prompt-cache hit by accident.
+- **Pressure-tiered** — compacts more aggressively as context grows.
+- **Structurally preserving** — keeps decisions, file references, errors, dependencies; drops noise.
+- **Plan-aware and free-form-aware** — works whether you use the `plan` tool or have a free-form chat.
+- **Fully automatic** — you never think about it.
+
+The second-order benefit: smaller context means **fewer tokens, faster responses, lower cost** every turn after compaction fires. The three pillars compound.
+
+> Work on a hard problem for 4 hours. The agent still knows what it decided in hour one.
 
 ---
 
@@ -118,91 +179,56 @@ Each tap is a Git repo. Each agent is one TOML file. Pull requests are contribut
 # Install (macOS & Linux)
 curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
 
-# One API key gets you all providers (or use any directly)
+# One API key gets you many providers
 export OPENROUTER_API_KEY="your_key"
 
-# Start with a specialist agent — no setup required
+# Start with a specialist — no setup required
 octomind run developer
-# Language skills (programming-rust, programming-python, etc.) auto-activate based on project type
 ```
 
-That's it. You're in an interactive session with a specialist that can read your code, run commands, and edit files.
+That's it. You're in an interactive session with a specialist that can read your code, run commands, edit files, and grow capabilities as needed.
 
 ---
 
 ## How It Works
 
-Octomind has 5 built-in MCP tools that every agent has access to:
+### Built-in MCP tools (every agent has these)
 
 | Tool | Purpose |
-|------|---------|
-| `plan` | Structured multi-step task tracking for complex work |
-| `mcp` | Enable/disable MCP servers at runtime — agents can acquire new capabilities on demand |
-| `agent` | Spawn specialist sub-agents mid-session — delegate to the right expert |
-| `schedule` | Schedule messages to be injected at future times |
+|---|---|
+| `plan` | Structured multi-step task tracking |
+| `mcp` | Enable/disable MCP servers at runtime |
+| `agent` | Spawn specialist sub-agents mid-session |
+| `schedule` | Inject messages at future times |
 | `skill` | Inject reusable instruction packs from taps |
 
-### Filesystem Tools (via octofs)
+### Filesystem tools (via [octofs](https://github.com/muvon/octofs))
 
-File operations come from [octofs](https://github.com/muvon/octofs) — a companion MCP server for file read/write/edit:
+`view`, `text_editor`, `batch_edit`, `shell`, `semantic_search`, `structural_search`, `workdir` — file operations come from the companion octofs MCP server, included by default in tap formulas that need them.
 
-| Tool | Purpose |
-|------|---------|
-| `view` | Read files, directories, search content |
-| `text_editor` | Create files, replace text, undo edits |
-| `batch_edit` | Atomic multi-file edits with rollback |
-| `shell` | Execute commands with output capture |
-| `semantic_search` | Search codebase by meaning |
-| `structural_search` | Search code by AST patterns |
-| `workdir` | Get/set working directory |
+### Memory tools (via [octomem](https://github.com/muvon/octomem))
 
-**octofs is external but recommended.** Tap formulas include it by default — plug and play.
+`remember`, `memorize`, `knowledge`, `graphrag` — long-term memory and knowledge indexing, included by default in taps that need persistent context.
 
-### Memory & Knowledge Tools (via octomem)
+### Providers
 
-Long-term memory and knowledge indexing:
+| Provider | Notes |
+|---|---|
+| **OpenRouter** | Many frontier models, one API key |
+| **OpenAI** | GPT-4o, o3, Codex |
+| **Anthropic** | Claude Opus, Sonnet, Haiku |
+| **Google** | Gemini 2.5 Pro/Flash |
+| **Amazon Bedrock** | Claude + Titan on AWS |
+| **Cloudflare** | Workers AI |
+| **DeepSeek** | V3, R1 |
 
-| Tool | Purpose |
-|------|---------|
-| `remember` | Semantic search over stored memories |
-| `memorize` | Store information for future sessions |
-| `knowledge` | Index and search documents, URLs, files |
-| `graphrag` | Knowledge graph queries over codebase |
-
-**octomem is external but recommended.** Included in tap formulas that need persistent context.
+Switch providers mid-session with `/model deepseek:v3`. Mix providers across roles — cheap model for research, best model for execution. Cost tracked separately per provider.
 
 ---
 
-## Runtime Self-Extension
+## Power Users — Roles, Workflows, Layers
 
-This is the capability nobody else has.
-
-Octomind agents have two built-in power tools — `mcp` and `agent` — that let them **acquire new capabilities and spawn specialist sub-agents mid-session**, without any restart or config change.
-
-```
-User: "Cross-reference our Postgres metrics with the deployment log and find the anomaly"
-
-Agent:
-  → Uses `mcp` tool: registers + enables a Postgres MCP server on the fly
-  → Uses `agent` tool: spawns a log_reader sub-agent for the deployment log
-  → Both run in parallel, results merged
-  → Agent disables the Postgres MCP when done
-  → Presents the analysis
-```
-
-The tap gives the agent its starting configuration. The `mcp` and `agent` tools give it room to go beyond — acquiring exactly what it needs, when it needs it, and nothing more.
-
-**No other tool lets the AI extend its own capabilities at runtime.** This is the octopus advantage: eight arms, infinite domains, one coordinated mind.
-
----
-
-## Key Features
-
-### 🎯 Zero Config. Infinitely Configurable.
-
-For most people: install, run, done. No config file needed.
-
-For power users and teams: Octomind has the deepest configuration system in the space — **all TOML, no code required**.
+For most users, taps are enough. For teams and power users, the configuration system is deep — **all TOML, no code**.
 
 ```toml
 # Per-role: independent model, temperature, MCP servers, tools, system prompt
@@ -214,103 +240,75 @@ temperature = 0.2
 server_refs = ["filesystem", "github"]
 allowed_tools = ["view", "ast_grep", "create_pr"]
 
-# Multi-step workflows: each step its own model + toolset
+# Workflows — multi-step, each step its own model and toolset
 [[workflows]]
 name = "deep_review"
 [[workflows.steps]]
-name = "analyze"   # gemini-2.5-flash for broad context gathering
-layer = "context_researcher"
+name = "analyze"
+layer = "context_researcher"     # gemini-flash, broad context
 [[workflows.steps]]
-name = "critique"  # claude-opus for precision judgment
-layer = "senior_reviewer"
+name = "critique"
+layer = "senior_reviewer"        # claude-opus, precision
 
-# Spending limits — never get surprised
-max_request_spending_threshold = 0.50
-max_session_spending_threshold = 5.00
-
-# Sandbox: lock all writes to current directory
+# Sandbox — lock all writes to current directory
 sandbox = true
 ```
 
-### 🧠 Infinite Sessions With Adaptive Compression
+- **Roles** — model, temperature, system prompt, MCP servers, tool permissions per role.
+- **Layers** — chained AI sub-agents that run after each response.
+- **Pipelines** — deterministic script-driven pre-processing.
+- **Workflows** — multi-step orchestrated task runners with validation loops.
 
-Context rot is the silent productivity killer. Session fills up → quality drops → agent forgets what it decided an hour ago → you restart and lose everything.
+See [Configuration Reference](doc/reference/03-config-reference.md) for everything.
 
-Octomind's adaptive compression engine runs automatically in the background:
+---
 
-- **Cache-aware** — calculates if compression is worth it *before* paying for it
-- **Pressure-level system** — compresses more aggressively as context grows
-- **Structured preservation** — keeps decisions, file references, architectural choices; discards noise
-- **Fully automatic** — you never think about it
+## Embedders — ACP, WebSocket, Daemon
 
-Work on a hard problem for 4 hours. The agent still knows what it decided in hour one.
+Octomind isn't just a CLI. It runs in every context an agent needs to live in:
 
-### 🔄 13+ Providers. Switch Instantly. Zero Lock-in.
-
-```bash
-# Hit a rate limit? Switch mid-session — no restart, no lost context
-/model deepseek:v3
-
-# Override for one session
-octomind run --model openai:gpt-4o
-
-# Mix providers across workflow layers
-# cheap model for research → best model for execution
-```
-
-| Provider | Notes |
-|----------|-------|
-| **OpenRouter** | Every frontier model, one API key |
-| **OpenAI** | GPT-4o, o3, Codex |
-| **Anthropic** | Claude Opus, Sonnet, Haiku |
-| **Google** | Gemini 2.5 Pro/Flash |
-| **Amazon Bedrock** | Claude + Titan on AWS |
-| **Cloudflare** | Workers AI |
-| **DeepSeek** | V3, R1 — best cost/performance ratio |
-
-Real-time cost tracking per session and per request. Know exactly what you're spending.
-
-### 🌐 Works Everywhere — Plug Into Anything
-
-Octomind isn't just an interactive terminal tool. It runs in every context you need:
-
-# Interactive — daily driver
-octomind run developer
-
-# ACP protocol — drop into any multi-agent system as a sub-agent
-octomind acp developer:general
-| Mode | Use For |
-|------|---------|
+| Mode | Use for |
+|---|---|
 | Interactive CLI | Daily work, any domain |
 | `--format jsonl` pipe | CI/CD pipelines, shell scripts, automation |
 | `--daemon` + `send` | Background agents, continuous monitoring, long-running tasks |
 | WebSocket server | IDE plugins, web dashboards, external integrations |
 | ACP protocol | Multi-agent orchestration, being called by other agents |
 
-One binary. Every workflow. Eight arms, infinite domains.
+```bash
+# ACP — drop into any multi-agent system as a sub-agent
+octomind acp developer:general
+
+# Non-interactive — single message, plain output
+octomind run developer "Explain the auth module" --format plain
+
+# Structured JSON output for pipelines
+octomind run developer "List TODO items" --schema todos.json --format jsonl
+```
+
+One binary. Every workflow.
 
 ---
 
 ## Installation
 
-### One-Line Install
+### One-line install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/muvon/octomind/master/install.sh | bash
 ```
 
-Detects your OS and architecture, downloads the latest release, installs to `~/.local/bin/`.
+Detects OS and architecture, installs to `~/.local/bin/`. macOS and Linux supported. Single Rust binary, no runtime dependencies.
 
-### Package Managers
+### Cargo
 
 ```bash
-# Cargo (Rust)
 cargo install octomind
 ```
 
-Requires Rust 1.82+. See [Building from Source](doc/dev/01-building-from-source.md) for development setup.
+Requires Rust 1.82+. See [Building from Source](doc/dev/01-building-from-source.md).
 
-### Build from Source
+### Build from source
 
 ```bash
 git clone https://github.com/muvon/octomind.git
@@ -318,87 +316,40 @@ cd octomind
 cargo build --release
 ```
 
-### API Key Setup
-
-Set at least one provider API key:
+### API keys
 
 ```bash
-# OpenRouter (recommended — access to many providers)
+# OpenRouter — recommended, access to many providers with one key
 export OPENROUTER_API_KEY="your_key"
 
-# Or use a specific provider
+# Or any specific provider
 export OPENAI_API_KEY="your_key"
 export ANTHROPIC_API_KEY="your_key"
 export DEEPSEEK_API_KEY="your_key"
 ```
 
-Add to your shell profile (`~/.bashrc`, `~/.zshrc`) for persistence.
+Add to `~/.bashrc` or `~/.zshrc` for persistence.
 
-### Verification
+### Verify
 
 ```bash
 octomind --version
-octomind config          # generate default config
-octomind run             # start your first session
+octomind config       # generate default config
+octomind run          # start your first session
 ```
-
-**macOS and Linux supported.** Single Rust binary. Fast startup. No runtime dependencies.
-
----
-
-## Usage
-
-### Interactive Session
-
-```bash
-# Default: interactive with tools
-octomind run
-
-# Named session (resume later)
-octomind run --name my-feature
-
-# Resume a session
-# Tap agent (fetches specialized config)
-octomind run developer:general
-
-### Non-Interactive Mode
-
-```bash
-# Single message, plain output
-octomind run developer "Explain the auth module" --format plain
-
-# Structured JSON output for pipelines
-octomind run developer "List TODO items" --schema todos.json --format jsonl
-```
-
-### Session Commands
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show all commands |
-| `/info` | Token usage and costs |
-| `/model <provider:model>` | Switch AI model mid-session |
-| `/role <name>` | Switch role mid-session |
-| `/save` | Save current session |
-| `/exit` | Exit session |
-
-See [Session Commands](doc/reference/02-session-commands.md) for the full list.
 
 ---
 
 ## Configuration
 
-Configuration lives at `~/.local/share/octomind/config/config.toml`.
+Config lives at `~/.local/share/octomind/config/config.toml`.
 
 ```bash
-# View current config
-octomind config --show
-
-# Validate config
-octomind config --validate
+octomind config --show          # view current config
+octomind config --validate      # validate config
 ```
 
-Key configuration areas:
+Key areas:
 
 - **Roles** — model, temperature, system prompt, MCP servers, tool permissions
 - **Workflows** — multi-step AI processing with validation loops
@@ -406,44 +357,56 @@ Key configuration areas:
 - **MCP Servers** — external tools and capabilities
 - **Spending Limits** — per-request and per-session thresholds
 
-See [Configuration Reference](doc/reference/03-config-reference.md) for all options.
+Full reference: [Configuration Reference](doc/reference/03-config-reference.md).
+
+### Session commands
+
+| Command | Description |
+|---|---|
+| `/help` | Show all commands |
+| `/info` | Token usage and costs |
+| `/model <provider:model>` | Switch model mid-session |
+| `/role <name>` | Switch role mid-session |
+| `/save` | Save current session |
+| `/exit` | Exit session |
+
+Full list: [Session Commands](doc/reference/02-session-commands.md).
 
 ---
 
 ## Architecture
 
 ```
-CLI / WebSocket
-      |
-      v
- ChatSession          <- src/session/chat/session/ (core.rs, main_loop.rs)
-      |
-      +-- Roles       <- src/config/roles.rs (model, system prompt, MCP servers per role)
-      +-- Layers      <- src/session/layers/ (chained AI sub-agents, run after each response)
-      +-- Pipelines   <- src/session/pipelines/ (deterministic script steps, run before workflows)
-      +-- Workflows   <- src/session/workflows/ (multi-step orchestrated task runners)
-      +-- Learning    <- src/learning/ (cross-session lesson extraction and injection)
-      |
-      +-- MCP servers <- src/mcp/
-            +-- core/     plan, mcp, agent, schedule, skill (built-in)
-            +-- (filesystem tools provided by external octofs MCP server)
-            +-- (memory tools provided by external octomem MCP server)
-            +-- agent/    agent_* tools -> route tasks to configured layers
+CLI / WebSocket / ACP / Daemon
+            |
+            v
+       ChatSession                  <- src/session/chat/session/
+            |
+            +-- Roles               <- src/config/roles.rs
+            +-- Layers              <- src/session/layers/
+            +-- Pipelines           <- src/session/pipelines/
+            +-- Workflows           <- src/session/workflows/
+            +-- Learning            <- src/learning/
+            +-- Adaptive compaction <- src/mcp/core/plan/compression.rs
+            |
+            +-- MCP servers         <- src/mcp/
+                  +-- core/  plan, mcp, agent, schedule, skill
+                  +-- (filesystem via external octofs)
+                  +-- (memory via external octomem)
+                  +-- agent/ agent_* tools route tasks to layers
 ```
 
-**Config is the single source of truth.** All defaults live in `config-templates/default.toml`. The resolved config drives everything: which model, which MCP servers, which layers, which role. No hardcoded values anywhere in code.
+**Config is the single source of truth.** All defaults live in `config-templates/default.toml`. The resolved config drives everything: which model, which MCP servers, which layers, which role. No hardcoded values in code.
 
-See [Architecture](doc/dev/02-architecture.md) for detailed internals.
+See [Architecture](doc/dev/02-architecture.md) for internals.
 
 ---
 
 ## Contributing
 
-The most impactful contribution isn't code — **it's agents.**
+The most impactful contribution isn't code — **it's specialist agents.**
 
-Every domain expert who publishes a specialist makes Octomind useful for an entirely new audience. A cardiologist publishing `doctor:medications`. A tax attorney publishing `lawyer:general`. A security researcher publishing `security:owasp`. One TOML file — and everyone with that problem gets a specialist-grade AI instantly.
-
-`doctor:nutrition`, `devops:terraform`, `lawyer:us`, `security:owasp` — the registry grows one file at a time.
+Every domain expert who publishes a specialist makes Octomind useful for an entirely new audience. A cardiologist publishing `doctor:medications`. A tax attorney publishing `lawyer:us`. A security researcher publishing `security:owasp`. One TOML file — and everyone with that problem gets a specialist-grade AI instantly.
 
 - [How to write a tap agent](https://github.com/muvon/octomind-tap)
 - [Open issues](https://github.com/muvon/octomind/issues)
@@ -467,7 +430,7 @@ Every domain expert who publishes a specialist makes Octomind useful for an enti
 - [CLI Reference](doc/reference/01-cli-reference.md)
 - [Config Reference](doc/reference/03-config-reference.md)
 
-Full documentation index: [doc/README.md](doc/README.md)
+Full index: [doc/README.md](doc/README.md).
 
 ---
 
