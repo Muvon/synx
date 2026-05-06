@@ -57,7 +57,7 @@ Octomind ships specialist agents ready to run — and a runtime that grows with 
 |---|---|---|
 | **Zero config, full flexibility** | `octomind run lawyer:sg` works out of the box. Need a different model, MCP server, or pipeline? Same TOML, no framework code. | Tap registry, runtime self-extension |
 | **Sessions stay sharp at hour 4** | SOTA adaptive compaction: cache-aware, structurally preserving. Smaller context = faster responses + lower cost. | `src/mcp/core/plan/compression.rs` |
-| **Cost as a control plane** | Per-step model selection across 13+ providers. Hard spending caps and cache-aware accounting come for free. | `src/config/roles.rs`, spending threshold enforcement |
+| **Cost as a control plane** | Per-step model selection across many providers via octolib. Hard spending caps and cache-aware accounting come for free. | `src/config/roles.rs`, spending threshold enforcement |
 
 ---
 
@@ -149,19 +149,19 @@ Pick the right model for each step. A cheap one for routine research, a frontier
 # Per-role model selection — pay Opus only where it's worth it
 [[roles]]
 name = "researcher"
-model = "google:gemini-2.5-flash"   # cheap broad context
+model = "openrouter:google/gemini-2.5-flash"   # cheap broad context
 
 [[roles]]
 name = "reviewer"
-model = "anthropic:claude-opus-4"   # precision where it counts
+model = "anthropic:claude-opus-4-7"            # precision where it counts
 
 # Hard spending limits — enforced, not advisory
 max_request_spending_threshold = 0.50    # USD per request
 max_session_spending_threshold = 5.00    # USD per session
 ```
 
-- Per-role and per-layer model selection across 13+ providers — different roles can run on different vendors.
-- Mid-session model swap with `/model deepseek:v3`.
+- Per-role and per-layer model selection across many providers via [octolib](https://github.com/muvon/octolib) — different roles can run on different vendors.
+- Mid-session model swap with `/model anthropic:claude-haiku-4-5`.
 - Real-time cost tracking per request and per session.
 - Cache-aware token accounting (`cache_read_tokens`, `cache_write_tokens` separated from input/output).
 - Hard spending thresholds with enforcement — agent stops, falls back, or warns before the bill.
@@ -198,6 +198,7 @@ That's it. You're in an interactive session with a specialist that can read your
 | `agent` | Spawn specialist sub-agents mid-session |
 | `schedule` | Inject messages at future times |
 | `skill` | Inject reusable instruction packs from taps |
+| `tap` | Delegate to any specialist role from a tap registry |
 
 ### Filesystem tools (via [octofs](https://github.com/muvon/octofs))
 
@@ -209,17 +210,9 @@ That's it. You're in an interactive session with a specialist that can read your
 
 ### Providers
 
-| Provider | Notes |
-|---|---|
-| **OpenRouter** | Many frontier models, one API key |
-| **OpenAI** | GPT-4o, o3, Codex |
-| **Anthropic** | Claude Opus, Sonnet, Haiku |
-| **Google** | Gemini 2.5 Pro/Flash |
-| **Amazon Bedrock** | Claude + Titan on AWS |
-| **Cloudflare** | Workers AI |
-| **DeepSeek** | V3, R1 |
+Octomind supports many providers — OpenRouter, OpenAI, Anthropic, Google, DeepSeek, Amazon Bedrock, Cloudflare, and more — via [octolib](https://github.com/muvon/octolib). New providers added there become available in Octomind automatically. See [Providers & Models](doc/usage/04-providers.md) for the current list and supported models.
 
-Switch providers mid-session with `/model deepseek:v3`. Mix providers across roles — cheap model for research, best model for execution. Cost tracked separately per provider.
+Switch providers mid-session with `/model anthropic:claude-sonnet-4-6`. Mix providers across roles — cheap model for research, best model for execution. Cost tracked separately per provider.
 
 ---
 
@@ -231,7 +224,7 @@ For most users, taps are enough. For teams and power users, the configuration sy
 # Per-role: independent model, temperature, MCP servers, tools, system prompt
 [[roles]]
 name = "senior-reviewer"
-model = "anthropic:claude-opus-4"
+model = "anthropic:claude-opus-4-7"
 temperature = 0.2
 [roles.mcp]
 server_refs = ["filesystem", "github"]
@@ -364,7 +357,7 @@ Full reference: [Configuration Reference](doc/reference/03-config-reference.md).
 | `/info` | Token usage and costs |
 | `/model <provider:model>` | Switch model mid-session |
 | `/role <name>` | Switch role mid-session |
-| `/save` | Save current session |
+| `/session` | Manage saved sessions (sessions auto-save) |
 | `/exit` | Exit session |
 
 Full list: [Session Commands](doc/reference/02-session-commands.md).
@@ -387,10 +380,11 @@ CLI / WebSocket / ACP / Daemon
             +-- Adaptive compaction <- src/mcp/core/plan/compression.rs
             |
             +-- MCP servers         <- src/mcp/
-                  +-- core/  plan, mcp, agent, schedule, skill
+                  +-- core/    plan, schedule, tap, capability
+                  +-- runtime/ mcp, agent, skill
                   +-- (filesystem via external octofs)
                   +-- (brain via external octobrain)
-                  +-- agent/ agent_* tools route tasks to layers
+                  +-- agent/   agent_* tools route tasks to layers
 ```
 
 **Config is the single source of truth.** All defaults live in `config-templates/default.toml`. The resolved config drives everything: which model, which MCP servers, which layers, which role. No hardcoded values in code.
