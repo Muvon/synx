@@ -147,7 +147,7 @@ jobs:
           os: windows-11-arm
           archive: zip
         - target: x86_64-apple-darwin
-          os: macos-14
+          os: macos-15-intel
           archive: tar.gz
         - target: aarch64-apple-darwin
           os: macos-15
@@ -183,12 +183,16 @@ jobs:
     # (45–60 min) on every CI run. Cache full source+build tree because
     # ort-sys's full static-link branch needs build/_deps/ subtrees for
     # re2/abseil/protobuf/etc.
-    - name: Cache ONNX Runtime static build (musl)
-      if: endsWith(matrix.target, '-unknown-linux-musl')
+    # Cache the static ONNX Runtime build for targets where pyke ships no
+    # prebuilts (musl, x86_64-apple-darwin). Cache full source+build tree
+    # because ort-sys's full static-link branch needs build/_deps/ subtrees
+    # for re2/abseil/protobuf/etc.
+    - name: Cache ONNX Runtime static build
+      if: endsWith(matrix.target, '-unknown-linux-musl') || matrix.target == 'x86_64-apple-darwin'
       uses: actions/cache@v4
       with:
         path: onnxruntime-src
-        key: onnxruntime-1.24.2-${{ matrix.target }}-alpine3.22-v6
+        key: onnxruntime-1.24.2-${{ matrix.target }}-v6
 
     - name: Build binary
       shell: sh
@@ -305,8 +309,42 @@ jobs:
           # vcruntime140.dll is present on all Windows hosts.
           export RUSTFLAGS="-C target-feature=-crt-static"
           cargo build --release --target ${{ matrix.target }}
+        elif [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
+          # macOS x86_64: pyke 2.0.0-rc.12 ships no x86_64-apple-darwin
+          # prebuilt (xcframework linking unsupported on this target). Build
+          # ONNX Runtime 1.24.2 from source statically and link via
+          # ORT_LIB_LOCATION, same approach as Linux musl.
+          ORT_SRC="$(pwd)/onnxruntime-src"
+          ORT_LIB_LOCATION="$ORT_SRC/build/Release"
+          if [ ! -f "$ORT_LIB_LOCATION/_deps/re2-build/libre2.a" ]; then
+            echo "==> Building ONNX Runtime 1.24.2 from source (static, macOS x86_64)"
+            rm -rf "$ORT_SRC"
+            git clone --single-branch --branch v1.24.2 --recursive \
+              https://github.com/microsoft/onnxruntime.git "$ORT_SRC"
+            (cd "$ORT_SRC" && ./build.sh \
+              --config Release \
+              --build_dir build \
+              --parallel \
+              --skip_tests \
+              --skip_submodule_sync \
+              --compile_no_warning_as_error \
+              --cmake_extra_defines \
+                CMAKE_POSITION_INDEPENDENT_CODE=ON \
+                CMAKE_OSX_ARCHITECTURES=x86_64 \
+                CMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+                onnxruntime_BUILD_UNIT_TESTS=OFF \
+                onnxruntime_BUILD_SHARED_LIB=OFF)
+            # Static archive build never links an executable, so re2's
+            # CMake target stays unbuilt while ort-sys hardcodes a static
+            # link to libre2.a. Force-build it.
+            cmake --build "$ORT_LIB_LOCATION" --target re2 -j
+          else
+            echo "==> Using cached ONNX Runtime static build"
+          fi
+          export ORT_LIB_LOCATION="$ORT_LIB_LOCATION"
+          cargo build --release --target ${{ matrix.target }}
         else
-          # Native build for other platforms (macOS) — Pyke ships prebuilts.
+          # Native build for other macOS targets (aarch64) — Pyke ships prebuilts.
           cargo build --release --target ${{ matrix.target }}
         fi
 
