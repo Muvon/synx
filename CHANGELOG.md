@@ -1,5 +1,97 @@
 # Changelog
 
+## [0.27.0] - 2026-05-09
+
+### 📋 Release Summary
+
+This release introduces advanced reasoning controls with the `/effort` command and enhances the development experience through semantic skill activation, hybrid search capabilities, and improved multimodal support for video content (b393e5b9, fe4d334e, 5d7f68d3, c5df2eaa). System efficiency is significantly improved via intelligent prompt caching, automated session compaction, and a new cost-tracking mechanism for real-time API pricing (0356fa70, 095a58e0, 2fe619b0). Stability is further bolstered by refined retry logic for API failures, atomic message persistence, and a refreshed visual identity across the CLI (3a121767, 4142dff8, 1f5b8ee2).
+
+
+### ✨ New Features & Enhancements
+
+- **session**: add /effort command for reasoning control `b393e5b9`
+- **llm**: add reasoning effort configuration `aecf4807`
+- **session**: add prompt cache keepalive mechanism `0356fa70`
+- **chat**: prioritize video file URLs in clipboard `c5df2eaa`
+- **mcp**: implement margin gate for semantic skill activation `ddfe1fd8`
+- **mcp**: implement progress tracking for environment capabilities `9edba62f`
+- **mcp**: implement deterministic and dynamic capability loading `5030df75`
+- **core**: split runtime server and add tap tool `77065240`
+- **agent**: prevent stdin deadlocks in subagents `6174f1fa`
+- **mcp**: implement tap agent discovery and background execution `b2428aea`
+- **session**: enforce concise output constraints `549f1a66`
+- **chat**: wrap multiline pastes in log tags `ec99cafc`
+- **cost_tracker**: use real per-token pricing `2fe619b0`
+- **mcp**: implement refcounted shared server management `ecf7119c`
+- **core**: implement dynamic capability discovery and activation `cb8b678f`
+- **chat**: add retry mechanism for failed API requests `3a121767`
+- **schedule**: add support for repeating tasks `77526e75`
+- **branding**: implement visual identity and CLI startup banner `1f5b8ee2`
+- **acp**: add CLI overrides for session management `bcc48c70`
+- **mcp**: support namespaced tool filters in capabilities `8c6e924f`
+- **mcp**: clarify tool availability in activation response `e29e21f3`
+- **mcp**: support activation of deps-only capabilities `0b2e83f6`
+- **skill**: implement semantic activation triggers `fe4d334e`
+- **learning**: implement hybrid search with RRF `5d7f68d3`
+- **mcp**: implement LRU eviction for active capabilities `8cb730b7`
+- **capability**: deterministic auto-activation via trigger embeddings `508d9c34`
+- **embeddings**: update model paths and enhance session tracking `322eb61e`
+- **mcp**: add capability discovery and model warmup `11cea454`
+- **plan**: wire compaction anchor into task-level compression `6e0aae30`
+- **session**: add anchor data model for iterative compaction summaries `095a58e0`
+- **session**: deduplicate identical tool results within a session `20f479cb`
+- **capability**: use embedding cosine for discover with keyword fallback `87ec231e`
+- **embeddings**: add internal embedding module backed by octolib fastembed `3471f00a`
+- **mcp**: expose capability as a runtime tool `faace7c1`
+
+### 🔧 Improvements & Optimizations
+
+- **mcp**: simplify and standardize tool descriptions `a9b9fe02`
+- **workflow**: link libgcc for musl static builds `a1959845`
+- **workflow**: build re2 target for static ORT `3a17c752`
+- **workflow**: fix static linking for ONNX Runtime `16769806`
+- **workflow**: verify full onnx build via re2 check `115d450d`
+- **assets**: redesign logo and icon assets `22adece1`
+- **github**: fix windows linking and musl search paths `b2caf7b6`
+- **workflow**: correct ORT_LIB_LOCATION for static linking `458ef8c8`
+- **branding**: reformat grid and cell logic `6dd124e3`
+- **github**: optimize onnxruntime static linking for linux and windows `32dd480a`
+- **musl**: bust stale ORT cache key to force clean rebuild `dd4e2032`
+- **github**: switch to powershell for windows runner `c009ec0a`
+- **workflow**: add Windows static ONNX Runtime build `21914f46`
+- **github**: persist static library via volume mount `185487c8`
+- **github**: relocate onnxruntime build artifacts `7e5f30ed`
+- **workflow**: preserve library directory during build `b53bef94`
+- **learning**: move lesson extraction to background tasks `31207910`
+- **github**: add ONNX Runtime static lib download `4429f6f1`
+- **github**: add static ONNX Runtime build for musl `f88b419c`
+- **agent**: reformat code for consistency `4d51a27f`
+
+### 🐛 Bug Fixes & Stability
+
+- **chat**: wrap validation errors in xml tags `62adb157`
+- **chat**: prevent history truncation on tool follow-up errors `43603a61`
+- **session**: exclude tool errors from deduplication `c48e08ad`
+- **session**: improve retry logic for follow-up API failures `1c45366b`
+- **chat**: ensure atomic message persistence across session types `4142dff8`
+- **mcp**: prevent false-positive skill activation `fb7d6e97`
+- **branding**: snap icon rects to design grid `6b08b81a`
+- **chat**: prevent context loss from empty summaries `e41805fb`
+- **build**: create workspace dir for musl targets `27f65eda`
+- **chat**: ensure spinner cleanup and handle cancellation `d494f6e2`
+
+### 📚 Documentation & Examples
+
+- **readme**: synchronize model names and commands `5bc0ee00`
+- **readme**: restructure pillars and update branding `250590e5`
+- **mcp**: explain split between core and runtime `78aec1b2`
+- **instructions**: update project structure and code patterns `bb393a80`
+- **readme**: rewrite content to focus on three pillars `848587d7`
+
+### 🔄 Other Changes
+
+8 maintenance, dependency, and tooling updates not listed individually.
+
 ## [0.26.0] - 2026-04-28
 
 ### 📋 Release Summary
