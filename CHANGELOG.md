@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.28.0] - 2026-05-10
+
+### 📋 Release Summary
+
+This release significantly expands the Model Context Protocol (MCP) ecosystem with support for dynamic tool registration, project-local shebang-based tools, and improved subprocess execution (1f17e0d3, 2efac8ca, 3bc76283, 0c30134d). Users can now monitor token usage and costs directly via metadata, while chat interactions benefit from refined markdown detection and streamlined session context management (bb0aeed0, 312e1d06, 73fde53f). Additional updates include optimized Docker builds and improved tool parsing to ensure a more stable and responsive development experience (670d0291, 869b482c).
+
+
+### ✨ New Features & Enhancements
+
+- **mcp**: support dynamic tool registration via runtime overlay `1f17e0d3`
+- **acp**: report token usage and cost via meta `bb0aeed0`
+- **mcp**: implement project-local shebang-based tools `2efac8ca`
+- **mcp**: implement runtime tool overlays for dynamic expansion `3bc76283`
+- **mcp**: stream subprocess updates and downgrade windows-sys `e8609967`
+- **mcp**: delegate tap-run execution to external ACP subprocess `0c30134d`
+- **docker**: include assets directory in build stage `670d0291`
+
+### 🔧 Improvements & Optimizations
+
+- **session**: remove manual context management commands `73fde53f`
+
+### 🐛 Bug Fixes & Stability
+
+- **mcp**: decouple tool parsing from server filtering `869b482c`
+- **config**: serialize runtime overlay tests `511e3832`
+- **chat**: improve markdown detection heuristics `312e1d06`
+
+### 🔄 Other Changes
+
+1 maintenance, dependency, and tooling update not listed individually.
+
 ## [0.27.0] - 2026-05-09
 
 ### 📋 Release Summary
