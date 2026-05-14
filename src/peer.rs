@@ -442,7 +442,7 @@ where
                 match msg {
                     Some(Ok(Message::Bye)) => break,
                     Some(Ok(m)) => {
-                        handle_incoming(&root, m, &suppress, &pending, compress, &writer, apply_remote, Some(&ignores)).await?;
+                        handle_incoming(&root, m, &suppress, &pending, compress, &writer, apply_remote, Some(&ignores), is_client).await?;
                     }
                     Some(Err(e)) => {
                         tracing::debug!("peer closed: {e}");
@@ -455,7 +455,7 @@ where
             ev = event_rx.recv() => {
                 let Some(events) = ev else { break };
                 if send_local {
-                    forward_local_events(&root, events, &writer, compress, &suppress).await?;
+                    forward_local_events(&root, events, &writer, compress, &suppress, is_client).await?;
                 }
             }
         }
@@ -482,10 +482,15 @@ pub async fn handle_incoming<W>(
     writer: &Arc<Mutex<W>>,
     apply_remote: bool,
     ignores: Option<&IgnoreStack>,
+    is_client: bool,
 ) -> Result<()>
 where
     W: AsyncWriteExt + Unpin,
 {
+    // Only the client prints user-facing event lines. The agent's stderr is
+    // forwarded over SSH to the same terminal, so any logs there would just
+    // duplicate the client's transcript.
+    let log_event = is_client;
     match msg {
         Message::FileData { entry, content } => {
             if !apply_remote { return Ok(()); }
@@ -503,12 +508,14 @@ where
             let size = content.len();
             apply_file_data(root, &entry, &content)?;
             suppress.mark_mtime(entry.path.clone(), entry.mtime).await;
-            eprintln!(
-                "  {} {}  {}",
-                "←".bright_cyan(),
-                entry.path.display(),
-                format_size(size, BINARY).dimmed()
-            );
+            if log_event {
+                eprintln!(
+                    "  {} {}  {}",
+                    "←".bright_cyan(),
+                    entry.path.display(),
+                    format_size(size, BINARY).dimmed()
+                );
+            }
         }
         Message::FileStart { entry, .. } => {
             if !apply_remote { return Ok(()); }
@@ -536,12 +543,14 @@ where
             if ignored(ignores, &path, false) { return Ok(()); }
             if let Some(entry) = pending.end(root, &path).await? {
                 suppress.mark_mtime(entry.path.clone(), entry.mtime).await;
-                eprintln!(
-                    "  {} {}  {}",
-                    "←".bright_cyan(),
-                    entry.path.display(),
-                    format_size(entry.size, BINARY).dimmed()
-                );
+                if log_event {
+                    eprintln!(
+                        "  {} {}  {}",
+                        "←".bright_cyan(),
+                        entry.path.display(),
+                        format_size(entry.size, BINARY).dimmed()
+                    );
+                }
             }
         }
         Message::MkDir { entry } => {
@@ -581,7 +590,7 @@ where
             let existed_before = fs::symlink_metadata(root.join(&path)).is_ok();
             apply_delete(root, &path)?;
             suppress.mark_deleted(path.clone()).await;
-            if existed_before {
+            if existed_before && log_event {
                 eprintln!(
                     "  {} {}",
                     "←".bright_cyan(),
@@ -668,10 +677,14 @@ async fn forward_local_events<W>(
     writer: &Arc<Mutex<W>>,
     compress: bool,
     suppress: &Suppression,
+    is_client: bool,
 ) -> Result<()>
 where
     W: AsyncWriteExt + Unpin,
 {
+    // Only the client prints. On the agent, the same eprintln would be
+    // forwarded over SSH stderr and duplicate every transfer line.
+    let log_event = is_client;
     let events = coalesce(events);
     for ev in events {
         if suppress.is_echo(root, &ev).await {
@@ -696,22 +709,26 @@ where
                     }
                     EntryKind::File => {
                         let size = entry.size;
-                        eprintln!(
-                            "  {} {}  {}",
-                            "→".bright_green(),
-                            entry.path.display(),
-                            format_size(size, BINARY).dimmed()
-                        );
+                        if log_event {
+                            eprintln!(
+                                "  {} {}  {}",
+                                "→".bright_green(),
+                                entry.path.display(),
+                                format_size(size, BINARY).dimmed()
+                            );
+                        }
                         send_file(writer, root, &entry, compress).await?;
                     }
                 }
             }
             FsEvent::Removed(p) => {
-                eprintln!(
-                    "  {} {}",
-                    "→".bright_green(),
-                    format!("delete {}", p.display()).dimmed()
-                );
+                if log_event {
+                    eprintln!(
+                        "  {} {}",
+                        "→".bright_green(),
+                        format!("delete {}", p.display()).dimmed()
+                    );
+                }
                 let mut w = writer.lock().await;
                 write_message(&mut *w, &Message::Delete { path: p }, compress).await?;
             }
@@ -743,12 +760,14 @@ where
                         }
                     }
                 }
-                eprintln!(
-                    "  {} {} → {}",
-                    "→".bright_green(),
-                    from.display(),
-                    to.display()
-                );
+                if log_event {
+                    eprintln!(
+                        "  {} {} → {}",
+                        "→".bright_green(),
+                        from.display(),
+                        to.display()
+                    );
+                }
             }
         }
     }
