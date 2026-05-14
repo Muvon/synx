@@ -41,6 +41,13 @@ fn lstat_mtime_ns(p: &Path) -> i64 {
 
 /// True if the local filesystem already has exactly what `entry` describes.
 /// Lets us short-circuit echoes coming back from the peer.
+///
+/// Comparison is layered:
+///   1. Size mismatch → not equal (cheap reject).
+///   2. mtime match → assume equal (cheap stat-only fast path; matches
+///      git's heuristic).
+///   3. mtime drift → hash the file and compare to `entry.hash`. Robust
+///      against filesystem-level rounding of `set_file_mtime` writes.
 fn is_already_equal(root: &Path, entry: &Entry) -> bool {
     let full = root.join(&entry.path);
     let Ok(meta) = fs::symlink_metadata(&full) else {
@@ -59,12 +66,24 @@ fn is_already_equal(root: &Path, entry: &Entry) -> bool {
                 .mtime()
                 .saturating_mul(1_000_000_000)
                 .saturating_add(meta.mtime_nsec() as i64);
-            mt == entry.mtime
+            if mt == entry.mtime {
+                return true;
+            }
+            // mtime drifted but size matches — fall back to a hash compare.
+            // Cheap on small files; correct on anything where we set mtime
+            // but the FS rounded it. Skip the zero hash (means peer didn't
+            // compute one, so we can't be sure either way → treat as differ).
+            if entry.hash == [0u8; 32] {
+                return false;
+            }
+            match crate::walker::hash_file(&full) {
+                Ok(h) => h == entry.hash,
+                Err(_) => false,
+            }
         }
         EntryKind::Dir => ft.is_dir() && !ft.is_symlink(),
         EntryKind::Symlink => {
-            ft.is_symlink()
-                && fs::read_link(&full).ok().as_ref() == entry.link_target.as_ref()
+            ft.is_symlink() && fs::read_link(&full).ok().as_ref() == entry.link_target.as_ref()
         }
     }
 }
@@ -493,7 +512,9 @@ where
     let log_event = is_client;
     match msg {
         Message::FileData { entry, content } => {
-            if !apply_remote { return Ok(()); }
+            if !apply_remote {
+                return Ok(());
+            }
             if ignored(ignores, &entry.path, false) {
                 tracing::debug!("ignored (recv FileData): {}", entry.path.display());
                 return Ok(());
@@ -518,7 +539,9 @@ where
             }
         }
         Message::FileStart { entry, .. } => {
-            if !apply_remote { return Ok(()); }
+            if !apply_remote {
+                return Ok(());
+            }
             if ignored(ignores, &entry.path, false) {
                 tracing::debug!("ignored (recv FileStart): {}", entry.path.display());
                 return Ok(());
@@ -534,13 +557,21 @@ where
             pending.start(root, entry).await?;
         }
         Message::FileChunk { path, data } => {
-            if !apply_remote { return Ok(()); }
-            if ignored(ignores, &path, false) { return Ok(()); }
+            if !apply_remote {
+                return Ok(());
+            }
+            if ignored(ignores, &path, false) {
+                return Ok(());
+            }
             pending.chunk(&path, &data).await?;
         }
         Message::FileEnd { path } => {
-            if !apply_remote { return Ok(()); }
-            if ignored(ignores, &path, false) { return Ok(()); }
+            if !apply_remote {
+                return Ok(());
+            }
+            if ignored(ignores, &path, false) {
+                return Ok(());
+            }
             if let Some(entry) = pending.end(root, &path).await? {
                 suppress.mark_mtime(entry.path.clone(), entry.mtime).await;
                 if log_event {
@@ -554,7 +585,9 @@ where
             }
         }
         Message::MkDir { entry } => {
-            if !apply_remote { return Ok(()); }
+            if !apply_remote {
+                return Ok(());
+            }
             if ignored(ignores, &entry.path, true) {
                 tracing::debug!("ignored (recv MkDir): {}", entry.path.display());
                 return Ok(());
@@ -571,8 +604,12 @@ where
             suppress.mark_mtime(entry.path, mt).await;
         }
         Message::MkSymlink { entry } => {
-            if !apply_remote { return Ok(()); }
-            if ignored(ignores, &entry.path, false) { return Ok(()); }
+            if !apply_remote {
+                return Ok(());
+            }
+            if ignored(ignores, &entry.path, false) {
+                return Ok(());
+            }
             if is_already_equal(root, &entry) {
                 let mt = lstat_mtime_ns(&root.join(&entry.path));
                 suppress.mark_mtime(entry.path.clone(), mt).await;
@@ -583,7 +620,9 @@ where
             suppress.mark_mtime(entry.path, mt).await;
         }
         Message::Delete { path } => {
-            if !apply_remote { return Ok(()); }
+            if !apply_remote {
+                return Ok(());
+            }
             if ignored(ignores, &path, false) && ignored(ignores, &path, true) {
                 return Ok(());
             }
@@ -599,7 +638,9 @@ where
             }
         }
         Message::Rename { from, to } => {
-            if !apply_remote { return Ok(()); }
+            if !apply_remote {
+                return Ok(());
+            }
             if ignored(ignores, &from, false) || ignored(ignores, &to, false) {
                 tracing::debug!(
                     "ignored (recv Rename): {} → {}",

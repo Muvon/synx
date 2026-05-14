@@ -45,9 +45,7 @@ pub fn spawn(root: PathBuf) -> Result<WatcherHandle> {
                         EventKind::Modify(ModifyKind::Name(RenameMode::Both))
                             if paths.len() >= 2 =>
                         {
-                            if let (Some(from), Some(to)) =
-                                (to_rel(&paths[0]), to_rel(&paths[1]))
-                            {
+                            if let (Some(from), Some(to)) = (to_rel(&paths[0]), to_rel(&paths[1])) {
                                 if from.as_os_str().is_empty() || to.as_os_str().is_empty() {
                                     continue;
                                 }
@@ -103,9 +101,7 @@ pub fn spawn(root: PathBuf) -> Result<WatcherHandle> {
         },
     )?;
 
-    debouncer
-        .watcher()
-        .watch(&root, RecursiveMode::Recursive)?;
+    debouncer.watcher().watch(&root, RecursiveMode::Recursive)?;
 
     Ok(WatcherHandle {
         events: rx,

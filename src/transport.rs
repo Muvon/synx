@@ -66,7 +66,9 @@ fn shell_quote_path(s: &str) -> String {
         if let Some(idx) = stripped.find('/') {
             let (user, rest) = stripped.split_at(idx);
             // ~user portion: only allow safe chars unquoted
-            if user.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            if user
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
                 && !user.is_empty()
             {
                 return format!("~{}/{}", user, shell_quote(&rest[1..]));

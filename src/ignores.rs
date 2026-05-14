@@ -69,11 +69,19 @@ impl IgnoreStack {
 
     /// Test an absolute path. Honors only user-provided rules; dotfiles
     /// (including `.git/`) are NOT special-cased.
+    ///
+    /// Uses `matched_path_or_any_parents` so that a pattern like `/target`
+    /// correctly ignores not just `target` itself but also every path
+    /// underneath it (`target/debug/build/foo`, etc.). Plain `matched()`
+    /// only checks the exact path string, which leaks descendants.
     pub fn is_ignored_abs(&self, abs: &Path, is_dir: bool) -> bool {
         let mut ignored = false;
         for (dir, gi) in &self.matchers {
             if let Ok(rel) = abs.strip_prefix(dir) {
-                match gi.matched(rel, is_dir) {
+                if rel.as_os_str().is_empty() {
+                    continue;
+                }
+                match gi.matched_path_or_any_parents(rel, is_dir) {
                     Match::Ignore(_) => ignored = true,
                     Match::Whitelist(_) => ignored = false,
                     Match::None => {}
