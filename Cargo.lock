@@ -2661,9 +2661,9 @@ dependencies = [
 
 [[package]]
 name = "octolib"
-version = "0.21.4"
+version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5960f24a5c3a48e13c2406ca9aa0b4123b49a13d5c63ef507c711cadbae946e"
+checksum = "ec833fb6df7129c81cdeca503ae94989b8f7cab9b705a3999c0e6cf5c8a02a19"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3396,9 +3396,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "1.6.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e12ca9067b5ebfbd5b3fcdc4acfceb81aa7d5ab2a879dff7cb75d22434276aad"
+checksum = "0810a9f717d9828f475fe1f629f4c305c8464b7f496c3a854b58d29e65f4058e"
 dependencies = [
  "async-trait",
  "chrono",
