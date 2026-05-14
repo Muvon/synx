@@ -37,7 +37,6 @@ impl IgnoreStack {
             .git_global(true)
             .git_exclude(true)
             .require_git(false)
-            .filter_entry(|e| e.file_name() != ".git")
             .build();
         for dent in walker.flatten() {
             let name = dent.file_name();
@@ -68,11 +67,9 @@ impl IgnoreStack {
         }
     }
 
-    /// Test an absolute path.
+    /// Test an absolute path. Honors only user-provided rules; dotfiles
+    /// (including `.git/`) are NOT special-cased.
     pub fn is_ignored_abs(&self, abs: &Path, is_dir: bool) -> bool {
-        if abs.components().any(|c| c.as_os_str() == ".git") {
-            return true;
-        }
         let mut ignored = false;
         for (dir, gi) in &self.matchers {
             if let Ok(rel) = abs.strip_prefix(dir) {

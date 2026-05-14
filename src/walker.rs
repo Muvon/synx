@@ -30,7 +30,9 @@ pub fn build_walker(root: &Path) -> ignore::WalkBuilder {
         .require_git(false)
         .follow_links(false);
     b.add_custom_ignore_filename(".synxignore");
-    b.filter_entry(|e| e.file_name() != ".git");
+    // We do NOT hardcode-skip `.git/`. Dotfiles & `.git` are synced unless the
+    // user explicitly puts them in `.gitignore` or `.synxignore`. The ignore
+    // crate respects user rules; we add none of our own.
     b
 }
 

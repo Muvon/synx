@@ -8,7 +8,7 @@ use owo_colors::OwoColorize;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -22,7 +22,52 @@ use crate::protocol::{
 use crate::walker::build_entry;
 use crate::watcher::{self, FsEvent};
 
-const SUPPRESS_TTL: Duration = Duration::from_secs(3);
+/// Suppression entries are pruned after this long. We use mtime comparison
+/// to decide if an event is an echo, so the TTL only bounds memory growth —
+/// it does NOT block legitimate user edits.
+const SUPPRESS_TTL: Duration = Duration::from_secs(60);
+
+/// Read the mtime of a path as nanoseconds since the Unix epoch, or 0 if the
+/// path doesn't exist or can't be stat'd. Does not follow symlinks.
+fn lstat_mtime_ns(p: &Path) -> i64 {
+    match fs::symlink_metadata(p) {
+        Ok(m) => m
+            .mtime()
+            .saturating_mul(1_000_000_000)
+            .saturating_add(m.mtime_nsec() as i64),
+        Err(_) => 0,
+    }
+}
+
+/// True if the local filesystem already has exactly what `entry` describes.
+/// Lets us short-circuit echoes coming back from the peer.
+fn is_already_equal(root: &Path, entry: &Entry) -> bool {
+    let full = root.join(&entry.path);
+    let Ok(meta) = fs::symlink_metadata(&full) else {
+        return false;
+    };
+    let ft = meta.file_type();
+    match entry.kind {
+        EntryKind::File => {
+            if ft.is_symlink() || !ft.is_file() {
+                return false;
+            }
+            if meta.len() != entry.size {
+                return false;
+            }
+            let mt = meta
+                .mtime()
+                .saturating_mul(1_000_000_000)
+                .saturating_add(meta.mtime_nsec() as i64);
+            mt == entry.mtime
+        }
+        EntryKind::Dir => ft.is_dir() && !ft.is_symlink(),
+        EntryKind::Symlink => {
+            ft.is_symlink()
+                && fs::read_link(&full).ok().as_ref() == entry.link_target.as_ref()
+        }
+    }
+}
 
 // ─────────────────────────────────────────────────────────────
 // Apply: deterministic, atomic filesystem mutations.
@@ -260,24 +305,66 @@ where
 
 // ─────────────────────────────────────────────────────────────
 // Loop suppression — when we apply an incoming change, our own
-// watcher will see it; we silence that echo so the change
-// doesn't bounce back to the peer.
+// watcher will see it; we silence that one specific echo using
+// the *current state* of the path (mtime / existence), not just
+// path+TTL. This avoids blocking real user edits that happen to
+// occur shortly after an apply.
 // ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+enum ApplyState {
+    /// We just wrote a file/dir/symlink and expect its mtime to be `ns`.
+    Mtime(i64),
+    /// We just deleted the path and expect it to not exist.
+    Deleted,
+}
 
 #[derive(Default, Clone)]
 pub struct Suppression {
-    inner: Arc<Mutex<HashMap<PathBuf, Instant>>>,
+    inner: Arc<Mutex<HashMap<PathBuf, (ApplyState, Instant)>>>,
 }
 
 impl Suppression {
-    pub async fn mark(&self, path: PathBuf) {
-        self.inner.lock().await.insert(path, Instant::now());
+    pub async fn mark_mtime(&self, path: PathBuf, mtime_ns: i64) {
+        self.inner
+            .lock()
+            .await
+            .insert(path, (ApplyState::Mtime(mtime_ns), Instant::now()));
     }
-    pub async fn check(&self, path: &Path) -> bool {
+    pub async fn mark_deleted(&self, path: PathBuf) {
+        self.inner
+            .lock()
+            .await
+            .insert(path, (ApplyState::Deleted, Instant::now()));
+    }
+
+    /// True if this event is the echo of our own previous apply — i.e. the
+    /// path's current state still matches what we recorded. If the user has
+    /// since modified or recreated the path, this returns false and the
+    /// event is processed.
+    pub async fn is_echo(&self, root: &Path, ev: &FsEvent) -> bool {
         let mut g = self.inner.lock().await;
         let now = Instant::now();
-        g.retain(|_, t| now.duration_since(*t) < SUPPRESS_TTL);
-        g.contains_key(path)
+        g.retain(|_, (_, t)| now.duration_since(*t) < SUPPRESS_TTL);
+
+        let key: &Path = match ev {
+            FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => p,
+            FsEvent::Renamed { to, .. } => to,
+        };
+        let Some((state, _)) = g.get(key) else {
+            return false;
+        };
+        match (state, ev) {
+            (ApplyState::Mtime(expected), FsEvent::Created(_))
+            | (ApplyState::Mtime(expected), FsEvent::Modified(_))
+            | (ApplyState::Mtime(expected), FsEvent::Renamed { .. }) => {
+                let cur = lstat_mtime_ns(&root.join(key));
+                cur != 0 && cur == *expected
+            }
+            (ApplyState::Deleted, FsEvent::Removed(_)) => !root.join(key).exists(),
+            // State + event don't match → the user must have changed the path.
+            _ => false,
+        }
     }
 }
 
@@ -406,9 +493,16 @@ where
                 tracing::debug!("ignored (recv FileData): {}", entry.path.display());
                 return Ok(());
             }
+            // Receiver dedup: if our disk already has this exact content,
+            // skip the write entirely (and the noisy log line).
+            if is_already_equal(root, &entry) {
+                suppress.mark_mtime(entry.path.clone(), entry.mtime).await;
+                tracing::trace!("dedup (recv FileData): {}", entry.path.display());
+                return Ok(());
+            }
             let size = content.len();
             apply_file_data(root, &entry, &content)?;
-            suppress.mark(entry.path.clone()).await;
+            suppress.mark_mtime(entry.path.clone(), entry.mtime).await;
             eprintln!(
                 "  {} {}  {}",
                 "←".bright_cyan(),
@@ -422,6 +516,14 @@ where
                 tracing::debug!("ignored (recv FileStart): {}", entry.path.display());
                 return Ok(());
             }
+            // Same receiver dedup at the chunked path. If we already have it,
+            // don't open a tmp file — subsequent chunks for this path become
+            // no-ops (Pending::chunk silently drops chunks for unknown paths).
+            if is_already_equal(root, &entry) {
+                suppress.mark_mtime(entry.path.clone(), entry.mtime).await;
+                tracing::trace!("dedup (recv FileStart): {}", entry.path.display());
+                return Ok(());
+            }
             pending.start(root, entry).await?;
         }
         Message::FileChunk { path, data } => {
@@ -433,7 +535,7 @@ where
             if !apply_remote { return Ok(()); }
             if ignored(ignores, &path, false) { return Ok(()); }
             if let Some(entry) = pending.end(root, &path).await? {
-                suppress.mark(entry.path.clone()).await;
+                suppress.mark_mtime(entry.path.clone(), entry.mtime).await;
                 eprintln!(
                     "  {} {}  {}",
                     "←".bright_cyan(),
@@ -448,32 +550,47 @@ where
                 tracing::debug!("ignored (recv MkDir): {}", entry.path.display());
                 return Ok(());
             }
+            if is_already_equal(root, &entry) {
+                let mt = lstat_mtime_ns(&root.join(&entry.path));
+                suppress.mark_mtime(entry.path.clone(), mt).await;
+                return Ok(());
+            }
             apply_mkdir(root, &entry)?;
-            suppress.mark(entry.path).await;
+            // Use the actual on-disk mtime (dir mtime changes whenever
+            // children are added) so future echoes match precisely.
+            let mt = lstat_mtime_ns(&root.join(&entry.path));
+            suppress.mark_mtime(entry.path, mt).await;
         }
         Message::MkSymlink { entry } => {
             if !apply_remote { return Ok(()); }
             if ignored(ignores, &entry.path, false) { return Ok(()); }
+            if is_already_equal(root, &entry) {
+                let mt = lstat_mtime_ns(&root.join(&entry.path));
+                suppress.mark_mtime(entry.path.clone(), mt).await;
+                return Ok(());
+            }
             apply_symlink(root, &entry)?;
-            suppress.mark(entry.path).await;
+            let mt = lstat_mtime_ns(&root.join(&entry.path));
+            suppress.mark_mtime(entry.path, mt).await;
         }
         Message::Delete { path } => {
             if !apply_remote { return Ok(()); }
             if ignored(ignores, &path, false) && ignored(ignores, &path, true) {
-                // Both file-form and dir-form are ignored — nothing to do.
                 return Ok(());
             }
+            let existed_before = fs::symlink_metadata(root.join(&path)).is_ok();
             apply_delete(root, &path)?;
-            suppress.mark(path.clone()).await;
-            eprintln!(
-                "  {} {}",
-                "←".bright_cyan(),
-                format!("delete {}", path.display()).dimmed()
-            );
+            suppress.mark_deleted(path.clone()).await;
+            if existed_before {
+                eprintln!(
+                    "  {} {}",
+                    "←".bright_cyan(),
+                    format!("delete {}", path.display()).dimmed()
+                );
+            }
         }
         Message::Rename { from, to } => {
             if !apply_remote { return Ok(()); }
-            // If either endpoint is ignored, the rename is a no-op for sync.
             if ignored(ignores, &from, false) || ignored(ignores, &to, false) {
                 tracing::debug!(
                     "ignored (recv Rename): {} → {}",
@@ -483,8 +600,9 @@ where
                 return Ok(());
             }
             apply_rename(root, &from, &to)?;
-            suppress.mark(from).await;
-            suppress.mark(to).await;
+            suppress.mark_deleted(from).await;
+            let mt = lstat_mtime_ns(&root.join(&to));
+            suppress.mark_mtime(to, mt).await;
         }
         Message::FileGet { path } => {
             if ignored(ignores, &path, false) && ignored(ignores, &path, true) {
@@ -522,6 +640,28 @@ where
     Ok(())
 }
 
+/// Collapse a batch of watcher events down to at most one event per path
+/// (keeping the most recent — e.g. Create+Modify on the same file becomes
+/// one Modify). Renames are keyed on their destination path.
+fn coalesce(events: Vec<FsEvent>) -> Vec<FsEvent> {
+    let key_of = |ev: &FsEvent| -> PathBuf {
+        match ev {
+            FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => p.clone(),
+            FsEvent::Renamed { to, .. } => to.clone(),
+        }
+    };
+    let mut last_idx: HashMap<PathBuf, usize> = HashMap::new();
+    for (i, ev) in events.iter().enumerate() {
+        last_idx.insert(key_of(ev), i);
+    }
+    events
+        .into_iter()
+        .enumerate()
+        .filter(|(i, ev)| last_idx.get(&key_of(ev)) == Some(i))
+        .map(|(_, ev)| ev)
+        .collect()
+}
+
 async fn forward_local_events<W>(
     root: &Path,
     events: Vec<FsEvent>,
@@ -532,13 +672,10 @@ async fn forward_local_events<W>(
 where
     W: AsyncWriteExt + Unpin,
 {
+    let events = coalesce(events);
     for ev in events {
-        let primary = match &ev {
-            FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => p.clone(),
-            FsEvent::Renamed { to, .. } => to.clone(),
-        };
-        if suppress.check(&primary).await {
-            tracing::trace!("suppressed: {}", primary.display());
+        if suppress.is_echo(root, &ev).await {
+            tracing::trace!("echo suppressed: {:?}", ev);
             continue;
         }
 

@@ -111,7 +111,13 @@ truth for what *isn't* synced. This applies to:
 3. **Live events** — both incoming applies and outgoing notifications skip
    ignored paths.
 
-`.git/` is always skipped, regardless of any `.gitignore` rule.
+**Dotfiles are NOT special.** `.env`, `.git/`, `.vscode/`, etc. are synced
+just like any other path unless your `.gitignore` (or `.synxignore`) excludes
+them. If you don't want to sync `.git/`, add a line to `.synxignore`:
+
+```sh
+echo '/.git' >> .synxignore
+```
 
 If you change a `.gitignore` mid-session, restart synx to pick up the new
 rules.
@@ -145,8 +151,19 @@ rules.
   file, then atomically renamed (`rename(2)`) into place with original mode
   and mtime preserved.
 - Live mode runs both sides simultaneously. A 200ms debounce on the watcher
-  coalesces editor save-storms and macOS FSEvent batching. Loop suppression
-  prevents events from bouncing back.
+  coalesces editor save-storms and macOS FSEvent batching. Per-path event
+  coalescing inside each batch ensures `Create+Modify` (typical editor save)
+  becomes a single push, not two.
+- **Echo suppression is state-based, not time-based.** When we apply an
+  incoming change, we record the resulting mtime (or "deleted"). When our
+  watcher subsequently fires for that path, we compare the **current** on-disk
+  mtime to what we recorded — only a *matching* state is treated as an echo
+  and dropped. If the user has modified the file in the meantime, the event
+  flows through normally. This means there's no time window during which
+  legitimate user edits are blocked.
+- The receiver also does **content dedup**: if an incoming `FileData` matches
+  what's already on disk (same size + mtime), the apply is skipped entirely.
+  Wasted bandwidth on the wire, but no on-disk churn and no log spam.
 - SSH uses `ControlMaster auto` with a 60-second persist, so multiple synx
   invocations reuse the same TCP connection.
 

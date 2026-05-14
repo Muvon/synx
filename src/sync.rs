@@ -201,8 +201,10 @@ async fn run_inner(
             Message::FileData { entry, content } => {
                 bytes_recv += content.len() as u64;
                 received_files += 1;
+                let mt = entry.mtime;
+                let path = entry.path.clone();
                 apply_file_data(&local_root, &entry, &content)?;
-                suppress.mark(entry.path).await;
+                suppress.mark_mtime(path, mt).await;
             }
             Message::FileStart { entry, .. } => pending.start(&local_root, entry).await?,
             Message::FileChunk { path, data } => {
@@ -212,25 +214,48 @@ async fn run_inner(
             Message::FileEnd { path } => {
                 if let Some(entry) = pending.end(&local_root, &path).await? {
                     received_files += 1;
-                    suppress.mark(entry.path).await;
+                    suppress.mark_mtime(entry.path, entry.mtime).await;
                 }
             }
             Message::MkDir { entry } => {
+                let path = entry.path.clone();
                 apply_mkdir(&local_root, &entry)?;
-                suppress.mark(entry.path).await;
+                let mt = std::fs::metadata(local_root.join(&path))
+                    .ok()
+                    .map(|m| {
+                        use std::os::unix::fs::MetadataExt;
+                        m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                    })
+                    .unwrap_or(entry.mtime);
+                suppress.mark_mtime(path, mt).await;
             }
             Message::MkSymlink { entry } => {
+                let path = entry.path.clone();
                 apply_symlink(&local_root, &entry)?;
-                suppress.mark(entry.path).await;
+                let mt = std::fs::symlink_metadata(local_root.join(&path))
+                    .ok()
+                    .map(|m| {
+                        use std::os::unix::fs::MetadataExt;
+                        m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                    })
+                    .unwrap_or(entry.mtime);
+                suppress.mark_mtime(path, mt).await;
             }
             Message::Delete { path } => {
                 apply_delete(&local_root, &path)?;
-                suppress.mark(path).await;
+                suppress.mark_deleted(path).await;
             }
             Message::Rename { from, to } => {
                 apply_rename(&local_root, &from, &to)?;
-                suppress.mark(from).await;
-                suppress.mark(to).await;
+                suppress.mark_deleted(from).await;
+                let mt = std::fs::symlink_metadata(local_root.join(&to))
+                    .ok()
+                    .map(|m| {
+                        use std::os::unix::fs::MetadataExt;
+                        m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                    })
+                    .unwrap_or(0);
+                suppress.mark_mtime(to, mt).await;
             }
             Message::SyncDone => break,
             Message::Error(e) => anyhow::bail!("remote: {e}"),
