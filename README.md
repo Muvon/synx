@@ -35,18 +35,21 @@ synx  /Users/dk/proj  ◀─▶  dev@beefy:/srv/proj
 ## Install
 
 ```sh
+# one-liner (Linux & macOS, x86_64 + ARM64)
+curl -fsSL https://raw.githubusercontent.com/Muvon/synx/main/install.sh | sh
+
+# from crates.io
+cargo install synx
+
 # from this repo
 cargo install --path .
-
-# or, once published
-cargo install synx
 ```
 
-You need synx **on both ends**: your local machine *and* the remote. Build
-once, then copy the binary, or `cargo install` over SSH.
+You need synx **on both ends**: your local machine *and* the remote. The
+quickest way is to run the one-liner on each host. If you already have a
+local release build:
 
 ```sh
-# copy the local build to the remote (one-time setup)
 scp target/release/synx user@host:~/.local/bin/synx
 ssh user@host 'chmod +x ~/.local/bin/synx'
 ```
