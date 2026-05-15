@@ -657,14 +657,37 @@ impl agent_client_protocol::Agent for OctomindAgent {
 					.new_operation();
 
 				let mut config = self.config.borrow().clone();
-				let result = crate::session::chat::session::commands::process_command(
-					&mut chat_session,
-					input.trim(),
-					&mut config,
-					&self.role,
-					operation_rx,
-				)
-				.await;
+
+				// /done hits `unreachable!()` in process_command (it expects the CLI
+				// main loop to intercept first). In ACP/WebSocket modes nothing
+				// intercepts, so without this branch the panic aborts the agent
+				// process (panic = "abort" in release → SIGABRT). Handle it here
+				// directly, mirroring the websocket server pattern.
+				let result = if input.trim() == crate::session::chat::DONE_COMMAND {
+					let config_for_role = config.get_merged_config_for_role(&self.role);
+					match crate::session::chat::session::commands::handle_done(
+						&mut chat_session,
+						&config_for_role,
+						operation_rx,
+					)
+					.await
+					{
+						Ok(_) => {
+							let _ = chat_session.save();
+							Ok(crate::session::chat::session::commands::CommandResult::Handled)
+						}
+						Err(e) => Err(e),
+					}
+				} else {
+					crate::session::chat::session::commands::process_command(
+						&mut chat_session,
+						input.trim(),
+						&mut config,
+						&self.role,
+						operation_rx,
+					)
+					.await
+				};
 				// Write back any config mutations (e.g. model/role changes)
 				*self.config.borrow_mut() = config;
 
