@@ -306,6 +306,10 @@ struct InFlight {
     file: fs::File,
     tmp: PathBuf,
     bytes_written: u64,
+    /// Stream-hash chunks as they arrive. Compared against `entry.hash` at
+    /// `end()` time so we can refuse to publish a tmp whose bytes don't
+    /// match what the sender claimed (corruption, dropped chunks, etc.).
+    hasher: blake3::Hasher,
 }
 
 #[derive(Default, Clone)]
@@ -329,6 +333,7 @@ impl Pending {
                 file,
                 tmp,
                 bytes_written: 0,
+                hasher: blake3::Hasher::new(),
             },
         );
         Ok(())
@@ -340,20 +345,47 @@ impl Pending {
             s.file
                 .write_all(data)
                 .with_context(|| format!("write chunk {}", path.display()))?;
+            s.hasher.update(data);
             s.bytes_written += data.len() as u64;
         }
         Ok(())
     }
 
+    /// Finalize: verify the assembled hash matches what the sender said.
+    /// On mismatch, delete the tmp and bail — the real target is untouched
+    /// and the next session's manifest diff will re-attempt the transfer.
     pub async fn end(&self, root: &Path, path: &Path) -> Result<Option<Entry>> {
         let Some(s) = self.inner.lock().await.remove(path) else {
             return Ok(None);
         };
-        s.file.sync_all().ok();
-        drop(s.file);
-        let full = root.join(&s.entry.path);
-        finalize_path(&s.tmp, &full, s.entry.mode, s.entry.mtime)?;
-        Ok(Some(s.entry))
+        let InFlight {
+            entry,
+            file,
+            tmp,
+            bytes_written,
+            hasher,
+        } = s;
+        file.sync_all().ok();
+        drop(file);
+
+        let actual = *hasher.finalize().as_bytes();
+        if actual != entry.hash {
+            // Drop the bad tmp; do NOT replace the target. Loud error so
+            // the session tears down — the reconnect loop will then redo
+            // the transfer cleanly on the next attempt.
+            let _ = fs::remove_file(&tmp);
+            anyhow::bail!(
+                "chunked transfer hash mismatch for {}: {} bytes received, hash {} vs expected {}",
+                entry.path.display(),
+                bytes_written,
+                blake3::Hash::from(actual).to_hex(),
+                blake3::Hash::from(entry.hash).to_hex()
+            );
+        }
+
+        let full = root.join(&entry.path);
+        finalize_path(&tmp, &full, entry.mode, entry.mtime)?;
+        Ok(Some(entry))
     }
 }
 
