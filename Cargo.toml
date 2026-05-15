@@ -14,9 +14,12 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0"
 blake3 = { version = "1.8", features = ["mmap", "rayon"] }
-# bincode 2 splits encode/decode from serde; keep using our serde derives
-# via the `serde` feature + the `bincode::serde::*` functions.
-bincode = { version = "2", features = ["serde"] }
+# postcard: actively maintained, serde-native binary format. Replaced
+# bincode in 2026 because bincode upstream went unmaintained (3.0.0 was
+# a tombstone release that intentionally fails to build —
+# see RUSTSEC-2025-0141). Wire format is ~70% the size of bincode,
+# self-contained, stable spec.
+postcard = { version = "1", features = ["alloc"] }
 clap = { version = "4.6", features = ["derive"] }
 dirs = "6"
 fast_rsync = "0.2"

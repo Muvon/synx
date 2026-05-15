@@ -193,20 +193,15 @@ where
     } else {
         buf
     };
-    // bincode 2: returns (value, bytes_consumed) tuple; legacy() config keeps
-    // the wire format identical to bincode 1 so we stay compatible with peers
-    // that haven't upgraded yet during a rolling rollout.
-    bincode::serde::decode_from_slice(&bytes, bincode::config::legacy())
-        .map(|(v, _)| v)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    postcard::from_bytes(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 pub async fn write_message<W>(writer: &mut W, msg: &Message, compress: bool) -> io::Result<()>
 where
     W: AsyncWriteExt + Unpin,
 {
-    let bytes = bincode::serde::encode_to_vec(msg, bincode::config::legacy())
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let bytes =
+        postcard::to_allocvec(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let (payload, flags) = if compress && bytes.len() > COMPRESS_THRESHOLD {
         let c = zstd::encode_all(&bytes[..], COMPRESS_LEVEL)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
