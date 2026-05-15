@@ -98,7 +98,7 @@ pub fn apply_file_data(root: &Path, entry: &Entry, content: &[u8]) -> Result<()>
         fs::create_dir_all(parent)
             .with_context(|| format!("create parent {}", parent.display()))?;
     }
-    let tmp = tmp_sibling(&full);
+    let tmp = tmp_path();
     fs::write(&tmp, content).with_context(|| format!("write tmp {}", tmp.display()))?;
     finalize_path(&tmp, &full, entry.mode, entry.mtime)?;
     Ok(())
@@ -156,21 +156,41 @@ pub fn apply_rename(root: &Path, from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-fn tmp_sibling(final_path: &Path) -> PathBuf {
+/// Where our tmp files live. `$TMPDIR/synx/` on Unix.
+fn tmp_dir() -> PathBuf {
+    std::env::temp_dir().join("synx")
+}
+
+/// Allocate a fresh tmp path in the system tmp dir.
+/// Pid + nanos give uniqueness across concurrent synx processes and runs.
+fn tmp_path() -> PathBuf {
     use std::time::SystemTime;
+    let dir = tmp_dir();
+    let _ = fs::create_dir_all(&dir);
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let name = final_path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "tmp".to_string());
-    let tmp_name = format!(".synx-tmp.{}.{}.{}", name, std::process::id(), nanos);
-    final_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(tmp_name)
+    dir.join(format!("{}.{}", std::process::id(), nanos))
+}
+
+/// Remove tmp files left over from a previous crashed run.
+/// Age-based (> 1 hour) so we don't step on a concurrently-running synx.
+/// Cheap; safe to call at startup of both client and agent.
+pub fn cleanup_orphan_tmps() {
+    use std::time::{Duration, SystemTime};
+    let dir = tmp_dir();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    let cutoff = SystemTime::now() - Duration::from_secs(3600);
+    for entry in entries.flatten() {
+        if let Ok(meta) = entry.metadata() {
+            if meta.modified().map(|m| m < cutoff).unwrap_or(false) {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -246,10 +266,22 @@ pub fn apply_delta_to_file(
     Ok(())
 }
 
+/// Move `tmp` into place at `final_path` and stamp mode + mtime.
+///
+/// Prefers `rename(2)` (atomic). On EXDEV (tmp and target are on different
+/// filesystems — common when `$TMPDIR` is `/tmp` on a separate mount or
+/// tmpfs) we fall back to `copy + remove`. That fallback is NOT atomic:
+/// a reader can see partial content during the copy, and a crash mid-copy
+/// leaves a truncated destination. Acceptable trade-off for a dev sync tool.
 fn finalize_path(tmp: &Path, final_path: &Path, mode: u32, mtime: i64) -> Result<()> {
     let _ = fs::set_permissions(tmp, fs::Permissions::from_mode(mode));
-    fs::rename(tmp, final_path)
-        .with_context(|| format!("rename {} → {}", tmp.display(), final_path.display()))?;
+    if fs::rename(tmp, final_path).is_err() {
+        fs::copy(tmp, final_path).with_context(|| {
+            format!("copy {} → {}", tmp.display(), final_path.display())
+        })?;
+        let _ = fs::remove_file(tmp);
+        let _ = fs::set_permissions(final_path, fs::Permissions::from_mode(mode));
+    }
     let ft = filetime::FileTime::from_unix_time(
         mtime.div_euclid(1_000_000_000),
         mtime.rem_euclid(1_000_000_000) as u32,
@@ -281,7 +313,7 @@ impl Pending {
         if let Some(parent) = full.parent() {
             fs::create_dir_all(parent)?;
         }
-        let tmp = tmp_sibling(&full);
+        let tmp = tmp_path();
         let file = fs::File::create(&tmp).with_context(|| format!("open tmp {}", tmp.display()))?;
         let path = entry.path.clone();
         self.inner.lock().await.insert(
@@ -336,7 +368,14 @@ where
     let full = root.join(&entry.path);
     let size = entry.size as usize;
     if size < CHUNK_THRESHOLD {
-        let content = fs::read(&full).with_context(|| format!("read {}", full.display()))?;
+        // File may have vanished between manifest stat and now (user `rm`'d).
+        // Return 0 so the caller knows there's nothing to send; subsequent
+        // Removed event will propagate the delete.
+        let content = match fs::read(&full) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e).with_context(|| format!("read {}", full.display())),
+        };
         let sent = content.len() as u64;
         let mut w = writer.lock().await;
         write_message(
@@ -350,7 +389,11 @@ where
         .await?;
         Ok(sent)
     } else {
-        let mut file = fs::File::open(&full).with_context(|| format!("open {}", full.display()))?;
+        let mut file = match fs::File::open(&full) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e).with_context(|| format!("open {}", full.display())),
+        };
         {
             let mut w = writer.lock().await;
             write_message(
@@ -366,6 +409,8 @@ where
         let mut buf = vec![0u8; CHUNK_SIZE];
         let mut total: u64 = 0;
         loop {
+            // On Unix the fd stays valid even after unlink, so reads keep
+            // working. A read error here is something real (disk failure).
             let n = file.read(&mut buf)?;
             if n == 0 {
                 break;
@@ -1019,15 +1064,49 @@ where
                             .await?;
                         } else {
                             let size = entry.size;
-                            if log_event {
+                            let is_big = (size as usize) >= CHUNK_THRESHOLD;
+                            // For big files, show a start marker so the user
+                            // can see something's in flight; chunked transfer
+                            // can take a while on slow links.
+                            if log_event && is_big {
                                 eprintln!(
-                                    "  {} {}  {}",
+                                    "  {} {}  {}  {}",
                                     "→".bright_green(),
                                     entry.path.display(),
-                                    format_size(size, BINARY).dimmed()
+                                    format_size(size, BINARY).dimmed(),
+                                    "…".bright_yellow()
                                 );
                             }
-                            send_file(writer, root, &entry, compress).await?;
+                            let sent = send_file(writer, root, &entry, compress).await?;
+                            if log_event {
+                                if sent == 0 && size > 0 {
+                                    // File vanished between manifest stat
+                                    // and send_file's open — treat as a
+                                    // delete; the watcher's Removed event
+                                    // (already queued) will dispatch it.
+                                    eprintln!(
+                                        "  {} {}  {}",
+                                        "→".bright_green(),
+                                        entry.path.display(),
+                                        "(vanished — delete will follow)".dimmed()
+                                    );
+                                } else if is_big {
+                                    eprintln!(
+                                        "  {} {}  {}  {}",
+                                        "→".bright_green(),
+                                        entry.path.display(),
+                                        format_size(sent, BINARY).dimmed(),
+                                        "✓".bright_green()
+                                    );
+                                } else {
+                                    eprintln!(
+                                        "  {} {}  {}",
+                                        "→".bright_green(),
+                                        entry.path.display(),
+                                        format_size(sent, BINARY).dimmed()
+                                    );
+                                }
+                            }
                         }
                     }
                 }

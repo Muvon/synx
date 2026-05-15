@@ -15,12 +15,15 @@ use crate::cache::HashCache;
 use crate::ignores::IgnoreStack;
 use crate::peer::{
     apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
-    compute_delta, compute_signature, live_loop, send_file, Pending,
+    cleanup_orphan_tmps, compute_delta, compute_signature, live_loop, send_file, Pending,
 };
 use crate::protocol::{read_message, write_message, EntryKind, Message, PROTOCOL_VERSION};
 use crate::walker::{build_entry, ensure_root, walk_manifest};
 
 pub async fn run(path: PathBuf) -> Result<()> {
+    // Wipe stale tmps left by a previous crashed run on this host.
+    cleanup_orphan_tmps();
+
     let stdin = stdin();
     let stdout = stdout();
     let mut reader = BufReader::new(stdin);

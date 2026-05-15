@@ -31,52 +31,106 @@ pub async fn run(args: ClientArgs) -> Result<()> {
     let remote = parse_remote(&args.remote)?;
     crate::ui::banner(&local_root, &remote, args.mode);
 
-    let mut child = spawn_ssh(&remote, args.ssh_opts.as_deref(), &args.remote_synx)?;
+    // Wipe orphan tmps from any previous crashed run before we start.
+    crate::peer::cleanup_orphan_tmps();
+
+    let mut delay = std::time::Duration::from_secs(1);
+    let max_delay = std::time::Duration::from_secs(30);
+    let mut first_attempt = true;
+
+    loop {
+        match run_session(&local_root, &remote, &args, first_attempt).await {
+            Ok(()) => return Ok(()),
+            Err(e) if is_fatal(&e) => return Err(e),
+            Err(e) => {
+                crate::ui::warn(&format!(
+                    "connection lost: {} — reconnecting in {}s",
+                    short_err(&e),
+                    delay.as_secs()
+                ));
+                // Cancel-safe wait so Ctrl-C during the back-off exits cleanly.
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = tokio::signal::ctrl_c() => {
+                        crate::ui::info("interrupted");
+                        return Ok(());
+                    }
+                }
+                delay = (delay * 2).min(max_delay);
+                first_attempt = false;
+            }
+        }
+    }
+}
+
+/// Errors that auto-reconnect can't fix — config-level issues. Anything
+/// network / connection / peer-side gets retried.
+fn is_fatal(e: &anyhow::Error) -> bool {
+    let s = e.to_string().to_lowercase();
+    s.contains("protocol mismatch")
+        || s.contains("invalid local path")
+        || s.contains("remote must be ")
+}
+
+fn short_err(e: &anyhow::Error) -> String {
+    let s = e.to_string();
+    s.lines().next().unwrap_or(&s).to_string()
+}
+
+/// One full session: spawn ssh, handshake, initial sync, live mode.
+/// Returns `Ok(())` on clean exit (Ctrl-C, `--once` done); `Err` on any
+/// connection-level failure (the outer loop will reconnect).
+async fn run_session(
+    local_root: &std::path::Path,
+    remote: &crate::transport::Remote,
+    args: &ClientArgs,
+    first_attempt: bool,
+) -> Result<()> {
+    let mut child = spawn_ssh(remote, args.ssh_opts.as_deref(), &args.remote_synx)?;
     let stdin = child.stdin.take().context("ssh stdin missing")?;
     let stdout = child.stdout.take().context("ssh stdout missing")?;
     let mut reader = BufReader::new(stdout);
     let writer_inner = BufWriter::new(stdin);
     let compress = !args.no_compress;
 
-    // ── Handshake ──
-    {
-        let mut w = writer_inner;
-        write_message(
-            &mut w,
-            &Message::Hello {
-                version: PROTOCOL_VERSION,
-                root: PathBuf::from(&remote.path),
-                mode: args.mode,
-                compress,
-            },
-            false,
-        )
-        .await?;
-        let writer = Arc::new(Mutex::new(w));
+    let mut w = writer_inner;
+    write_message(
+        &mut w,
+        &Message::Hello {
+            version: PROTOCOL_VERSION,
+            root: PathBuf::from(&remote.path),
+            mode: args.mode,
+            compress,
+        },
+        false,
+    )
+    .await?;
+    let writer = Arc::new(Mutex::new(w));
 
-        match read_message(&mut reader).await? {
-            Message::HelloAck {
-                version,
-                root_existed,
-            } => {
-                if version != PROTOCOL_VERSION {
-                    anyhow::bail!(
-                        "protocol mismatch (local={PROTOCOL_VERSION}, remote={version}). \
-                         Update synx on both sides."
-                    );
-                }
-                if !root_existed {
-                    crate::ui::warn(&format!("remote path created: {}", remote.path));
-                } else {
-                    crate::ui::ok("connected");
-                }
+    match read_message(&mut reader).await? {
+        Message::HelloAck {
+            version,
+            root_existed,
+        } => {
+            if version != PROTOCOL_VERSION {
+                anyhow::bail!(
+                    "protocol mismatch (local={PROTOCOL_VERSION}, remote={version}). \
+                     Update synx on both sides."
+                );
             }
-            Message::Error(e) => anyhow::bail!("remote rejected handshake: {e}"),
-            m => anyhow::bail!("unexpected handshake reply: {:?}", m),
+            if !root_existed && first_attempt {
+                crate::ui::warn(&format!("remote path created: {}", remote.path));
+            } else if first_attempt {
+                crate::ui::ok("connected");
+            } else {
+                crate::ui::ok("reconnected");
+            }
         }
-
-        run_inner(local_root, args, compress, reader, writer, child).await
+        Message::Error(e) => anyhow::bail!("remote rejected handshake: {e}"),
+        m => anyhow::bail!("unexpected handshake reply: {:?}", m),
     }
+
+    run_inner(local_root.to_path_buf(), args.clone(), compress, reader, writer, child).await
 }
 
 async fn run_inner(

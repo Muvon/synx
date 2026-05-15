@@ -44,9 +44,10 @@ pub fn build_walker(root: &Path) -> ignore::WalkBuilder {
         .require_git(false)
         .follow_links(false);
     b.add_custom_ignore_filename(".synxignore");
-    // We do NOT hardcode-skip `.git/`. Dotfiles & `.git` are synced unless the
-    // user explicitly puts them in `.gitignore` or `.synxignore`. The ignore
-    // crate respects user rules; we add none of our own.
+    // We do NOT hardcode-skip anything (including `.git/`). Dotfiles are
+    // synced unless the user explicitly puts them in `.gitignore` or
+    // `.synxignore`. Our own atomic-write tmps live in `$TMPDIR/synx/`
+    // and never appear under the sync root.
     b
 }
 
