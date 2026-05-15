@@ -1,5 +1,64 @@
 # Changelog
 
+## [0.29.0] - 2026-05-15
+
+### 📋 Release Summary
+
+This release introduces advanced session management features, including a new `/schedule` command for recurring tasks, automated tool activation based on user intent, and parallel tool execution for faster workflows (4015ef10, 223d370b, 4a2da242). The user interface has been significantly refined with a continuous input rail, real-time cost tracking, and enhanced markdown rendering to provide a more seamless conversational experience (ae7bc882, e2e4c0bb, 8bdd636e). Additionally, the update integrates a local embedding engine for improved codebase context and resolves several stability issues related to terminal rendering and session race conditions (b0d22268, 28d9d18e, d6115db5).
+
+
+### ✨ New Features & Enhancements
+
+- **chat**: add continuous left rail for user input `ae7bc882`
+- **assets**: add animated octomind brand assets `51c285d3`
+- **chat**: enhance tool execution and cost display UI `10751d00`
+- **learning**: integrate local embedding engine and update architecture `b0d22268`
+- **chat**: add persistent status line with cost delta `e2e4c0bb`
+- **chat**: unify session status and context tracking `6e1c593d`
+- **chat**: highlight submitted user input in history `72183103`
+- **schedule**: implement persistence and state restoration `94203409`
+- **agent**: implement domain-based capability filtering and gating `da1518dc`
+- **embeddings**: implement persistent vector cache and pre-embedding `d0a53534`
+- **mcp**: enhance auto-activation logic and coverage reporting `3ada7337`
+- **session**: instruct model to use parallel tool calls `4a2da242`
+- **session**: enhance session management and system prompt structure `f9e8279b`
+- **mcp**: implement cross-encoder reranking for auto-activation `195242b1`
+- **mcp**: add detailed logging for auto-activation `a81a7b9c`
+- **acp**: implement inbox message streaming and injected events `2d84ce00`
+- **session**: display injected inbox messages `38c3aa7f`
+- **schedule**: implement auto-processing and implicit scheduling `6ff07764`
+- **mcp**: implement recurring schedules and /schedule command `4015ef10`
+- **mcp**: implement intent-based capability auto-activation `223d370b`
+
+### 🔧 Improvements & Optimizations
+
+- **ui**: add visual separators for assistant output `2f9b854e`
+- **branding**: redesign logo and simplify icon rendering `61975c51`
+- **embeddings**: serialize embedding model tests `af640a54`
+- **session**: simplify delegation prompt text `a144cd78`
+- **embeddings**: replace fastembed with candle and octomind-embed `628b74a5`
+- **embeddings**: remove cross-encoder reranking logic `ef37f18e`
+- **acp**: extract connection client to variable `8d9a9670`
+- **cargo**: point homepage to octomind.run domain `7a3eaa11`
+- **docker**: add g++ to build dependencies `490ac1b9`
+
+### 🐛 Bug Fixes & Stability
+
+- **acp**: resolve session race conditions and image alignment `d6115db5`
+- **acp**: prevent panic on done command `df121eed`
+- **chat**: prevent spinner residue during markdown render `8bdd636e`
+- **chat**: resolve terminal rendering and deadlock issues `28d9d18e`
+- **session**: improve tool execution CLI output formatting `fc6e080c`
+- **chat**: implement plain status for spinner `fa38e09e`
+- **session**: suppress Ctrl+C echo in terminal `05a5d73f`
+- **mcp**: clarify capability action prompt usage `7af77768`
+- **config**: set default agent to concierge `cae4f63d`
+- **plan**: improve task compression and tool call preservation `8ad0beaa`
+
+### 🔄 Other Changes
+
+2 maintenance, dependency, and tooling updates not listed individually.
+
 ## [0.28.0] - 2026-05-10
 
 ### 📋 Release Summary
