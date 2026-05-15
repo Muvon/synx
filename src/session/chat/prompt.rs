@@ -29,9 +29,11 @@ impl ChatPrompt {
 		Self {
 			left,
 			indicator,
-			// 4 spaces aligns wrapped lines under the input text. The indicator
-			// `▍ 〉` is 1 (▍) + 1 (space) + 2 (〉, East-Asian-Wide) = 4 cells.
-			multiline: "    ".to_string(),
+			// Continuation rows carry the same bright-blue `▍` rail as the
+			// first row, then pad to 4 cells to align under the input text.
+			// First-row indicator `▍ 〉` is 1 (▍) + 1 (space) + 2 (〉,
+			// East-Asian-Wide) = 4 cells; continuation is `▍` + 3 spaces.
+			multiline: "\x1b[94m▍\x1b[39m   ".to_string(),
 			reverse_search_active,
 		}
 	}

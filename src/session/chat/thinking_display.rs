@@ -17,14 +17,10 @@
 use crate::providers::ThinkingBlock;
 use colored::Colorize;
 
-/// Display thinking block in CLI with proper formatting (matching tool display style)
+/// Display thinking block in CLI: a dim `· thinking` header followed by the
+/// body in dim italic. No trailing rule — block ends when normal output
+/// resumes. Matches the `·` prefix used by info-style status lines elsewhere.
 pub fn display_thinking(thinking: &ThinkingBlock) {
-	let title = " thinking ".bright_cyan();
-	let separator_length = 40.max(title.len() + 4);
-	let dashes = "─".repeat(separator_length - title.len());
-	let separator = format!("──{}{}──", title, dashes.dimmed());
-
-	println!("{}", separator);
-	println!("{}", thinking.content.dimmed());
-	println!("{}", "─".repeat(30).dimmed());
+	println!("{}", "· thinking".bright_black());
+	println!("{}", thinking.content.bright_black().italic());
 }

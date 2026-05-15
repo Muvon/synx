@@ -223,24 +223,19 @@ fn highlight_submitted_input(prompt_left: &str, indicator: &str, multiline: &str
 	}
 	let _ = out.flush();
 
-	// Bright-blue left bar (▍) + italic message text. One marker at the start
-	// of the line is enough to make user messages stand out in history.
-	// No background, so it's resize-stable and works on any terminal theme.
+	// Bright-blue left bar (▍) on every visual row + italic message text.
+	// Painting the marker on continuation/wrap rows too gives the message a
+	// continuous left edge — multi-line submissions read as one quoted block
+	// instead of one prefixed line followed by orphaned text. No background,
+	// so it stays resize-stable and works on any terminal theme.
 	let marker = "\x1b[94m▍\x1b[39m"; // bright blue ▍, then reset fg only
 	let italic_on = "\x1b[3m";
 	let reset = "\x1b[0m";
 
-	// Continuation prefix aligns under the message text (▍=1 cell + space).
-	let cont_pad = "  ";
-
-	// Manually wrap each logical line to the available width so EVERY visual
-	// row carries either the `▍` marker (first row) or the alignment pad
-	// (continuation rows). If we let the terminal wrap, wrap-rows fall under
-	// no prefix and the message visually merges with surrounding output.
-	// Prefix width = 2 cells (`▍ ` or `  `); wrap budget is term_w - 2.
+	// Prefix width = 2 cells (`▍ `); wrap budget is term_w - 2.
 	let wrap_w = term_w.saturating_sub(2).max(1);
+	let line_prefix = format!("{} {}", marker, italic_on);
 
-	let mut first_visual_row = true;
 	for raw_line in line.split('\n') {
 		// Split by char count, matching `display_cols`'s width model (safe
 		// underestimate for wide chars — we only ever wrap earlier, never
@@ -248,24 +243,12 @@ fn highlight_submitted_input(prompt_left: &str, indicator: &str, multiline: &str
 		let chars: Vec<char> = raw_line.chars().collect();
 		if chars.is_empty() {
 			// Preserve blank lines from explicit `\n\n` in user input.
-			let prefix = if first_visual_row {
-				format!("{} {}", marker, italic_on)
-			} else {
-				format!("{}{}", cont_pad, italic_on)
-			};
-			println!("{}{}", prefix, reset);
-			first_visual_row = false;
+			println!("{}{}", line_prefix, reset);
 			continue;
 		}
 		for chunk in chars.chunks(wrap_w) {
-			let prefix = if first_visual_row {
-				format!("{} {}", marker, italic_on)
-			} else {
-				format!("{}{}", cont_pad, italic_on)
-			};
 			let text: String = chunk.iter().collect();
-			println!("{}{}{}", prefix, text, reset);
-			first_visual_row = false;
+			println!("{}{}{}", line_prefix, text, reset);
 		}
 	}
 	let _ = std::io::stdout().flush();
