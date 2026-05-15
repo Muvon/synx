@@ -8,11 +8,25 @@ use std::sync::{Arc, Mutex};
 use crate::cache::HashCache;
 use crate::protocol::{Entry, EntryKind};
 
-/// Hash a single file with blake3 (streaming, ~1 GB/s on modern CPUs).
+/// Files above this size are hashed via mmap + rayon (parallel across cores).
+/// Below it, the mmap setup cost outweighs the parallelism win.
+const MMAP_HASH_THRESHOLD: u64 = 1024 * 1024; // 1 MiB
+
+/// Hash a single file with blake3.
+///
+/// - Small files (<1 MiB): streaming `io::copy` — minimal overhead.
+/// - Larger files: memory-mapped + rayon-parallel — saturates multiple cores
+///   on a single file. blake3 hits ~1 GB/s/core; an 8-core box hashes a
+///   1 GiB file in ~125 ms with this path vs ~1 s sequential.
 pub fn hash_file(path: &Path) -> std::io::Result<[u8; 32]> {
+    let len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let mut hasher = blake3::Hasher::new();
-    let mut file = fs::File::open(path)?;
-    std::io::copy(&mut file, &mut hasher)?;
+    if len >= MMAP_HASH_THRESHOLD {
+        hasher.update_mmap_rayon(path)?;
+    } else {
+        let mut file = fs::File::open(path)?;
+        std::io::copy(&mut file, &mut hasher)?;
+    }
     Ok(*hasher.finalize().as_bytes())
 }
 

@@ -158,36 +158,71 @@ async fn run_inner(
         return Ok(());
     }
 
-    // ── Execute initial sync (push + pull interleaved) ──
+    // ── Execute initial sync ──
+    // Phase 1 (sequential): dirs + symlinks. Must exist before any file
+    //                       inside them can be received.
+    // Phase 2 (parallel):   files, bounded by a small Semaphore so we don't
+    //                       blow up RAM with many large reads at once. The
+    //                       writer Mutex serialises individual messages but
+    //                       chunks from multiple files interleave on the
+    //                       wire, which the receiver dispatches by path.
+    // Phase 3 (sequential): FileGet requests + SyncDone marker.
+    const MAX_CONCURRENT_PUSHES: usize = 8;
+
     let push_plan = plan.push.clone();
     let get_plan = plan.get.clone();
     let writer_for_send = writer.clone();
     let local_root_for_send = local_root.clone();
     let send_task = tokio::spawn(async move {
-        let mut bytes: u64 = 0;
-        for e in push_plan {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use tokio::sync::Semaphore;
+
+        let (non_files, files): (Vec<Entry>, Vec<Entry>) = push_plan
+            .into_iter()
+            .partition(|e| !matches!(e.kind, EntryKind::File));
+
+        // Phase 1.
+        for e in non_files {
+            let mut w = writer_for_send.lock().await;
             match e.kind {
                 EntryKind::Dir => {
-                    let mut w = writer_for_send.lock().await;
-                    write_message(&mut *w, &Message::MkDir { entry: e }, compress).await?;
+                    write_message(&mut *w, &Message::MkDir { entry: e }, compress).await?
                 }
                 EntryKind::Symlink => {
-                    let mut w = writer_for_send.lock().await;
-                    write_message(&mut *w, &Message::MkSymlink { entry: e }, compress).await?;
+                    write_message(&mut *w, &Message::MkSymlink { entry: e }, compress).await?
                 }
-                EntryKind::File => {
-                    bytes +=
-                        send_file(&writer_for_send, &local_root_for_send, &e, compress).await?;
-                }
+                EntryKind::File => unreachable!(),
             }
         }
+
+        // Phase 2.
+        let bytes = Arc::new(AtomicU64::new(0));
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_PUSHES));
+        let mut handles = Vec::with_capacity(files.len());
+        for e in files {
+            let permit = semaphore.clone().acquire_owned().await?;
+            let writer = writer_for_send.clone();
+            let root = local_root_for_send.clone();
+            let bytes = bytes.clone();
+            handles.push(tokio::spawn(async move {
+                let _p = permit; // released on drop after send completes
+                let n = send_file(&writer, &root, &e, compress).await?;
+                bytes.fetch_add(n, Ordering::Relaxed);
+                Ok::<(), anyhow::Error>(())
+            }));
+        }
+        for h in handles {
+            h.await??;
+        }
+
+        // Phase 3.
         for path in get_plan {
             let mut w = writer_for_send.lock().await;
             write_message(&mut *w, &Message::FileGet { path }, compress).await?;
         }
         let mut w = writer_for_send.lock().await;
         write_message(&mut *w, &Message::SyncDone, compress).await?;
-        Ok::<u64, anyhow::Error>(bytes)
+        Ok::<u64, anyhow::Error>(bytes.load(Ordering::Relaxed))
     });
 
     // Receive: apply incoming server responses until peer SyncDone.
