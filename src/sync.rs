@@ -17,8 +17,8 @@ use crate::cli::ClientArgs;
 use crate::ignores::IgnoreStack;
 use crate::peer::{
     apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
-    compute_delta, compute_signature, forward_local_events, live_loop, send_file, Pending,
-    Suppression,
+    compute_delta, compute_signature, forward_local_events, git_busy, is_under_git, live_loop,
+    send_file, Pending, Suppression,
 };
 use crate::protocol::{
     read_message, write_message, Entry, EntryKind, Message, SyncMode, PROTOCOL_VERSION,
@@ -166,7 +166,7 @@ async fn run_inner(
     let started = Instant::now();
     let root_for_walk = local_root.clone();
     let cache_for_walk = cache.clone();
-    let local_manifest =
+    let mut local_manifest =
         tokio::task::spawn_blocking(move || walk_manifest(&root_for_walk, &cache_for_walk))
             .await??;
     let walk_ms = started.elapsed().as_millis();
@@ -207,6 +207,33 @@ async fn run_inner(
     let filtered = before - remote_manifest.len();
     if filtered > 0 {
         tracing::debug!("filtered {} ignored remote entries", filtered);
+    }
+
+    // ── Stale-.git/ recovery ──
+    // If local has leftover .git/ entries (from old-version synx propagating
+    // mid-rebase state, or a crashed git), remote has NO .git/, AND remote
+    // looks like a real populated workspace (substantial non-.git content),
+    // the user has clearly chosen to wipe .git/. Mirror that here so local
+    // doesn't stay stuck with phantom rebase state forever. Skip if local
+    // is genuinely mid-operation (git_busy after stale check).
+    let local_has_git = local_manifest.iter().any(|e| is_under_git(&e.path));
+    let remote_has_git = remote_manifest.iter().any(|e| is_under_git(&e.path));
+    let remote_non_git = remote_manifest
+        .iter()
+        .filter(|e| !is_under_git(&e.path))
+        .count();
+    if local_has_git && !remote_has_git && remote_non_git >= 5 && !git_busy(&local_root) {
+        crate::ui::warn(
+            "local has leftover .git/ but remote has none — cleaning local .git/ to match",
+        );
+        let local_git_path = local_root.join(".git");
+        if let Err(e) = std::fs::remove_dir_all(&local_git_path) {
+            crate::ui::warn(&format!("failed to clean local .git/: {e}"));
+        } else {
+            // Strip .git/* entries from the manifest so the diff plan
+            // doesn't try to push them back.
+            local_manifest.retain(|e| !is_under_git(&e.path));
+        }
     }
 
     crate::ui::info(&format!(
