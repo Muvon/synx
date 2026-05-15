@@ -329,10 +329,20 @@ impl ImageProcessor {
 		let preview_b64 = Self::shrink_for_preview(data).unwrap_or_else(|_| data.clone());
 		let cols = 40_u32;
 
-		// Estimate rendered cell-rows from image aspect ratio. Terminal cells
-		// are roughly 2:1 (height : width), so a `cols`-wide preview renders
-		// at roughly `cols / 2 * (img_h / img_w)` cell-rows. Fallback to a
-		// conservative 10 rows if the source dimensions are unknown.
+		// Pick rows so the image fills a `cols × rows` cell rectangle with its
+		// aspect ratio preserved. Both Kitty (`c=N,r=M`) and iTerm2
+		// (`width=N;height=M;preserveAspectRatio=1`) accept an explicit cell
+		// box and fit the image inside it — that guarantees the rendered
+		// height matches the `rows` value we hand back to the caller, so the
+		// padding newlines line up exactly with the rendered image with no
+		// gap and no overlap. Without an explicit `r`, the terminal computes
+		// height from real cell pixel dimensions (which we cannot query while
+		// reedline owns the tty) and our estimate drifts.
+		//
+		// Terminal cells are roughly 2:1 (height : width in pixels), so a
+		// `cols`-wide preview wanting square pixels needs `cols / 2 *
+		// (img_h / img_w)` cell-rows. Clamp to [1, 30] so a tall portrait
+		// screenshot does not push the prompt off-screen.
 		let rows = match attachment.dimensions {
 			Some((w, h)) if w > 0 => {
 				let r = (cols as f32 * 0.5 * (h as f32 / w as f32)).ceil() as u32;
@@ -342,8 +352,8 @@ impl ImageProcessor {
 		};
 
 		let escape = match proto {
-			InlineProtocol::Kitty => Self::build_kitty_escape(&preview_b64, cols),
-			InlineProtocol::ITerm2 => Self::build_iterm2_escape(&preview_b64, cols),
+			InlineProtocol::Kitty => Self::build_kitty_escape(&preview_b64, cols, rows),
+			InlineProtocol::ITerm2 => Self::build_iterm2_escape(&preview_b64, cols, rows),
 		};
 		Some((escape, rows))
 	}
@@ -388,13 +398,14 @@ impl ImageProcessor {
 	}
 
 	/// Build a Kitty graphics escape sequence with `q=2` (silent — no responses).
-	/// Only `c` (cell width) is specified; the terminal scales the image height
-	/// from the aspect ratio. Reserving a fixed `r=20` rows confused reedline's
-	/// prompt redraw and pushed the cursor off-screen on screenshot pastes.
-	/// Per the Kitty protocol, each escape ≤ 4096 bytes, so the base64 payload
-	/// is split into chunks: first chunk carries the metadata; subsequent ones
-	/// declare `m=1` (more) or `m=0` (last).
-	fn build_kitty_escape(b64: &str, cols: u32) -> String {
+	/// Both `c` (columns) and `r` (rows) are specified so the terminal fits the
+	/// image into an exact cell rectangle preserving aspect ratio. This keeps
+	/// the rendered visual height aligned with the row count the caller uses
+	/// for padding newlines, so the prompt redraws flush against the image
+	/// with no gap. Per the Kitty protocol, each escape ≤ 4096 bytes, so the
+	/// base64 payload is split into chunks: first chunk carries the metadata;
+	/// subsequent ones declare `m=1` (more) or `m=0` (last).
+	fn build_kitty_escape(b64: &str, cols: u32, rows: u32) -> String {
 		const CHUNK: usize = 4096;
 		let bytes = b64.as_bytes();
 		let chunk_count = bytes.len().div_ceil(CHUNK);
@@ -404,8 +415,8 @@ impl ImageProcessor {
 			let chunk_str = std::str::from_utf8(chunk).unwrap_or("");
 			if i == 0 {
 				out.push_str(&format!(
-					"\x1b_Ga=T,f=100,q=2,c={},m={};{}\x1b\\",
-					cols, more, chunk_str
+					"\x1b_Ga=T,f=100,q=2,c={},r={},m={};{}\x1b\\",
+					cols, rows, more, chunk_str
 				));
 			} else {
 				out.push_str(&format!("\x1b_Gm={};{}\x1b\\", more, chunk_str));
@@ -415,11 +426,14 @@ impl ImageProcessor {
 	}
 
 	/// Build an iTerm2 OSC 1337 inline-image escape — fire-and-forget, no ACK.
-	/// `preserveAspectRatio=1` lets the terminal compute the height from `width`.
-	fn build_iterm2_escape(b64: &str, cols: u32) -> String {
+	/// `width=N` and `height=N` are bare cell counts (per iTerm2 docs: numbers
+	/// without a unit specify character cells). With both set and
+	/// `preserveAspectRatio=1` the terminal fits the image into exactly that
+	/// cell rectangle, matching the row count the caller uses for padding.
+	fn build_iterm2_escape(b64: &str, cols: u32, rows: u32) -> String {
 		format!(
-			"\x1b]1337;File=inline=1;width={};preserveAspectRatio=1:{}\x07",
-			cols, b64
+			"\x1b]1337;File=inline=1;width={};height={};preserveAspectRatio=1:{}\x07",
+			cols, rows, b64
 		)
 	}
 

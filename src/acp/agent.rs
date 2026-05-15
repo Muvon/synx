@@ -50,6 +50,12 @@ pub struct OctomindAgent {
 	role: String,
 	/// Active sessions keyed by ACP session_id, paired with their working directory.
 	sessions: Rc<RefCell<HashMap<String, (ChatSession, PathBuf)>>>,
+	/// Per-session async exclusion locks. Both `prompt()` and the inbox monitor
+	/// acquire this lock before removing the session from `sessions` for exclusive
+	/// processing — otherwise a user prompt arriving while the inbox monitor is
+	/// mid-API-call (or vice versa) would find the map empty and respond with
+	/// `session not found`, which the client interprets as a disconnect.
+	session_locks: Rc<RefCell<HashMap<String, Rc<tokio::sync::Mutex<()>>>>>,
 	/// Active cancellation handles keyed by ACP session_id
 	cancellations: Rc<RefCell<HashMap<String, SessionCancellation>>>,
 	/// Connection back to the client — used to send session/update notifications
@@ -72,6 +78,7 @@ impl OctomindAgent {
 			config: RefCell::new(config),
 			role,
 			sessions: Rc::new(RefCell::new(HashMap::new())),
+			session_locks: Rc::new(RefCell::new(HashMap::new())),
 			cancellations: Rc::new(RefCell::new(HashMap::new())),
 			conn: Rc::new(RefCell::new(None)),
 			pending_name: RefCell::new(options.name),
@@ -85,6 +92,16 @@ impl OctomindAgent {
 	/// Inject the connection after it's created (chicken-and-egg: agent needs conn, conn needs agent).
 	pub fn set_connection(&self, conn: Rc<AgentSideConnection>) {
 		*self.conn.borrow_mut() = Some(conn);
+	}
+
+	/// Get or create the exclusion lock for a session.
+	/// Returns an `Rc<Mutex>` so callers can `lock().await` outside the RefCell borrow.
+	fn session_lock(&self, session_id: &str) -> Rc<tokio::sync::Mutex<()>> {
+		self.session_locks
+			.borrow_mut()
+			.entry(session_id.to_string())
+			.or_default()
+			.clone()
 	}
 
 	/// Build session args for a new ACP session, consuming the one-shot CLI overrides.
@@ -274,6 +291,7 @@ async fn send_available_commands(conn: Option<std::rc::Rc<AgentSideConnection>>,
 fn spawn_inbox_monitor(
 	session_id: String,
 	sessions: Rc<RefCell<HashMap<String, (ChatSession, PathBuf)>>>,
+	session_locks: Rc<RefCell<HashMap<String, Rc<tokio::sync::Mutex<()>>>>>,
 	cancellations: Rc<RefCell<HashMap<String, SessionCancellation>>>,
 	config: RefCell<Config>,
 	role: String,
@@ -287,9 +305,9 @@ fn spawn_inbox_monitor(
 			let should_exit = crate::session::context::with_session_id(session_id.clone(), async {
 				crate::mcp::core::flush_due_to_inbox();
 
-				// Drain inbox only when session is available.
-				// If held by prompt(), skip — prompt() fires inbox_notify when done,
-				// which wakes us from the wait section to retry.
+				// Drain inbox while there are messages. Acquire the per-session
+				// exclusion lock BEFORE removing the session from the map so a
+				// concurrent user prompt waits instead of seeing "session not found".
 				while crate::session::inbox::has_inbox_messages()
 					&& sessions.borrow().contains_key(&session_id)
 				{
@@ -304,13 +322,22 @@ fn spawn_inbox_monitor(
 						session_id
 					);
 
+					// Acquire exclusion lock for this session. If prompt() is
+					// currently holding it (mid-API-call), we wait here until it
+					// releases — instead of removing an empty entry and racing.
+					let lock = session_locks
+						.borrow_mut()
+						.entry(session_id.clone())
+						.or_default()
+						.clone();
+					let _guard = lock.lock().await;
+
 					// Take session for exclusive access.
 					let entry = sessions.borrow_mut().remove(&session_id);
 					let (mut chat_session, session_cwd) = match entry {
 						Some(s) => s,
 						None => {
-							// Taken between check and remove. Put message back —
-							// prompt() will fire inbox_notify when it returns the session.
+							// Session truly gone (cleanup_session). Drop the message.
 							crate::session::inbox::push_inbox_message(inbox_msg);
 							return false;
 						}
@@ -574,6 +601,7 @@ impl agent_client_protocol::Agent for OctomindAgent {
 		spawn_inbox_monitor(
 			session_id.clone(),
 			Rc::clone(&self.sessions),
+			Rc::clone(&self.session_locks),
 			Rc::clone(&self.cancellations),
 			RefCell::new(self.config.borrow().clone()),
 			self.role.clone(),
@@ -634,6 +662,16 @@ impl agent_client_protocol::Agent for OctomindAgent {
 		// Wrap in session context so all session-scoped registries (schedule store,
 		// inbox, plan storage, etc.) route to this session's state.
 		crate::session::context::with_session_id(session_id.clone(), async {
+			// Acquire per-session exclusion lock for the duration of this prompt.
+			// The inbox monitor takes the same lock before processing scheduled
+			// or inbox messages, so the two never race on `sessions.remove()`.
+			// Without this, a monitor-driven API call in flight would leave the
+			// map empty and any concurrent user prompt would get
+			// `Invalid params: "session not found: ..."` (which the client then
+			// surfaces as a disconnect).
+			let lock = self.session_lock(&session_id);
+			let _guard = lock.lock().await;
+
 			// Slash commands are sent as regular prompts per the ACP spec.
 			// Intercept them here before the AI pipeline, execute via process_command,
 			// and stream the result back as an AgentMessageChunk.
@@ -855,19 +893,29 @@ impl agent_client_protocol::Agent for OctomindAgent {
 				}
 			}
 
-			// Process through layers (pre-processing step)
+			// Process through layers (pre-processing step).
+			// On error we MUST re-insert chat_session before returning — otherwise the
+			// session is permanently lost from self.sessions and every subsequent
+			// prompt to this session_id fails with "session not found".
 			let first_message_processed = !chat_session.session.messages.is_empty();
-			let (processed_input, layers_modified_session, layer_cancelled) =
-				process_layers_if_enabled(
-					&input,
-					&mut chat_session,
-					&config_for_role,
-					&self.role,
-					first_message_processed,
-					operation_rx.clone(),
-				)
-				.await
-				.map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))?;
+			let layer_result = process_layers_if_enabled(
+				&input,
+				&mut chat_session,
+				&config_for_role,
+				&self.role,
+				first_message_processed,
+				operation_rx.clone(),
+			)
+			.await;
+			let (processed_input, layers_modified_session, layer_cancelled) = match layer_result {
+				Ok(v) => v,
+				Err(e) => {
+					self.sessions
+						.borrow_mut()
+						.insert(session_id.clone(), (chat_session, session_cwd));
+					return Err(agent_client_protocol::Error::internal_error().data(e.to_string()));
+				}
+			};
 
 			if layer_cancelled {
 				self.sessions
@@ -1135,6 +1183,7 @@ impl agent_client_protocol::Agent for OctomindAgent {
 		spawn_inbox_monitor(
 			session_id.clone(),
 			Rc::clone(&self.sessions),
+			Rc::clone(&self.session_locks),
 			Rc::clone(&self.cancellations),
 			RefCell::new(self.config.borrow().clone()),
 			self.role.clone(),
