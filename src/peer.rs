@@ -198,7 +198,22 @@ pub fn is_under_git(rel: &Path) -> bool {
 /// Pausing only `.git/` (not the working tree) is correct — your source
 /// edits keep syncing, only the VCS metadata is held back until the
 /// in-progress operation finishes.
+///
+/// Staleness handling: a marker file older than `STALE_AFTER` is treated
+/// as garbage left over by a crashed git or a synx-induced sync (the bug
+/// before this guard existed). Pretending it's "busy" forever would
+/// deadlock recovery, so we deliberately ignore stale markers and let
+/// `.git/` sync resume. Real in-progress operations refresh markers
+/// far more often than this threshold — even an interactive rebase
+/// touching `done` / `git-rebase-todo` on every pick stays well inside
+/// the window.
 pub fn git_busy(root: &Path) -> bool {
+    use std::time::SystemTime;
+    /// Markers younger than this are treated as a live operation.
+    /// Older = stale, ignored. 10 min is well past any normal git step
+    /// and short enough that crash/leftover state self-heals.
+    const STALE_AFTER: Duration = Duration::from_secs(600);
+
     let git_dir = root.join(".git");
     // `.git` may not exist, may be a worktree pointer file, or a real dir.
     // We only handle the regular-dir case; worktrees are uncommon enough
@@ -216,12 +231,52 @@ pub fn git_busy(root: &Path) -> bool {
         "index.lock",
         "HEAD.lock",
     ];
+    let now = SystemTime::now();
     for m in MARKERS {
-        if git_dir.join(m).exists() {
+        let p = git_dir.join(m);
+        let Ok(meta) = fs::metadata(&p) else {
+            continue;
+        };
+        // For directories (rebase-merge, rebase-apply), use the newest
+        // mtime among contents — git rewrites files inside on every step,
+        // so the dir's own mtime can be older than its contents.
+        let age = newest_age(&p, &meta, now);
+        if age <= STALE_AFTER {
             return true;
         }
+        tracing::debug!(
+            "ignoring stale git marker {} (age {}s) — .git/ sync allowed",
+            p.display(),
+            age.as_secs()
+        );
     }
     false
+}
+
+/// Most-recent age across `p` and (if `p` is a directory) one level of
+/// children. Cheap — bounded `readdir`, no recursion. Falls back to the
+/// passed `meta` if any stat fails.
+fn newest_age(p: &Path, meta: &fs::Metadata, now: std::time::SystemTime) -> Duration {
+    let age_of = |m: &fs::Metadata| -> Duration {
+        m.modified()
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .unwrap_or_default()
+    };
+    let mut youngest = age_of(meta);
+    if meta.is_dir() {
+        if let Ok(rd) = fs::read_dir(p) {
+            for ent in rd.flatten() {
+                if let Ok(cm) = ent.metadata() {
+                    let a = age_of(&cm);
+                    if a < youngest {
+                        youngest = a;
+                    }
+                }
+            }
+        }
+    }
+    youngest
 }
 
 /// Remove tmp files left over from a previous crashed run.
