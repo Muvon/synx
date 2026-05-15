@@ -179,6 +179,51 @@ fn tmp_path() -> PathBuf {
     dir.join(format!("{}.{}", std::process::id(), nanos))
 }
 
+/// True iff `path` (relative to sync root) is `.git` or lies under `.git/`.
+/// Cheap path-component check — no filesystem access.
+pub fn is_under_git(rel: &Path) -> bool {
+    rel.components()
+        .next()
+        .map(|c| c.as_os_str() == ".git")
+        .unwrap_or(false)
+}
+
+/// True iff the sync root has a git operation in progress that would race
+/// with file-level sync of `.git/`. While any of these markers exist, we
+/// pause syncing of paths under `.git/` on both walk, push, and apply.
+///
+/// Why: git treats `.git/` as transactional state. Atomically renaming a
+/// ref while we mid-stream a different version of that ref from the peer
+/// causes "cannot lock ref" failures and breaks rebase/merge/cherry-pick.
+/// Pausing only `.git/` (not the working tree) is correct — your source
+/// edits keep syncing, only the VCS metadata is held back until the
+/// in-progress operation finishes.
+pub fn git_busy(root: &Path) -> bool {
+    let git_dir = root.join(".git");
+    // `.git` may not exist, may be a worktree pointer file, or a real dir.
+    // We only handle the regular-dir case; worktrees are uncommon enough
+    // that paying for them isn't worth the complexity now.
+    if !git_dir.is_dir() {
+        return false;
+    }
+    const MARKERS: &[&str] = &[
+        "rebase-merge",
+        "rebase-apply",
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
+        "index.lock",
+        "HEAD.lock",
+    ];
+    for m in MARKERS {
+        if git_dir.join(m).exists() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Remove tmp files left over from a previous crashed run.
 /// Age-based (> 1 hour) so we don't step on a concurrently-running synx.
 /// Cheap; safe to call at startup of both client and agent.
@@ -634,19 +679,15 @@ pub async fn live_loop<R, W>(
     compress: bool,
     is_client: bool,
     ignores: Arc<IgnoreStack>,
-    // Suppression + Pending are passed in (not constructed here) so any
-    // entries recorded during the initial sync — i.e. files we just wrote
-    // to disk — remain in scope when the watcher starts firing events.
-    // Without this, FSEvents/inotify events for init-sync writes have
-    // nothing to match in the suppression map and bounce back to the peer
-    // as spurious "local changes".
+    // Carried over from the init-sync apply phase: marks for every file we
+    // wrote during initial sync stay valid here (TTL 60s) so the watcher's
+    // FSEvents/inotify echoes for those writes are filtered, not bounced
+    // back to the peer as spurious local changes.
     suppress: Suppression,
     pending: Pending,
     // The watcher is spawned BEFORE the initial sync so events for files
-    // the user modifies during the walk/exchange window are captured and
-    // replayed after init sync completes (otherwise they're lost: notify
-    // uses "events since now" at registration time). Caller owns spawning
-    // it; we receive the live channel + keepalive here.
+    // the user modifies during the walk/exchange/apply window aren't lost.
+    // Caller owns spawning; we receive the live channel + keepalive here.
     watcher_handle: watcher::WatcherHandle,
 ) -> Result<()>
 where
@@ -698,8 +739,8 @@ where
                     Some(Ok(Message::Bye)) => break,
                     Some(Ok(m)) => {
                         // Per-op apply errors are non-fatal — log and
-                        // continue. Connection-level failures show up as
-                        // Err(...) from the reader task (next arm).
+                        // continue. Connection-level failures appear as
+                        // Err from the reader task (the next arm).
                         if let Err(e) = handle_incoming(&root, m, &suppress, &pending, compress, &writer, apply_remote, Some(&ignores), is_client).await {
                             tracing::warn!("apply failed: {}", e);
                             let mut w = writer.lock().await;
@@ -753,6 +794,33 @@ where
     // forwarded over SSH to the same terminal, so any logs there would just
     // duplicate the client's transcript.
     let log_event = is_client;
+    // If git is mid-operation locally, refuse to apply any change under
+    // `.git/`. Otherwise the peer (who may NOT be busy) would clobber our
+    // in-progress rebase/merge state and break ref locking.
+    let busy = git_busy(root);
+    let path_of = |m: &Message| -> Option<PathBuf> {
+        match m {
+            Message::FileData { entry, .. } => Some(entry.path.clone()),
+            Message::FileStart { entry, .. } => Some(entry.path.clone()),
+            Message::FileChunk { path, .. } => Some(path.clone()),
+            Message::FileEnd { path } => Some(path.clone()),
+            Message::MkDir { entry } => Some(entry.path.clone()),
+            Message::MkSymlink { entry } => Some(entry.path.clone()),
+            Message::Delete { path } => Some(path.clone()),
+            Message::Rename { from: _, to } => Some(to.clone()),
+            Message::Delta { entry, .. } => Some(entry.path.clone()),
+            Message::Touch { path, .. } => Some(path.clone()),
+            _ => None,
+        }
+    };
+    if busy {
+        if let Some(p) = path_of(&msg) {
+            if is_under_git(&p) {
+                tracing::debug!("git busy: skip incoming for {}", p.display());
+                return Ok(());
+            }
+        }
+    }
     match msg {
         Message::FileData { entry, content } => {
             if !apply_remote {
@@ -1015,7 +1083,7 @@ where
         Message::Pong => {}
         // Per-op error reported by the peer (type conflict, perm denied,
         // etc.). Log and keep the session alive — bailing would just
-        // trigger a reconnect that would repeat the same failure.
+        // trigger a reconnect that repeats the same failure.
         Message::Error(e) => tracing::warn!("peer error: {e}"),
         other => {
             tracing::debug!(
@@ -1092,10 +1160,24 @@ where
     // forwarded over SSH stderr and duplicate every transfer line.
     let log_event = is_client;
     let events = coalesce(events);
+    // Once per batch: if git is mid-operation, suppress every event that
+    // touches .git/. Prevents partial rebase/merge state from leaking to
+    // the peer where it would race with the peer's own ref updates.
+    let pause_git = git_busy(root);
     for ev in events {
         if suppress.is_echo(root, &ev) {
             tracing::trace!("echo suppressed: {:?}", ev);
             continue;
+        }
+        if pause_git {
+            let key = match &ev {
+                FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => p,
+                FsEvent::Renamed { to, .. } => to,
+            };
+            if is_under_git(key) {
+                tracing::debug!("git busy: skip event {:?}", ev);
+                continue;
+            }
         }
 
         match ev {

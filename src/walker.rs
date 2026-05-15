@@ -122,9 +122,18 @@ pub fn build_entry(
 /// Walk `root` in parallel (multi-threaded via `ignore`), returning a
 /// fully-hashed manifest sorted by path. The cache is updated in-place; the
 /// caller should call `HashCache::save` afterwards.
+///
+/// If git is mid-operation (rebase / merge / cherry-pick / pending ref
+/// lock — see `peer::git_busy`), `.git/` is excluded from the walk. The
+/// manifest exchange and diff plan won't see VCS metadata in this state,
+/// so no sync of `.git/` is attempted until git finishes.
 pub fn walk_manifest(root: &Path, cache: &Arc<Mutex<HashCache>>) -> Result<Vec<Entry>> {
     let (tx, rx) = std::sync::mpsc::channel::<Entry>();
     let root_arc = Arc::new(root.to_path_buf());
+    let skip_git = crate::peer::git_busy(root);
+    if skip_git {
+        tracing::info!("git operation in progress — excluding .git/ from this walk");
+    }
 
     build_walker(root).build_parallel().run(|| {
         let tx = tx.clone();
@@ -146,6 +155,10 @@ pub fn walk_manifest(root: &Path, cache: &Arc<Mutex<HashCache>>) -> Result<Vec<E
                 Ok(r) => r.to_path_buf(),
                 Err(_) => return WalkState::Continue,
             };
+            if skip_git && crate::peer::is_under_git(&rel) {
+                // Skip the .git entry itself AND all descendants.
+                return WalkState::Skip;
+            }
             match build_entry(&root, &rel, Some(&*cache)) {
                 Ok(Some(e)) => {
                     let _ = tx.send(e);

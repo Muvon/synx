@@ -151,11 +151,12 @@ async fn run_inner(
     writer: Arc<Mutex<BufWriter<ChildStdin>>>,
     mut child: tokio::process::Child,
 ) -> Result<()> {
-    // Suppression and the watcher are constructed BEFORE the walk so that
-    // any user edits during the walk / manifest exchange / init-sync apply
-    // window are captured by the watcher (notify uses "events since now"
-    // at registration time — events before then are lost). We hold them in
-    // their channel until init sync completes, then drain and forward.
+    // Spawn the watcher BEFORE the walk so events for files the user
+    // modifies during walk / manifest exchange / init-sync apply aren't
+    // lost (notify uses "events since now" at registration; events from
+    // before are never delivered). Events queue in the unbounded channel
+    // until init sync completes, then we drain + replay them with the
+    // suppress map populated.
     let suppress = Suppression::default();
     let pending = Pending::default();
     let mut watcher_handle = watcher::spawn(local_root.clone(), suppress.clone())?;
@@ -465,12 +466,11 @@ async fn run_inner(
     });
 
     // Receive: apply incoming server responses until peer SyncDone.
+    // Per-op apply errors during init sync are non-fatal — bailing here
+    // would tear down the session and the reconnect loop would hit the
+    // same error forever.
     let mut bytes_recv: u64 = 0;
     let mut received_files: u64 = 0;
-    // Per-op apply errors during init-sync are non-fatal. A single bad file
-    // (type conflict, permission denied) should not tear down the whole
-    // session — the outer reconnect loop would just retry it and hit the
-    // exact same failure forever. Log and continue.
     let warn_apply = |path: &std::path::Path, e: &anyhow::Error| {
         tracing::warn!("apply {} failed: {}", path.display(), e);
     };
@@ -603,9 +603,9 @@ async fn run_inner(
                 }
             }
             Message::SyncDone => break,
-            // Remote reported a per-op failure (file conflict, perm denied,
-            // etc.). Log and continue — bailing here would just trigger a
-            // reconnect that hits the same error.
+            // Remote reported a per-op failure (type conflict, perm denied,
+            // git busy on its side). Log and continue — bailing here would
+            // tear down the session and retry forever.
             Message::Error(e) => tracing::warn!("remote: {e}"),
             Message::Bye => return Ok(()),
             _ => tracing::debug!("ignored msg in init-sync recv"),
