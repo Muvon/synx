@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::ignores::IgnoreStack;
+use crate::peer::Suppression;
 
 /// What our higher layers care about, regardless of platform quirks.
 #[derive(Debug, Clone)]
@@ -24,7 +25,7 @@ pub struct WatcherHandle {
     pub keepalive: Debouncer<notify::RecommendedWatcher, FileIdMap>,
 }
 
-pub fn spawn(root: PathBuf) -> Result<WatcherHandle> {
+pub fn spawn(root: PathBuf, suppress: Suppression) -> Result<WatcherHandle> {
     let (tx, rx) = mpsc::unbounded_channel::<Vec<FsEvent>>();
     let root_cb = root.clone();
     let ignores = Arc::new(IgnoreStack::load(&root));
@@ -52,13 +53,17 @@ pub fn spawn(root: PathBuf) -> Result<WatcherHandle> {
                                 let from_ig = ignores.is_ignored_abs(&paths[0], false);
                                 let to_ig = ignores.is_ignored_abs(&paths[1], false);
                                 match (from_ig, to_ig) {
-                                    // Both tracked: a real rename.
-                                    (false, false) => out.push(FsEvent::Renamed { from, to }),
-                                    // Renamed INTO ignored zone: looks like a delete to us.
-                                    (false, true) => out.push(FsEvent::Removed(from)),
-                                    // Renamed OUT of ignored zone: looks like a new file.
+                                    (false, false) => {
+                                        // A rename means the source is gone from
+                                        // its old location, conceptually deleted.
+                                        suppress.mark_deleted(from.clone());
+                                        out.push(FsEvent::Renamed { from, to });
+                                    }
+                                    (false, true) => {
+                                        suppress.mark_deleted(from.clone());
+                                        out.push(FsEvent::Removed(from));
+                                    }
                                     (true, false) => out.push(FsEvent::Created(to)),
-                                    // Both ignored: nothing to sync.
                                     (true, true) => {}
                                 }
                             }
@@ -76,14 +81,38 @@ pub fn spawn(root: PathBuf) -> Result<WatcherHandle> {
                                     .then_some(false)
                                     .unwrap_or_else(|| path.is_dir());
                                 if ignores.is_ignored_abs(path, is_dir) {
+                                    tracing::debug!(
+                                        "watcher: IGNORED {:?} {}",
+                                        kind,
+                                        rel.display()
+                                    );
                                     continue;
                                 }
                                 let fsev = match kind {
                                     EventKind::Create(_) => FsEvent::Created(rel),
                                     EventKind::Modify(_) => FsEvent::Modified(rel),
                                     EventKind::Remove(_) => FsEvent::Removed(rel),
-                                    _ => continue,
+                                    other => {
+                                        tracing::debug!(
+                                            "watcher: SKIPPED kind={:?} path={}",
+                                            other,
+                                            path.display()
+                                        );
+                                        continue;
+                                    }
                                 };
+                                tracing::debug!("watcher: emit {:?}", fsev);
+                                // Eagerly tell the suppression map about
+                                // deletions. This closes the window where a
+                                // stale `FileData` echo from the peer could
+                                // arrive AFTER the user's `rm` but BEFORE our
+                                // debouncer fires the Removed event — without
+                                // this, the receiver-side stale-create guard
+                                // hasn't been armed yet, and the file would
+                                // get resurrected.
+                                if let FsEvent::Removed(p) = &fsev {
+                                    suppress.mark_deleted(p.clone());
+                                }
                                 out.push(fsev);
                             }
                         }

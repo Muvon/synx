@@ -204,7 +204,7 @@ async fn run_inner(
                 let mt = entry.mtime;
                 let path = entry.path.clone();
                 apply_file_data(&local_root, &entry, &content)?;
-                suppress.mark_mtime(path, mt).await;
+                suppress.mark_mtime(path, mt);
             }
             Message::FileStart { entry, .. } => pending.start(&local_root, entry).await?,
             Message::FileChunk { path, data } => {
@@ -214,7 +214,7 @@ async fn run_inner(
             Message::FileEnd { path } => {
                 if let Some(entry) = pending.end(&local_root, &path).await? {
                     received_files += 1;
-                    suppress.mark_mtime(entry.path, entry.mtime).await;
+                    suppress.mark_mtime(entry.path, entry.mtime);
                 }
             }
             Message::MkDir { entry } => {
@@ -227,7 +227,7 @@ async fn run_inner(
                         m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
                     })
                     .unwrap_or(entry.mtime);
-                suppress.mark_mtime(path, mt).await;
+                suppress.mark_mtime(path, mt);
             }
             Message::MkSymlink { entry } => {
                 let path = entry.path.clone();
@@ -239,15 +239,15 @@ async fn run_inner(
                         m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
                     })
                     .unwrap_or(entry.mtime);
-                suppress.mark_mtime(path, mt).await;
+                suppress.mark_mtime(path, mt);
             }
             Message::Delete { path } => {
                 apply_delete(&local_root, &path)?;
-                suppress.mark_deleted(path).await;
+                suppress.mark_deleted(path);
             }
             Message::Rename { from, to } => {
                 apply_rename(&local_root, &from, &to)?;
-                suppress.mark_deleted(from).await;
+                suppress.mark_deleted(from);
                 let mt = std::fs::symlink_metadata(local_root.join(&to))
                     .ok()
                     .map(|m| {
@@ -255,7 +255,7 @@ async fn run_inner(
                         m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
                     })
                     .unwrap_or(0);
-                suppress.mark_mtime(to, mt).await;
+                suppress.mark_mtime(to, mt);
             }
             Message::SyncDone => break,
             Message::Error(e) => anyhow::bail!("remote: {e}"),

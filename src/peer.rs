@@ -338,31 +338,45 @@ enum ApplyState {
     Deleted,
 }
 
+/// Synchronous suppression map — uses `std::sync::Mutex` so the watcher's
+/// notify thread can update it eagerly (before debouncing) and so all
+/// methods are callable from both sync and async contexts without holding
+/// an async lock across awaits.
 #[derive(Default, Clone)]
 pub struct Suppression {
-    inner: Arc<Mutex<HashMap<PathBuf, (ApplyState, Instant)>>>,
+    inner: Arc<std::sync::Mutex<HashMap<PathBuf, (ApplyState, Instant)>>>,
 }
 
 impl Suppression {
-    pub async fn mark_mtime(&self, path: PathBuf, mtime_ns: i64) {
-        self.inner
-            .lock()
-            .await
-            .insert(path, (ApplyState::Mtime(mtime_ns), Instant::now()));
+    pub fn mark_mtime(&self, path: PathBuf, mtime_ns: i64) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.insert(path, (ApplyState::Mtime(mtime_ns), Instant::now()));
+        }
     }
-    pub async fn mark_deleted(&self, path: PathBuf) {
-        self.inner
-            .lock()
-            .await
-            .insert(path, (ApplyState::Deleted, Instant::now()));
+    pub fn mark_deleted(&self, path: PathBuf) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.insert(path, (ApplyState::Deleted, Instant::now()));
+        }
+    }
+
+    /// True if we recently deleted (or sent a delete for) this path.
+    /// Used by the receiver to drop stale `FileData`/`MkDir`/etc. that the
+    /// peer dispatched before it had processed our deletion.
+    pub fn is_recently_deleted(&self, path: &Path) -> bool {
+        let Ok(g) = self.inner.lock() else {
+            return false;
+        };
+        matches!(g.get(path), Some((ApplyState::Deleted, _)))
     }
 
     /// True if this event is the echo of our own previous apply — i.e. the
     /// path's current state still matches what we recorded. If the user has
     /// since modified or recreated the path, this returns false and the
     /// event is processed.
-    pub async fn is_echo(&self, root: &Path, ev: &FsEvent) -> bool {
-        let mut g = self.inner.lock().await;
+    pub fn is_echo(&self, root: &Path, ev: &FsEvent) -> bool {
+        let Ok(mut g) = self.inner.lock() else {
+            return false;
+        };
         let now = Instant::now();
         g.retain(|_, (_, t)| now.duration_since(*t) < SUPPRESS_TTL);
 
@@ -381,7 +395,6 @@ impl Suppression {
                 cur != 0 && cur == *expected
             }
             (ApplyState::Deleted, FsEvent::Removed(_)) => !root.join(key).exists(),
-            // State + event don't match → the user must have changed the path.
             _ => false,
         }
     }
@@ -435,13 +448,17 @@ where
         }
     });
 
+    let suppress = Suppression::default();
+    let pending = Pending::default();
+
+    // The watcher must share our suppression map so it can mark Deleted
+    // eagerly (in its notify-thread callback) before debouncing. Otherwise a
+    // peer's stale `FileData` arriving after the user's `rm` but before our
+    // debouncer fires would resurrect the file.
     let watcher::WatcherHandle {
         events: mut event_rx,
         keepalive: _watcher,
-    } = watcher::spawn(root.clone())?;
-
-    let suppress = Suppression::default();
-    let pending = Pending::default();
+    } = watcher::spawn(root.clone(), suppress.clone())?;
 
     let sigint = tokio::signal::ctrl_c();
     tokio::pin!(sigint);
@@ -522,13 +539,28 @@ where
             // Receiver dedup: if our disk already has this exact content,
             // skip the write entirely (and the noisy log line).
             if is_already_equal(root, &entry) {
-                suppress.mark_mtime(entry.path.clone(), entry.mtime).await;
+                let mt = lstat_mtime_ns(&root.join(&entry.path));
+                suppress.mark_mtime(entry.path.clone(), mt);
                 tracing::trace!("dedup (recv FileData): {}", entry.path.display());
+                return Ok(());
+            }
+            // Stale-create guard: peer is sending us a file we just deleted.
+            // Their FileData was already on the wire when our Delete arrived,
+            // so drop it instead of resurrecting the file the user removed.
+            let full = root.join(&entry.path);
+            if !full.exists() && suppress.is_recently_deleted(&entry.path) {
+                tracing::debug!(
+                    "dropping stale FileData after delete: {}",
+                    entry.path.display()
+                );
                 return Ok(());
             }
             let size = content.len();
             apply_file_data(root, &entry, &content)?;
-            suppress.mark_mtime(entry.path.clone(), entry.mtime).await;
+            // Use the *actual* on-disk mtime so our own watcher's echo of
+            // this write matches exactly (set_file_mtime may be FS-rounded).
+            let mt = lstat_mtime_ns(&full);
+            suppress.mark_mtime(entry.path.clone(), mt);
             if log_event {
                 eprintln!(
                     "  {} {}  {}",
@@ -550,8 +582,18 @@ where
             // don't open a tmp file — subsequent chunks for this path become
             // no-ops (Pending::chunk silently drops chunks for unknown paths).
             if is_already_equal(root, &entry) {
-                suppress.mark_mtime(entry.path.clone(), entry.mtime).await;
+                let mt = lstat_mtime_ns(&root.join(&entry.path));
+                suppress.mark_mtime(entry.path.clone(), mt);
                 tracing::trace!("dedup (recv FileStart): {}", entry.path.display());
+                return Ok(());
+            }
+            // Stale-create guard (chunked transfer variant).
+            let full = root.join(&entry.path);
+            if !full.exists() && suppress.is_recently_deleted(&entry.path) {
+                tracing::debug!(
+                    "dropping stale FileStart after delete: {}",
+                    entry.path.display()
+                );
                 return Ok(());
             }
             pending.start(root, entry).await?;
@@ -573,7 +615,8 @@ where
                 return Ok(());
             }
             if let Some(entry) = pending.end(root, &path).await? {
-                suppress.mark_mtime(entry.path.clone(), entry.mtime).await;
+                let mt = lstat_mtime_ns(&root.join(&entry.path));
+                suppress.mark_mtime(entry.path.clone(), mt);
                 if log_event {
                     eprintln!(
                         "  {} {}  {}",
@@ -594,14 +637,22 @@ where
             }
             if is_already_equal(root, &entry) {
                 let mt = lstat_mtime_ns(&root.join(&entry.path));
-                suppress.mark_mtime(entry.path.clone(), mt).await;
+                suppress.mark_mtime(entry.path.clone(), mt);
+                return Ok(());
+            }
+            let full = root.join(&entry.path);
+            if !full.exists() && suppress.is_recently_deleted(&entry.path) {
+                tracing::debug!(
+                    "dropping stale MkDir after delete: {}",
+                    entry.path.display()
+                );
                 return Ok(());
             }
             apply_mkdir(root, &entry)?;
             // Use the actual on-disk mtime (dir mtime changes whenever
             // children are added) so future echoes match precisely.
-            let mt = lstat_mtime_ns(&root.join(&entry.path));
-            suppress.mark_mtime(entry.path, mt).await;
+            let mt = lstat_mtime_ns(&full);
+            suppress.mark_mtime(entry.path, mt);
         }
         Message::MkSymlink { entry } => {
             if !apply_remote {
@@ -612,12 +663,20 @@ where
             }
             if is_already_equal(root, &entry) {
                 let mt = lstat_mtime_ns(&root.join(&entry.path));
-                suppress.mark_mtime(entry.path.clone(), mt).await;
+                suppress.mark_mtime(entry.path.clone(), mt);
+                return Ok(());
+            }
+            let full = root.join(&entry.path);
+            if !full.exists() && suppress.is_recently_deleted(&entry.path) {
+                tracing::debug!(
+                    "dropping stale MkSymlink after delete: {}",
+                    entry.path.display()
+                );
                 return Ok(());
             }
             apply_symlink(root, &entry)?;
-            let mt = lstat_mtime_ns(&root.join(&entry.path));
-            suppress.mark_mtime(entry.path, mt).await;
+            let mt = lstat_mtime_ns(&full);
+            suppress.mark_mtime(entry.path, mt);
         }
         Message::Delete { path } => {
             if !apply_remote {
@@ -628,12 +687,12 @@ where
             }
             let existed_before = fs::symlink_metadata(root.join(&path)).is_ok();
             apply_delete(root, &path)?;
-            suppress.mark_deleted(path.clone()).await;
+            suppress.mark_deleted(path.clone());
             if existed_before && log_event {
                 eprintln!(
                     "  {} {}",
                     "←".bright_cyan(),
-                    format!("delete {}", path.display()).dimmed()
+                    format!("× {}", path.display())
                 );
             }
         }
@@ -649,10 +708,21 @@ where
                 );
                 return Ok(());
             }
+            // Stale-rename guard: if the source is gone because we just
+            // deleted it, a Rename(from, to) is meaningless — drop it.
+            let from_full = root.join(&from);
+            if !from_full.exists() && suppress.is_recently_deleted(&from) {
+                tracing::debug!(
+                    "dropping stale Rename after delete: {} → {}",
+                    from.display(),
+                    to.display()
+                );
+                return Ok(());
+            }
             apply_rename(root, &from, &to)?;
-            suppress.mark_deleted(from).await;
+            suppress.mark_deleted(from);
             let mt = lstat_mtime_ns(&root.join(&to));
-            suppress.mark_mtime(to, mt).await;
+            suppress.mark_mtime(to, mt);
         }
         Message::FileGet { path } => {
             if ignored(ignores, &path, false) && ignored(ignores, &path, true) {
@@ -728,7 +798,7 @@ where
     let log_event = is_client;
     let events = coalesce(events);
     for ev in events {
-        if suppress.is_echo(root, &ev).await {
+        if suppress.is_echo(root, &ev) {
             tracing::trace!("echo suppressed: {:?}", ev);
             continue;
         }
@@ -737,8 +807,26 @@ where
             FsEvent::Created(p) | FsEvent::Modified(p) => {
                 let entry = match build_entry(root, &p, None)? {
                     Some(e) => e,
-                    None => continue,
+                    None => {
+                        // The path doesn't exist anymore. This commonly
+                        // happens when a Remove + Modify fire in the same
+                        // debouncer batch and coalesce kept the Modify
+                        // (FSEvents on macOS is chatty during `rm`). The
+                        // user's intent is a delete — treat it as such.
+                        if log_event {
+                            eprintln!("  {} {}", "→".bright_green(), format!("× {}", p.display()));
+                        }
+                        {
+                            let mut w = writer.lock().await;
+                            write_message(&mut *w, &Message::Delete { path: p.clone() }, compress)
+                                .await?;
+                        }
+                        suppress.mark_deleted(p);
+                        continue;
+                    }
                 };
+                let path_clone = entry.path.clone();
+                let entry_mtime = entry.mtime;
                 match entry.kind {
                     EntryKind::Dir => {
                         let mut w = writer.lock().await;
@@ -761,17 +849,24 @@ where
                         send_file(writer, root, &entry, compress).await?;
                     }
                 }
+                // Mark our own outgoing state. Catches two cases on the
+                // receive side later: (a) the peer echoes our payload back,
+                // and (b) if the user then deletes & we get a stale Create
+                // back, we know to drop it.
+                suppress.mark_mtime(path_clone, entry_mtime);
             }
             FsEvent::Removed(p) => {
                 if log_event {
-                    eprintln!(
-                        "  {} {}",
-                        "→".bright_green(),
-                        format!("delete {}", p.display()).dimmed()
-                    );
+                    eprintln!("  {} {}", "→".bright_green(), format!("× {}", p.display()));
                 }
-                let mut w = writer.lock().await;
-                write_message(&mut *w, &Message::Delete { path: p }, compress).await?;
+                {
+                    let mut w = writer.lock().await;
+                    write_message(&mut *w, &Message::Delete { path: p.clone() }, compress).await?;
+                }
+                // Record that *we* deleted this — receiver dedup uses this
+                // to drop stale FileData / MkDir for the same path arriving
+                // out-of-order from the peer.
+                suppress.mark_deleted(p);
             }
             FsEvent::Renamed { from, to } => {
                 {
@@ -787,6 +882,7 @@ where
                     .await?;
                 }
                 if let Some(entry) = build_entry(root, &to, None)? {
+                    let to_mtime = entry.mtime;
                     match entry.kind {
                         EntryKind::File => {
                             send_file(writer, root, &entry, compress).await?;
@@ -800,7 +896,9 @@ where
                             write_message(&mut *w, &Message::MkSymlink { entry }, compress).await?;
                         }
                     }
+                    suppress.mark_mtime(to.clone(), to_mtime);
                 }
+                suppress.mark_deleted(from.clone());
                 if log_event {
                     eprintln!(
                         "  {} {} → {}",
