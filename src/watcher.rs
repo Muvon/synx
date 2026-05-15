@@ -1,6 +1,6 @@
 use anyhow::Result;
-use notify::{EventKind, RecursiveMode, Watcher};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
+use notify::{EventKind, RecursiveMode};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,7 +22,7 @@ pub struct WatcherHandle {
     pub events: mpsc::UnboundedReceiver<Vec<FsEvent>>,
     /// Held to keep the debouncer + watcher threads alive for the
     /// duration of the live session. Dropped on shutdown.
-    pub keepalive: Debouncer<notify::RecommendedWatcher, FileIdMap>,
+    pub keepalive: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
 }
 
 pub fn spawn(root: PathBuf, suppress: Suppression) -> Result<WatcherHandle> {
@@ -130,7 +130,8 @@ pub fn spawn(root: PathBuf, suppress: Suppression) -> Result<WatcherHandle> {
         },
     )?;
 
-    debouncer.watcher().watch(&root, RecursiveMode::Recursive)?;
+    // 0.7: direct .watch() on the Debouncer instead of .watcher().watch().
+    debouncer.watch(&root, RecursiveMode::Recursive)?;
 
     Ok(WatcherHandle {
         events: rx,

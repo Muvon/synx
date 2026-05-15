@@ -27,7 +27,12 @@ impl HashCache {
             return Self::default();
         };
         match fs::read(&path) {
-            Ok(bytes) => bincode::deserialize(&bytes).unwrap_or_default(),
+            // bincode 2 returns (value, bytes_consumed); we only want the value.
+            // `config::legacy()` keeps the on-disk format compatible with what
+            // bincode 1 wrote, so existing caches still decode.
+            Ok(bytes) => bincode::serde::decode_from_slice(&bytes, bincode::config::legacy())
+                .map(|(v, _)| v)
+                .unwrap_or_default(),
             Err(_) => Self::default(),
         }
     }
@@ -39,7 +44,7 @@ impl HashCache {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        if let Ok(bytes) = bincode::serialize(self) {
+        if let Ok(bytes) = bincode::serde::encode_to_vec(self, bincode::config::legacy()) {
             let _ = fs::write(&path, bytes);
         }
     }
