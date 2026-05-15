@@ -156,9 +156,14 @@ pub fn apply_rename(root: &Path, from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Where our tmp files live. `$TMPDIR/synx/` on Unix.
+/// Where our tmp files live. `~/.synx/tmp/`. Same filesystem as the user's
+/// home directory, which on any normal Unix install is the same filesystem
+/// as their work dirs — so `rename(2)` to the sync target is atomic.
 fn tmp_dir() -> PathBuf {
-    std::env::temp_dir().join("synx")
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".synx")
+        .join("tmp")
 }
 
 /// Allocate a fresh tmp path in the system tmp dir.
@@ -268,20 +273,21 @@ pub fn apply_delta_to_file(
 
 /// Move `tmp` into place at `final_path` and stamp mode + mtime.
 ///
-/// Prefers `rename(2)` (atomic). On EXDEV (tmp and target are on different
-/// filesystems — common when `$TMPDIR` is `/tmp` on a separate mount or
-/// tmpfs) we fall back to `copy + remove`. That fallback is NOT atomic:
-/// a reader can see partial content during the copy, and a crash mid-copy
-/// leaves a truncated destination. Acceptable trade-off for a dev sync tool.
+/// Uses `rename(2)` only — atomic. Tmp lives under `~/.synx/tmp/`, target
+/// lives under the user's sync root; on a normal install both are on the
+/// home filesystem so rename succeeds. If they aren't (target on a
+/// different mount), rename fails with EXDEV and the error propagates —
+/// loud failure rather than a silent non-atomic fallback.
 fn finalize_path(tmp: &Path, final_path: &Path, mode: u32, mtime: i64) -> Result<()> {
     let _ = fs::set_permissions(tmp, fs::Permissions::from_mode(mode));
-    if fs::rename(tmp, final_path).is_err() {
-        fs::copy(tmp, final_path).with_context(|| {
-            format!("copy {} → {}", tmp.display(), final_path.display())
-        })?;
-        let _ = fs::remove_file(tmp);
-        let _ = fs::set_permissions(final_path, fs::Permissions::from_mode(mode));
-    }
+    fs::rename(tmp, final_path).with_context(|| {
+        format!(
+            "rename {} → {} (if this is EXDEV, the sync target is on a different filesystem than $HOME — \
+             set TMPDIR to a path on the same fs as your target)",
+            tmp.display(),
+            final_path.display()
+        )
+    })?;
     let ft = filetime::FileTime::from_unix_time(
         mtime.div_euclid(1_000_000_000),
         mtime.rem_euclid(1_000_000_000) as u32,

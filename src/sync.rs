@@ -130,7 +130,15 @@ async fn run_session(
         m => anyhow::bail!("unexpected handshake reply: {:?}", m),
     }
 
-    run_inner(local_root.to_path_buf(), args.clone(), compress, reader, writer, child).await
+    run_inner(
+        local_root.to_path_buf(),
+        args.clone(),
+        compress,
+        reader,
+        writer,
+        child,
+    )
+    .await
 }
 
 async fn run_inner(
