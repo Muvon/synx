@@ -997,24 +997,52 @@ where
     Ok(())
 }
 
-/// Collapse a batch of watcher events down to at most one event per path
-/// (keeping the most recent — e.g. Create+Modify on the same file becomes
-/// one Modify). Renames are keyed on their destination path.
+/// Collapse a batch of watcher events to at most one per path.
+///
+/// Per-path policy:
+///   - First event is `Created` AND last event is `Removed` → **drop the
+///     whole path**. The file lived and died inside the debouncer window;
+///     it's an ephemeral artifact (Vim's `4913` probe, atomic-write tmps,
+///     IDE scratch files). Sending a Delete for something the peer never
+///     saw is noise.
+///   - Otherwise → keep the last event (most recent state wins).
+///
+/// Renames are keyed on their destination path.
 fn coalesce(events: Vec<FsEvent>) -> Vec<FsEvent> {
+    use std::collections::HashSet;
+
     let key_of = |ev: &FsEvent| -> PathBuf {
         match ev {
             FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => p.clone(),
             FsEvent::Renamed { to, .. } => to.clone(),
         }
     };
-    let mut last_idx: HashMap<PathBuf, usize> = HashMap::new();
+
+    // For each path, remember the first and last event indices in this batch.
+    let mut first_last: HashMap<PathBuf, (usize, usize)> = HashMap::new();
     for (i, ev) in events.iter().enumerate() {
-        last_idx.insert(key_of(ev), i);
+        let key = key_of(ev);
+        first_last
+            .entry(key)
+            .and_modify(|(_, last)| *last = i)
+            .or_insert((i, i));
     }
+
+    let mut keep: HashSet<usize> = HashSet::with_capacity(first_last.len());
+    for &(first, last) in first_last.values() {
+        if matches!(events[first], FsEvent::Created(_))
+            && matches!(events[last], FsEvent::Removed(_))
+        {
+            // Ephemeral: created and gone before we even fired. Skip entirely.
+            continue;
+        }
+        keep.insert(last);
+    }
+
     events
         .into_iter()
         .enumerate()
-        .filter(|(i, ev)| last_idx.get(&key_of(ev)) == Some(i))
+        .filter(|(i, _)| keep.contains(i))
         .map(|(_, ev)| ev)
         .collect()
 }

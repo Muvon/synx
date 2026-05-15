@@ -3,7 +3,7 @@ name = "synx"
 version = "0.1.0"
 edition = "2021"
 description = "Fast, real-time bidirectional file sync over SSH"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 authors = ["Muvon"]
 readme = "README.md"
 
