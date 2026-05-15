@@ -122,9 +122,11 @@ impl CostTracker {
 		let tokens_saved = format!("{}", metrics.tokens_saved).bright_green();
 		let ratio_pct = format!("{:.1}%", metrics.compression_ratio * 100.0).bright_yellow();
 
-		// Display with consistent separator style matching cost display
+		// Display with consistent dot style matching cost display
+		let dot = "·".bright_black();
 		log_info!(
-			" ── {} compression: {} msgs → {} tokens saved ({} reduction) ──",
+			"{} {} compression: {} msgs → {} tokens saved ({} reduction)",
+			dot,
 			type_label,
 			msgs_removed,
 			tokens_saved,
