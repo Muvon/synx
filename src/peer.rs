@@ -621,6 +621,20 @@ pub async fn live_loop<R, W>(
     compress: bool,
     is_client: bool,
     ignores: Arc<IgnoreStack>,
+    // Suppression + Pending are passed in (not constructed here) so any
+    // entries recorded during the initial sync — i.e. files we just wrote
+    // to disk — remain in scope when the watcher starts firing events.
+    // Without this, FSEvents/inotify events for init-sync writes have
+    // nothing to match in the suppression map and bounce back to the peer
+    // as spurious "local changes".
+    suppress: Suppression,
+    pending: Pending,
+    // The watcher is spawned BEFORE the initial sync so events for files
+    // the user modifies during the walk/exchange window are captured and
+    // replayed after init sync completes (otherwise they're lost: notify
+    // uses "events since now" at registration time). Caller owns spawning
+    // it; we receive the live channel + keepalive here.
+    watcher_handle: watcher::WatcherHandle,
 ) -> Result<()>
 where
     R: AsyncRead + AsyncReadExt + Unpin + Send + 'static,
@@ -647,17 +661,10 @@ where
         }
     });
 
-    let suppress = Suppression::default();
-    let pending = Pending::default();
-
-    // The watcher must share our suppression map so it can mark Deleted
-    // eagerly (in its notify-thread callback) before debouncing. Otherwise a
-    // peer's stale `FileData` arriving after the user's `rm` but before our
-    // debouncer fires would resurrect the file.
     let watcher::WatcherHandle {
         events: mut event_rx,
         keepalive: _watcher,
-    } = watcher::spawn(root.clone(), suppress.clone())?;
+    } = watcher_handle;
 
     let sigint = tokio::signal::ctrl_c();
     tokio::pin!(sigint);
@@ -1047,7 +1054,7 @@ fn coalesce(events: Vec<FsEvent>) -> Vec<FsEvent> {
         .collect()
 }
 
-async fn forward_local_events<W>(
+pub async fn forward_local_events<W>(
     root: &Path,
     events: Vec<FsEvent>,
     writer: &Arc<Mutex<W>>,

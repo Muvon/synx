@@ -17,13 +17,15 @@ use crate::cli::ClientArgs;
 use crate::ignores::IgnoreStack;
 use crate::peer::{
     apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
-    compute_delta, compute_signature, live_loop, send_file, Pending, Suppression,
+    compute_delta, compute_signature, forward_local_events, live_loop, send_file, Pending,
+    Suppression,
 };
 use crate::protocol::{
     read_message, write_message, Entry, EntryKind, Message, SyncMode, PROTOCOL_VERSION,
 };
 use crate::transport::{parse_remote, spawn_ssh};
 use crate::walker::{ensure_root, walk_manifest};
+use crate::watcher;
 
 pub async fn run(args: ClientArgs) -> Result<()> {
     let local_root = ensure_root(std::path::Path::new(&args.local))
@@ -149,6 +151,15 @@ async fn run_inner(
     writer: Arc<Mutex<BufWriter<ChildStdin>>>,
     mut child: tokio::process::Child,
 ) -> Result<()> {
+    // Suppression and the watcher are constructed BEFORE the walk so that
+    // any user edits during the walk / manifest exchange / init-sync apply
+    // window are captured by the watcher (notify uses "events since now"
+    // at registration time — events before then are lost). We hold them in
+    // their channel until init sync completes, then drain and forward.
+    let suppress = Suppression::default();
+    let pending = Pending::default();
+    let mut watcher_handle = watcher::spawn(local_root.clone(), suppress.clone())?;
+
     // ── Local manifest (parallel walk with hash cache) ──
     let cache = Arc::new(StdMutex::new(HashCache::load(&local_root)));
     let started = Instant::now();
@@ -454,8 +465,6 @@ async fn run_inner(
     });
 
     // Receive: apply incoming server responses until peer SyncDone.
-    let pending = Pending::default();
-    let suppress = Suppression::default();
     let mut bytes_recv: u64 = 0;
     let mut received_files: u64 = 0;
     loop {
@@ -590,9 +599,31 @@ async fn run_inner(
         return Ok(());
     }
 
+    // Drain any watcher events that accumulated during the walk + manifest
+    // exchange + init-sync apply. With suppress now populated for every
+    // file we just wrote, echoes of our own writes filter out and real
+    // user edits made during the startup window flow through to the peer.
+    let mut buffered: Vec<crate::watcher::FsEvent> = Vec::new();
+    while let Ok(batch) = watcher_handle.events.try_recv() {
+        buffered.extend(batch);
+    }
+    if !buffered.is_empty() {
+        tracing::debug!("draining {} buffered watcher events", buffered.len());
+        forward_local_events(&local_root, buffered, &writer, compress, &suppress, true).await?;
+    }
+
     crate::ui::info("watching for changes — ctrl+c to stop");
     let result = live_loop(
-        local_root, reader, writer, args.mode, compress, true, ignores,
+        local_root,
+        reader,
+        writer,
+        args.mode,
+        compress,
+        true,
+        ignores,
+        suppress,
+        pending,
+        watcher_handle,
     )
     .await;
     let _ = child.wait().await;

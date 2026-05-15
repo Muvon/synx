@@ -15,10 +15,12 @@ use crate::cache::HashCache;
 use crate::ignores::IgnoreStack;
 use crate::peer::{
     apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
-    cleanup_orphan_tmps, compute_delta, compute_signature, live_loop, send_file, Pending,
+    cleanup_orphan_tmps, compute_delta, compute_signature, forward_local_events, live_loop,
+    send_file, Pending, Suppression,
 };
 use crate::protocol::{read_message, write_message, EntryKind, Message, PROTOCOL_VERSION};
 use crate::walker::{build_entry, ensure_root, walk_manifest};
+use crate::watcher;
 
 pub async fn run(path: PathBuf) -> Result<()> {
     // Wipe stale tmps left by a previous crashed run on this host.
@@ -48,6 +50,14 @@ pub async fn run(path: PathBuf) -> Result<()> {
 
     let root_existed = path.exists();
     let root = ensure_root(&path)?;
+
+    // Spawn watcher BEFORE the walk so events for files modified during
+    // the walk / manifest exchange / init-sync apply window are captured
+    // (notify uses "events since now" at registration). Events accumulate
+    // in the channel until we drain + replay them after init sync.
+    let suppress = Suppression::default();
+    let pending = Pending::default();
+    let mut watcher_handle = watcher::spawn(root.clone(), suppress.clone())?;
 
     let writer: Arc<Mutex<BufWriter<Stdout>>> = Arc::new(Mutex::new(writer_inner));
     {
@@ -102,20 +112,54 @@ pub async fn run(path: PathBuf) -> Result<()> {
     }
 
     // ── Initial-sync op loop. Process whatever the client sends until SyncDone. ──
-    let pending = Pending::default();
+    // `suppress` and `pending` were created above (before the walk) so the
+    // watcher already shares the suppression map. Marks recorded here
+    // (one per apply op) are matched against watcher events later.
     loop {
         let msg = read_message(&mut reader).await?;
         match msg {
-            Message::FileData { entry, content } => apply_file_data(&root, &entry, &content)?,
+            Message::FileData { entry, content } => {
+                let path = entry.path.clone();
+                let mtime = entry.mtime;
+                let hash = entry.hash;
+                apply_file_data(&root, &entry, &content)?;
+                suppress.mark_set(path, mtime, hash);
+            }
             Message::FileStart { entry, .. } => pending.start(&root, entry).await?,
             Message::FileChunk { path, data } => pending.chunk(&path, &data).await?,
             Message::FileEnd { path } => {
-                let _ = pending.end(&root, &path).await?;
+                if let Some(entry) = pending.end(&root, &path).await? {
+                    suppress.mark_set(entry.path, entry.mtime, entry.hash);
+                }
             }
-            Message::MkDir { entry } => apply_mkdir(&root, &entry)?,
-            Message::MkSymlink { entry } => apply_symlink(&root, &entry)?,
-            Message::Delete { path } => apply_delete(&root, &path)?,
-            Message::Rename { from, to } => apply_rename(&root, &from, &to)?,
+            Message::MkDir { entry } => {
+                let path = entry.path.clone();
+                let mtime = entry.mtime;
+                apply_mkdir(&root, &entry)?;
+                suppress.mark_mtime(path, mtime);
+            }
+            Message::MkSymlink { entry } => {
+                let path = entry.path.clone();
+                let mtime = entry.mtime;
+                apply_symlink(&root, &entry)?;
+                suppress.mark_mtime(path, mtime);
+            }
+            Message::Delete { path } => {
+                apply_delete(&root, &path)?;
+                suppress.mark_deleted(path);
+            }
+            Message::Rename { from, to } => {
+                apply_rename(&root, &from, &to)?;
+                suppress.mark_deleted(from);
+                let mt = std::fs::symlink_metadata(root.join(&to))
+                    .ok()
+                    .map(|m| {
+                        use std::os::unix::fs::MetadataExt;
+                        m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                    })
+                    .unwrap_or(0);
+                suppress.mark_mtime(to, mt);
+            }
             Message::SignatureRequest { path, base_hash } => {
                 // Read our local copy, verify hash, compute signature.
                 let full = root.join(&path);
@@ -150,7 +194,11 @@ pub async fn run(path: PathBuf) -> Result<()> {
                 base_hash,
                 delta,
             } => {
+                let path = entry.path.clone();
+                let mtime = entry.mtime;
+                let hash = entry.hash;
                 apply_delta_to_file(&root, &entry, base_hash, &delta)?;
+                suppress.mark_set(path, mtime, hash);
             }
             Message::PullDelta {
                 path,
@@ -241,7 +289,32 @@ pub async fn run(path: PathBuf) -> Result<()> {
         c.save(&root);
     }
 
-    // ── Live mode ──
+    // Drain watcher events buffered during the walk + manifest exchange +
+    // ops loop. Echoes of our own writes filter through `suppress`; real
+    // user edits made on the remote during the startup window flow to the
+    // client.
     let ignores = Arc::new(IgnoreStack::load(&root));
-    live_loop(root, reader, writer, mode, compress, false, ignores).await
+    let mut buffered: Vec<crate::watcher::FsEvent> = Vec::new();
+    while let Ok(batch) = watcher_handle.events.try_recv() {
+        buffered.extend(batch);
+    }
+    if !buffered.is_empty() {
+        tracing::debug!("agent: draining {} buffered watcher events", buffered.len());
+        forward_local_events(&root, buffered, &writer, compress, &suppress, false).await?;
+    }
+
+    // ── Live mode ──
+    live_loop(
+        root,
+        reader,
+        writer,
+        mode,
+        compress,
+        false,
+        ignores,
+        suppress,
+        pending,
+        watcher_handle,
+    )
+    .await
 }
