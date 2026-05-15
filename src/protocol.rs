@@ -102,6 +102,13 @@ pub enum Message {
     FileEnd {
         path: PathBuf,
     },
+    /// Sync metadata only (mtime + mode) when the file's content is
+    /// unchanged. Avoids re-transferring the body on a `touch`-like change.
+    Touch {
+        path: PathBuf,
+        mtime: i64,
+        mode: u32,
+    },
     /// Create or update a directory's metadata.
     MkDir {
         entry: Entry,

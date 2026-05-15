@@ -202,9 +202,10 @@ async fn run_inner(
                 bytes_recv += content.len() as u64;
                 received_files += 1;
                 let mt = entry.mtime;
+                let hash = entry.hash;
                 let path = entry.path.clone();
                 apply_file_data(&local_root, &entry, &content)?;
-                suppress.mark_mtime(path, mt);
+                suppress.mark_set(path, mt, hash);
             }
             Message::FileStart { entry, .. } => pending.start(&local_root, entry).await?,
             Message::FileChunk { path, data } => {
@@ -214,7 +215,7 @@ async fn run_inner(
             Message::FileEnd { path } => {
                 if let Some(entry) = pending.end(&local_root, &path).await? {
                     received_files += 1;
-                    suppress.mark_mtime(entry.path, entry.mtime);
+                    suppress.mark_set(entry.path, entry.mtime, entry.hash);
                 }
             }
             Message::MkDir { entry } => {

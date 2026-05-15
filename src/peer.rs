@@ -332,11 +332,16 @@ where
 
 #[derive(Debug, Clone)]
 enum ApplyState {
-    /// We just wrote a file/dir/symlink and expect its mtime to be `ns`.
-    Mtime(i64),
+    /// We last saw the path in this state. `hash` is the file's content hash
+    /// for regular files; `[0u8; 32]` for dirs / symlinks (we don't track
+    /// their "content"). Used for echo suppression (mtime match) AND
+    /// sender-side dedup (hash match → send `Touch` instead of full file).
+    Set { mtime: i64, hash: [u8; 32] },
     /// We just deleted the path and expect it to not exist.
     Deleted,
 }
+
+const NO_HASH: [u8; 32] = [0u8; 32];
 
 /// Synchronous suppression map — uses `std::sync::Mutex` so the watcher's
 /// notify thread can update it eagerly (before debouncing) and so all
@@ -348,11 +353,28 @@ pub struct Suppression {
 }
 
 impl Suppression {
-    pub fn mark_mtime(&self, path: PathBuf, mtime_ns: i64) {
+    /// Record that the path now exists with `mtime` and (optionally) `hash`.
+    /// Use `NO_HASH` for dirs / symlinks.
+    pub fn mark_set(&self, path: PathBuf, mtime_ns: i64, hash: [u8; 32]) {
         if let Ok(mut g) = self.inner.lock() {
-            g.insert(path, (ApplyState::Mtime(mtime_ns), Instant::now()));
+            g.insert(
+                path,
+                (
+                    ApplyState::Set {
+                        mtime: mtime_ns,
+                        hash,
+                    },
+                    Instant::now(),
+                ),
+            );
         }
     }
+
+    /// Convenience: mark without a content hash (dirs, symlinks, or unknown).
+    pub fn mark_mtime(&self, path: PathBuf, mtime_ns: i64) {
+        self.mark_set(path, mtime_ns, NO_HASH);
+    }
+
     pub fn mark_deleted(&self, path: PathBuf) {
         if let Ok(mut g) = self.inner.lock() {
             g.insert(path, (ApplyState::Deleted, Instant::now()));
@@ -360,8 +382,6 @@ impl Suppression {
     }
 
     /// True if we recently deleted (or sent a delete for) this path.
-    /// Used by the receiver to drop stale `FileData`/`MkDir`/etc. that the
-    /// peer dispatched before it had processed our deletion.
     pub fn is_recently_deleted(&self, path: &Path) -> bool {
         let Ok(g) = self.inner.lock() else {
             return false;
@@ -369,10 +389,18 @@ impl Suppression {
         matches!(g.get(path), Some((ApplyState::Deleted, _)))
     }
 
-    /// True if this event is the echo of our own previous apply — i.e. the
-    /// path's current state still matches what we recorded. If the user has
-    /// since modified or recreated the path, this returns false and the
-    /// event is processed.
+    /// Return the content hash we have on record for this file, if any.
+    /// Used by the sender to skip retransmitting unchanged content.
+    pub fn prior_hash(&self, path: &Path) -> Option<[u8; 32]> {
+        let g = self.inner.lock().ok()?;
+        match g.get(path) {
+            Some((ApplyState::Set { hash, .. }, _)) if *hash != NO_HASH => Some(*hash),
+            _ => None,
+        }
+    }
+
+    /// True if this event is the echo of our own previous apply — the path's
+    /// current state still matches what we recorded.
     pub fn is_echo(&self, root: &Path, ev: &FsEvent) -> bool {
         let Ok(mut g) = self.inner.lock() else {
             return false;
@@ -388,9 +416,24 @@ impl Suppression {
             return false;
         };
         match (state, ev) {
-            (ApplyState::Mtime(expected), FsEvent::Created(_))
-            | (ApplyState::Mtime(expected), FsEvent::Modified(_))
-            | (ApplyState::Mtime(expected), FsEvent::Renamed { .. }) => {
+            (
+                ApplyState::Set {
+                    mtime: expected, ..
+                },
+                FsEvent::Created(_),
+            )
+            | (
+                ApplyState::Set {
+                    mtime: expected, ..
+                },
+                FsEvent::Modified(_),
+            )
+            | (
+                ApplyState::Set {
+                    mtime: expected, ..
+                },
+                FsEvent::Renamed { .. },
+            ) => {
                 let cur = lstat_mtime_ns(&root.join(key));
                 cur != 0 && cur == *expected
             }
@@ -540,7 +583,7 @@ where
             // skip the write entirely (and the noisy log line).
             if is_already_equal(root, &entry) {
                 let mt = lstat_mtime_ns(&root.join(&entry.path));
-                suppress.mark_mtime(entry.path.clone(), mt);
+                suppress.mark_set(entry.path.clone(), mt, entry.hash);
                 tracing::trace!("dedup (recv FileData): {}", entry.path.display());
                 return Ok(());
             }
@@ -556,11 +599,13 @@ where
                 return Ok(());
             }
             let size = content.len();
+            let hash = entry.hash;
             apply_file_data(root, &entry, &content)?;
             // Use the *actual* on-disk mtime so our own watcher's echo of
             // this write matches exactly (set_file_mtime may be FS-rounded).
+            // Store hash too, so future sender checks can dedup via Touch.
             let mt = lstat_mtime_ns(&full);
-            suppress.mark_mtime(entry.path.clone(), mt);
+            suppress.mark_set(entry.path.clone(), mt, hash);
             if log_event {
                 eprintln!(
                     "  {} {}  {}",
@@ -583,7 +628,7 @@ where
             // no-ops (Pending::chunk silently drops chunks for unknown paths).
             if is_already_equal(root, &entry) {
                 let mt = lstat_mtime_ns(&root.join(&entry.path));
-                suppress.mark_mtime(entry.path.clone(), mt);
+                suppress.mark_set(entry.path.clone(), mt, entry.hash);
                 tracing::trace!("dedup (recv FileStart): {}", entry.path.display());
                 return Ok(());
             }
@@ -616,7 +661,7 @@ where
             }
             if let Some(entry) = pending.end(root, &path).await? {
                 let mt = lstat_mtime_ns(&root.join(&entry.path));
-                suppress.mark_mtime(entry.path.clone(), mt);
+                suppress.mark_set(entry.path.clone(), mt, entry.hash);
                 if log_event {
                     eprintln!(
                         "  {} {}  {}",
@@ -625,6 +670,42 @@ where
                         format_size(entry.size, BINARY).dimmed()
                     );
                 }
+            }
+        }
+        Message::Touch { path, mtime, mode } => {
+            if !apply_remote {
+                return Ok(());
+            }
+            if ignored(ignores, &path, false) {
+                return Ok(());
+            }
+            let full = root.join(&path);
+            let Ok(_meta) = fs::symlink_metadata(&full) else {
+                // No file to touch (we may have deleted it, or never had it).
+                // Drop quietly; if peer actually needs us to create it they'll
+                // re-send a full FileData.
+                tracing::debug!("touch for missing path: {}", path.display());
+                return Ok(());
+            };
+            let _ = fs::set_permissions(&full, fs::Permissions::from_mode(mode));
+            let ft = filetime::FileTime::from_unix_time(
+                mtime.div_euclid(1_000_000_000),
+                mtime.rem_euclid(1_000_000_000) as u32,
+            );
+            let _ = filetime::set_file_mtime(&full, ft);
+            // Mark using the actual on-disk mtime so our own watcher's echo
+            // of this metadata write matches exactly. Preserve any hash we
+            // had on record (content didn't change).
+            let prior = suppress.prior_hash(&path).unwrap_or(NO_HASH);
+            let new_mtime = lstat_mtime_ns(&full);
+            suppress.mark_set(path.clone(), new_mtime, prior);
+            if log_event {
+                eprintln!(
+                    "  {} {}  {}",
+                    "←".bright_cyan(),
+                    path.display(),
+                    "(touch)".dimmed()
+                );
             }
         }
         Message::MkDir { entry } => {
@@ -827,6 +908,8 @@ where
                 };
                 let path_clone = entry.path.clone();
                 let entry_mtime = entry.mtime;
+                let entry_hash = entry.hash;
+                let entry_kind = entry.kind;
                 match entry.kind {
                     EntryKind::Dir => {
                         let mut w = writer.lock().await;
@@ -837,23 +920,53 @@ where
                         write_message(&mut *w, &Message::MkSymlink { entry }, compress).await?;
                     }
                     EntryKind::File => {
-                        let size = entry.size;
-                        if log_event {
-                            eprintln!(
-                                "  {} {}  {}",
-                                "→".bright_green(),
-                                entry.path.display(),
-                                format_size(size, BINARY).dimmed()
-                            );
+                        // Content-unchanged optimization: if we already
+                        // synced this exact content (matching hash on
+                        // record), send a lightweight Touch — mtime + mode
+                        // only — instead of re-transmitting the body.
+                        if suppress.prior_hash(&entry.path) == Some(entry.hash) {
+                            if log_event {
+                                eprintln!(
+                                    "  {} {}  {}",
+                                    "→".bright_green(),
+                                    entry.path.display(),
+                                    "(touch)".dimmed()
+                                );
+                            }
+                            let mut w = writer.lock().await;
+                            write_message(
+                                &mut *w,
+                                &Message::Touch {
+                                    path: entry.path.clone(),
+                                    mtime: entry.mtime,
+                                    mode: entry.mode,
+                                },
+                                compress,
+                            )
+                            .await?;
+                        } else {
+                            let size = entry.size;
+                            if log_event {
+                                eprintln!(
+                                    "  {} {}  {}",
+                                    "→".bright_green(),
+                                    entry.path.display(),
+                                    format_size(size, BINARY).dimmed()
+                                );
+                            }
+                            send_file(writer, root, &entry, compress).await?;
                         }
-                        send_file(writer, root, &entry, compress).await?;
                     }
                 }
-                // Mark our own outgoing state. Catches two cases on the
-                // receive side later: (a) the peer echoes our payload back,
-                // and (b) if the user then deletes & we get a stale Create
-                // back, we know to drop it.
-                suppress.mark_mtime(path_clone, entry_mtime);
+                // Mark our own outgoing state. Catches: (a) the peer echoes
+                // our payload back, (b) if the user then deletes & we get a
+                // stale Create back, drop it, (c) next watcher fire for this
+                // same content → sender skip via prior_hash.
+                let hash_to_mark = match entry_kind {
+                    EntryKind::File => entry_hash,
+                    _ => NO_HASH,
+                };
+                suppress.mark_set(path_clone, entry_mtime, hash_to_mark);
             }
             FsEvent::Removed(p) => {
                 if log_event {
