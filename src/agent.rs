@@ -14,8 +14,8 @@ use tokio::sync::Mutex;
 use crate::cache::HashCache;
 use crate::ignores::IgnoreStack;
 use crate::peer::{
-    apply_delete, apply_file_data, apply_mkdir, apply_rename, apply_symlink, live_loop, send_file,
-    Pending,
+    apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
+    compute_delta, compute_signature, live_loop, send_file, Pending,
 };
 use crate::protocol::{read_message, write_message, EntryKind, Message, PROTOCOL_VERSION};
 use crate::walker::{build_entry, ensure_root, walk_manifest};
@@ -113,6 +113,94 @@ pub async fn run(path: PathBuf) -> Result<()> {
             Message::MkSymlink { entry } => apply_symlink(&root, &entry)?,
             Message::Delete { path } => apply_delete(&root, &path)?,
             Message::Rename { from, to } => apply_rename(&root, &from, &to)?,
+            Message::SignatureRequest { path, base_hash } => {
+                // Read our local copy, verify hash, compute signature.
+                let full = root.join(&path);
+                let sig_opt = match std::fs::read(&full) {
+                    Ok(content) => {
+                        let actual = blake3::hash(&content);
+                        if actual.as_bytes() == &base_hash {
+                            Some(compute_signature(&content))
+                        } else {
+                            tracing::debug!(
+                                "signature: base mismatch for {} (file changed)",
+                                path.display()
+                            );
+                            None
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("signature: read {}: {e}", path.display());
+                        None
+                    }
+                };
+                let mut w = writer.lock().await;
+                write_message(
+                    &mut *w,
+                    &Message::Signature { path, sig: sig_opt },
+                    compress,
+                )
+                .await?;
+            }
+            Message::Delta {
+                entry,
+                base_hash,
+                delta,
+            } => {
+                apply_delta_to_file(&root, &entry, base_hash, &delta)?;
+            }
+            Message::PullDelta {
+                path,
+                base_hash,
+                sig,
+            } => {
+                // Client wants this file and has shipped us a signature of
+                // what it already has. If we can produce a delta smaller
+                // than the file itself, do that. Otherwise fall back to a
+                // normal send.
+                match build_entry(&root, &path, None)? {
+                    None => {
+                        // We don't have it — tell client to delete its copy.
+                        let mut w = writer.lock().await;
+                        write_message(&mut *w, &Message::Delete { path }, compress).await?;
+                    }
+                    Some(entry) => match entry.kind {
+                        EntryKind::Dir => {
+                            let mut w = writer.lock().await;
+                            write_message(&mut *w, &Message::MkDir { entry }, compress).await?;
+                        }
+                        EntryKind::Symlink => {
+                            let mut w = writer.lock().await;
+                            write_message(&mut *w, &Message::MkSymlink { entry }, compress).await?;
+                        }
+                        EntryKind::File => {
+                            let full = root.join(&entry.path);
+                            let new_content = std::fs::read(&full)?;
+                            // 75% threshold: if the delta isn't meaningfully
+                            // smaller than the full file, just send the file.
+                            let delta_worth_it_max = entry.size.saturating_mul(3) / 4;
+                            match compute_delta(&sig, &new_content) {
+                                Ok(delta) if (delta.len() as u64) < delta_worth_it_max => {
+                                    let mut w = writer.lock().await;
+                                    write_message(
+                                        &mut *w,
+                                        &Message::Delta {
+                                            entry,
+                                            base_hash,
+                                            delta,
+                                        },
+                                        compress,
+                                    )
+                                    .await?;
+                                }
+                                _ => {
+                                    send_file(&writer, &root, &entry, compress).await?;
+                                }
+                            }
+                        }
+                    },
+                }
+            }
             Message::FileGet { path } => {
                 if let Some(entry) = build_entry(&root, &path, None)? {
                     match entry.kind {

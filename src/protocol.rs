@@ -109,6 +109,36 @@ pub enum Message {
         mtime: i64,
         mode: u32,
     },
+    /// Ask peer to compute a rsync-style signature of the file it has at
+    /// `path` (its old version). `base_hash` lets the peer verify it still
+    /// has the version the sender expects.
+    SignatureRequest {
+        path: PathBuf,
+        base_hash: [u8; 32],
+    },
+    /// Response to `SignatureRequest`. `sig = None` means the peer can't
+    /// (or won't) produce a signature — the sender should fall back to a
+    /// full transfer.
+    Signature {
+        path: PathBuf,
+        sig: Option<Vec<u8>>,
+    },
+    /// Patch the peer's existing file using the given delta.
+    /// `base_hash` is the hash of the version the delta was computed against;
+    /// receiver MUST verify the result (blake3) matches `entry.hash`.
+    Delta {
+        entry: Entry,
+        base_hash: [u8; 32],
+        delta: Vec<u8>,
+    },
+    /// Client-initiated pull with a signature of the version we already
+    /// have. The server responds with a `Delta` (preferred) or `FileData` /
+    /// chunked transfer fallback.
+    PullDelta {
+        path: PathBuf,
+        base_hash: [u8; 32],
+        sig: Vec<u8>,
+    },
     /// Create or update a directory's metadata.
     MkDir {
         entry: Entry,

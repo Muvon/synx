@@ -16,8 +16,8 @@ use crate::cache::HashCache;
 use crate::cli::ClientArgs;
 use crate::ignores::IgnoreStack;
 use crate::peer::{
-    apply_delete, apply_file_data, apply_mkdir, apply_rename, apply_symlink, live_loop, send_file,
-    Pending, Suppression,
+    apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
+    compute_delta, compute_signature, live_loop, send_file, Pending, Suppression,
 };
 use crate::protocol::{
     read_message, write_message, Entry, EntryKind, Message, SyncMode, PROTOCOL_VERSION,
@@ -146,6 +146,22 @@ async fn run_inner(
         },
     ));
 
+    // Build path indices up-front. `remote_hash_by` tells the push side
+    // which files are present on the remote at a different content (delta
+    // candidates). `local_file_by` tells the pull side which files we
+    // already have (so we can offer the server a signature → get a delta
+    // back instead of the whole file).
+    let remote_hash_by: HashMap<PathBuf, [u8; 32]> = remote_manifest
+        .iter()
+        .filter(|e| matches!(e.kind, EntryKind::File))
+        .map(|e| (e.path.clone(), e.hash))
+        .collect();
+    let local_file_by: HashMap<PathBuf, Entry> = local_manifest
+        .iter()
+        .filter(|e| matches!(e.kind, EntryKind::File))
+        .map(|e| (e.path.clone(), e.clone()))
+        .collect();
+
     // ── Diff ──
     let plan = build_plan(&local_manifest, &remote_manifest, args.mode);
     plan.print();
@@ -159,25 +175,39 @@ async fn run_inner(
     }
 
     // ── Execute initial sync ──
-    // Phase 1 (sequential): dirs + symlinks. Must exist before any file
-    //                       inside them can be received.
-    // Phase 2 (parallel):   files, bounded by a small Semaphore so we don't
-    //                       blow up RAM with many large reads at once. The
-    //                       writer Mutex serialises individual messages but
-    //                       chunks from multiple files interleave on the
-    //                       wire, which the receiver dispatches by path.
-    // Phase 3 (sequential): FileGet requests + SyncDone marker.
+    // Phase 1 (sequential):    dirs + symlinks. Parents must exist.
+    // Phase 2a (sequential):   delta sync for files where remote has an
+    //                          older version and the file is in our size
+    //                          band — saves wire bytes on large mutable
+    //                          files (logs, dumps, binaries that change
+    //                          slightly). Sequential because each item is
+    //                          a request → response → delta round-trip.
+    // Phase 2b (parallel):     full push for everything else, Semaphore-
+    //                          bounded so we don't blow up RAM.
+    // Phase 3 (sequential):    FileGet pulls + SyncDone marker.
     const MAX_CONCURRENT_PUSHES: usize = 8;
+    /// Below this size, the round-trip + signature overhead exceeds the
+    /// bytes saved by sending a delta — just push the whole thing.
+    const DELTA_MIN_SIZE: u64 = 256 * 1024;
+    /// Above this, we don't want to load `base + new` into RAM at once.
+    /// Larger files fall back to the chunked full-file path.
+    const DELTA_MAX_SIZE: u64 = 256 * 1024 * 1024;
+
+    // Channel: recv loop forwards `Signature` messages here so the send
+    // task (which fired the matching `SignatureRequest`) can await them.
+    let (sig_tx, mut sig_rx) = tokio::sync::mpsc::unbounded_channel::<(PathBuf, Option<Vec<u8>>)>();
 
     let push_plan = plan.push.clone();
     let get_plan = plan.get.clone();
     let writer_for_send = writer.clone();
     let local_root_for_send = local_root.clone();
+    let remote_hash_by_send = remote_hash_by.clone();
+    let local_file_by_send = local_file_by.clone();
     let send_task = tokio::spawn(async move {
         use std::sync::atomic::{AtomicU64, Ordering};
         use tokio::sync::Semaphore;
 
-        let (non_files, files): (Vec<Entry>, Vec<Entry>) = push_plan
+        let (non_files, all_files): (Vec<Entry>, Vec<Entry>) = push_plan
             .into_iter()
             .partition(|e| !matches!(e.kind, EntryKind::File));
 
@@ -195,8 +225,102 @@ async fn run_inner(
             }
         }
 
-        // Phase 2.
+        // Split files: delta candidates (remote has different content of
+        // tractable size) vs full-push candidates.
+        let (delta_files, files): (Vec<Entry>, Vec<Entry>) = all_files.into_iter().partition(|e| {
+            if e.size < DELTA_MIN_SIZE || e.size > DELTA_MAX_SIZE {
+                return false;
+            }
+            match remote_hash_by_send.get(&e.path) {
+                // Remote has it AND content differs → worth a delta.
+                Some(remote_hash) => remote_hash != &e.hash,
+                None => false,
+            }
+        });
+
         let bytes = Arc::new(AtomicU64::new(0));
+        let bytes_saved = Arc::new(AtomicU64::new(0));
+
+        // Phase 2a: delta sync, one file at a time.
+        for entry in delta_files {
+            let base_hash = remote_hash_by_send
+                .get(&entry.path)
+                .copied()
+                .unwrap_or([0u8; 32]);
+            // Request signature.
+            {
+                let mut w = writer_for_send.lock().await;
+                write_message(
+                    &mut *w,
+                    &Message::SignatureRequest {
+                        path: entry.path.clone(),
+                        base_hash,
+                    },
+                    compress,
+                )
+                .await?;
+            }
+            // Await signature response (recv loop forwards via sig_tx).
+            let (path, sig_opt) = sig_rx
+                .recv()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("signature channel closed"))?;
+            if path != entry.path {
+                anyhow::bail!(
+                    "signature response out of order: expected {}, got {}",
+                    entry.path.display(),
+                    path.display()
+                );
+            }
+            match sig_opt {
+                Some(sig_bytes) => {
+                    // Compute delta against the version remote has.
+                    let full = local_root_for_send.join(&entry.path);
+                    let new_content =
+                        tokio::task::spawn_blocking(move || std::fs::read(full)).await??;
+                    let new_len = new_content.len() as u64;
+                    let entry_clone = entry.clone();
+                    let delta = tokio::task::spawn_blocking(move || {
+                        compute_delta(&sig_bytes, &new_content)
+                    })
+                    .await??;
+                    let delta_len = delta.len() as u64;
+                    {
+                        let mut w = writer_for_send.lock().await;
+                        write_message(
+                            &mut *w,
+                            &Message::Delta {
+                                entry: entry_clone,
+                                base_hash,
+                                delta,
+                            },
+                            compress,
+                        )
+                        .await?;
+                    }
+                    bytes.fetch_add(delta_len, Ordering::Relaxed);
+                    if new_len > delta_len {
+                        bytes_saved.fetch_add(new_len - delta_len, Ordering::Relaxed);
+                    }
+                    tracing::debug!(
+                        "delta {}: {} → {} bytes",
+                        entry.path.display(),
+                        new_len,
+                        delta_len
+                    );
+                }
+                None => {
+                    // Server couldn't produce a signature (file gone, hash
+                    // mismatch, etc.) — fall back to full transfer.
+                    tracing::debug!("delta fallback (full send): {}", entry.path.display());
+                    let n =
+                        send_file(&writer_for_send, &local_root_for_send, &entry, compress).await?;
+                    bytes.fetch_add(n, Ordering::Relaxed);
+                }
+            }
+        }
+
+        // Phase 2b: full push, parallel.
         let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_PUSHES));
         let mut handles = Vec::with_capacity(files.len());
         for e in files {
@@ -205,7 +329,7 @@ async fn run_inner(
             let root = local_root_for_send.clone();
             let bytes = bytes.clone();
             handles.push(tokio::spawn(async move {
-                let _p = permit; // released on drop after send completes
+                let _p = permit;
                 let n = send_file(&writer, &root, &e, compress).await?;
                 bytes.fetch_add(n, Ordering::Relaxed);
                 Ok::<(), anyhow::Error>(())
@@ -215,13 +339,55 @@ async fn run_inner(
             h.await??;
         }
 
-        // Phase 3.
-        for path in get_plan {
+        // Phase 3: pulls.
+        // Split into:
+        //   delta_pulls — we have an older copy of this file in our size
+        //     band; ship its signature so the server can reply with a
+        //     `Delta` (mirror of push-delta but client-initiated).
+        //   regular    — we don't have the file at all, or it's outside
+        //     the delta band; do a plain FileGet.
+        let (delta_pulls, regular_pulls): (Vec<PathBuf>, Vec<PathBuf>) = get_plan
+            .into_iter()
+            .partition(|p| match local_file_by_send.get(p) {
+                Some(local) => local.size >= DELTA_MIN_SIZE && local.size <= DELTA_MAX_SIZE,
+                None => false,
+            });
+
+        for path in delta_pulls {
+            let local_entry = local_file_by_send
+                .get(&path)
+                .expect("partitioned by local_file_by_send membership");
+            let base_hash = local_entry.hash;
+            let full = local_root_for_send.join(&path);
+            // Read + signature off the runtime; both are blocking.
+            let sig = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, anyhow::Error> {
+                let content = std::fs::read(&full)?;
+                Ok(compute_signature(&content))
+            })
+            .await??;
+            let mut w = writer_for_send.lock().await;
+            write_message(
+                &mut *w,
+                &Message::PullDelta {
+                    path,
+                    base_hash,
+                    sig,
+                },
+                compress,
+            )
+            .await?;
+        }
+
+        for path in regular_pulls {
             let mut w = writer_for_send.lock().await;
             write_message(&mut *w, &Message::FileGet { path }, compress).await?;
         }
         let mut w = writer_for_send.lock().await;
         write_message(&mut *w, &Message::SyncDone, compress).await?;
+        let saved = bytes_saved.load(Ordering::Relaxed);
+        if saved > 0 {
+            tracing::info!("delta sync saved {} bytes on the wire", saved);
+        }
         Ok::<u64, anyhow::Error>(bytes.load(Ordering::Relaxed))
     });
 
@@ -292,6 +458,44 @@ async fn run_inner(
                     })
                     .unwrap_or(0);
                 suppress.mark_mtime(to, mt);
+            }
+            Message::Signature { path, sig } => {
+                // Forward to send_task, which has a matching SignatureRequest
+                // waiting on the other end of this channel.
+                if sig_tx.send((path, sig)).is_err() {
+                    tracing::debug!("signature delivered after send_task ended");
+                }
+            }
+            Message::Delta {
+                entry,
+                base_hash,
+                delta,
+            } => {
+                // Response to one of our PullDelta requests. Patch our local
+                // (older) copy in place after both base- and result-hash
+                // verification (done inside apply_delta_to_file).
+                bytes_recv += delta.len() as u64;
+                received_files += 1;
+                let path = entry.path.clone();
+                let mt = entry.mtime;
+                let hash = entry.hash;
+                apply_delta_to_file(&local_root, &entry, base_hash, &delta)?;
+                suppress.mark_set(path, mt, hash);
+            }
+            Message::Touch { path, mtime, mode } => {
+                // Server replied with metadata-only update (no content
+                // changed). Set mode + mtime if the file exists locally.
+                let full = local_root.join(&path);
+                if std::fs::symlink_metadata(&full).is_ok() {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&full, std::fs::Permissions::from_mode(mode));
+                    let ft = filetime::FileTime::from_unix_time(
+                        mtime.div_euclid(1_000_000_000),
+                        mtime.rem_euclid(1_000_000_000) as u32,
+                    );
+                    let _ = filetime::set_file_mtime(&full, ft);
+                    suppress.mark_mtime(path, mtime);
+                }
             }
             Message::SyncDone => break,
             Message::Error(e) => anyhow::bail!("remote: {e}"),

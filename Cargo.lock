@@ -277,6 +277,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast_rsync"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d97c4d6e20491c84c60612a24660fc1fbfc56bfe24f5b49e6a9fd3259010794"
+dependencies = [
+ "arrayref",
+]
+
+[[package]]
 name = "file-id"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -796,6 +805,7 @@ dependencies = [
  "blake3",
  "clap",
  "dirs",
+ "fast_rsync",
  "filetime",
  "humansize",
  "ignore",

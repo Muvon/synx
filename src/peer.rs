@@ -173,6 +173,79 @@ fn tmp_sibling(final_path: &Path) -> PathBuf {
         .join(tmp_name)
 }
 
+// ─────────────────────────────────────────────────────────────
+// Delta sync helpers (fast_rsync, SIMD-accelerated librsync).
+//
+// fast_rsync internally uses MD4 for block hashes (its origin is the rsync
+// wire format). We MUST verify any delta-apply result with our own crypto
+// hash (blake3) before accepting it.
+// ─────────────────────────────────────────────────────────────
+
+/// Block size for delta signatures. 4 KiB is the librsync default and works
+/// well across a wide range of file sizes / change patterns.
+const RSYNC_BLOCK_SIZE: u32 = 4096;
+/// Number of bytes of the strong (MD4) hash kept per block in the signature.
+/// 8 bytes is enough to avoid block collisions in practice; we verify the
+/// final assembled result with blake3 anyway.
+const RSYNC_STRONG_LEN: u32 = 8;
+
+pub fn compute_signature(content: &[u8]) -> Vec<u8> {
+    let sig = fast_rsync::Signature::calculate(
+        content,
+        fast_rsync::SignatureOptions {
+            block_size: RSYNC_BLOCK_SIZE,
+            crypto_hash_size: RSYNC_STRONG_LEN,
+        },
+    );
+    sig.serialized().to_vec()
+}
+
+pub fn compute_delta(sig_bytes: &[u8], new_content: &[u8]) -> Result<Vec<u8>> {
+    let sig = fast_rsync::Signature::deserialize(sig_bytes.to_vec())
+        .map_err(|e| anyhow::anyhow!("signature parse: {e:?}"))?;
+    let indexed = sig.index();
+    let mut delta = Vec::new();
+    fast_rsync::diff(&indexed, new_content, &mut delta)
+        .map_err(|e| anyhow::anyhow!("delta diff: {e:?}"))?;
+    Ok(delta)
+}
+
+pub fn apply_delta_mem(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(base.len());
+    fast_rsync::apply(base, delta, &mut out).map_err(|e| anyhow::anyhow!("delta apply: {e:?}"))?;
+    Ok(out)
+}
+
+/// Apply a delta to whatever's currently at `entry.path`, verify the result's
+/// blake3 hash, and atomically replace the file.
+pub fn apply_delta_to_file(
+    root: &Path,
+    entry: &Entry,
+    base_hash: [u8; 32],
+    delta: &[u8],
+) -> Result<()> {
+    let full = root.join(&entry.path);
+    let base = fs::read(&full).with_context(|| format!("read base {}", full.display()))?;
+    // Verify the base matches what the sender computed against. If not,
+    // someone changed the file mid-flight; refuse rather than corrupt.
+    let our_base_hash = blake3::hash(&base);
+    if our_base_hash.as_bytes() != &base_hash {
+        anyhow::bail!(
+            "delta base hash mismatch for {} (file changed under us)",
+            entry.path.display()
+        );
+    }
+    let new_content = apply_delta_mem(&base, delta)?;
+    // Verify the assembled result against the sender's authoritative blake3.
+    // fast_rsync only uses MD4 internally, so this is the only honest check.
+    let result_hash = blake3::hash(&new_content);
+    if result_hash.as_bytes() != &entry.hash {
+        anyhow::bail!("delta result hash mismatch for {}", entry.path.display());
+    }
+    apply_file_data(root, entry, &new_content)?;
+    Ok(())
+}
+
 fn finalize_path(tmp: &Path, final_path: &Path, mode: u32, mtime: i64) -> Result<()> {
     let _ = fs::set_permissions(tmp, fs::Permissions::from_mode(mode));
     fs::rename(tmp, final_path)

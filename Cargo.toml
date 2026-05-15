@@ -17,6 +17,7 @@ blake3 = { version = "1.5", features = ["mmap", "rayon"] }
 bincode = "1.3"
 clap = { version = "4.5", features = ["derive"] }
 dirs = "5"
+fast_rsync = "0.2"
 filetime = "0.2"
 humansize = "2.1"
 ignore = "0.4"
