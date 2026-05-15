@@ -82,12 +82,10 @@ pub async fn run(path: PathBuf) -> Result<()> {
 
     // Drain client's manifest (we don't need to keep it; the client orchestrates).
     let mut client_count = 0usize;
-    loop {
-        match read_message(&mut reader).await? {
-            Message::ManifestBegin => break,
-            Message::Error(e) => anyhow::bail!("client: {e}"),
-            m => anyhow::bail!("expected ManifestBegin, got {:?}", m),
-        }
+    match read_message(&mut reader).await? {
+        Message::ManifestBegin => {}
+        Message::Error(e) => anyhow::bail!("client: {e}"),
+        m => anyhow::bail!("expected ManifestBegin, got {:?}", m),
     }
     loop {
         match read_message(&mut reader).await? {
@@ -209,7 +207,7 @@ pub async fn run(path: PathBuf) -> Result<()> {
                         .ok()
                         .map(|m| {
                             use std::os::unix::fs::MetadataExt;
-                            m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                            m.mtime() * 1_000_000_000 + m.mtime_nsec()
                         })
                         .unwrap_or(0);
                     suppress.mark_mtime(to, mt);
@@ -364,17 +362,12 @@ pub async fn run(path: PathBuf) -> Result<()> {
     }
 
     // ── Live mode ──
-    live_loop(
+    let ctx = crate::peer::SessionCtx {
         root,
-        reader,
-        writer,
         mode,
         compress,
-        false,
+        is_client: false,
         ignores,
-        suppress,
-        pending,
-        watcher_handle,
-    )
-    .await
+    };
+    live_loop(ctx, reader, writer, suppress, pending, watcher_handle).await
 }

@@ -203,8 +203,7 @@ where
     let bytes =
         postcard::to_allocvec(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let (payload, flags) = if compress && bytes.len() > COMPRESS_THRESHOLD {
-        let c = zstd::encode_all(&bytes[..], COMPRESS_LEVEL)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let c = zstd::encode_all(&bytes[..], COMPRESS_LEVEL).map_err(io::Error::other)?;
         // Only use the compressed form if it actually saves space.
         if c.len() + 5 < bytes.len() {
             (c, FLAG_COMPRESSED)

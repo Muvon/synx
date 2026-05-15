@@ -34,7 +34,7 @@ fn lstat_mtime_ns(p: &Path) -> i64 {
         Ok(m) => m
             .mtime()
             .saturating_mul(1_000_000_000)
-            .saturating_add(m.mtime_nsec() as i64),
+            .saturating_add(m.mtime_nsec()),
         Err(_) => 0,
     }
 }
@@ -65,7 +65,7 @@ fn is_already_equal(root: &Path, entry: &Entry) -> bool {
             let mt = meta
                 .mtime()
                 .saturating_mul(1_000_000_000)
-                .saturating_add(meta.mtime_nsec() as i64);
+                .saturating_add(meta.mtime_nsec());
             if mt == entry.mtime {
                 return true;
             }
@@ -116,10 +116,8 @@ pub fn apply_symlink(root: &Path, entry: &Entry) -> Result<()> {
     if let Some(parent) = full.parent() {
         fs::create_dir_all(parent)?;
     }
-    if fs::symlink_metadata(&full).is_ok() {
-        if fs::remove_file(&full).is_err() {
-            let _ = fs::remove_dir_all(&full);
-        }
+    if fs::symlink_metadata(&full).is_ok() && fs::remove_file(&full).is_err() {
+        let _ = fs::remove_dir_all(&full);
     }
     let target = entry
         .link_target
@@ -716,6 +714,17 @@ impl Suppression {
 // Live mode: a generic bidirectional loop driven by tokio::select.
 // ─────────────────────────────────────────────────────────────
 
+/// Static per-session configuration shared between `live_loop`,
+/// `handle_incoming`, and helpers. Pulled out into a struct so those
+/// signatures stay narrow.
+pub struct SessionCtx {
+    pub root: PathBuf,
+    pub mode: SyncMode,
+    pub compress: bool,
+    pub is_client: bool,
+    pub ignores: Arc<IgnoreStack>,
+}
+
 fn directions(mode: SyncMode, is_client: bool) -> (bool, bool) {
     match (mode, is_client) {
         (SyncMode::Both, _) => (true, true),
@@ -727,13 +736,9 @@ fn directions(mode: SyncMode, is_client: bool) -> (bool, bool) {
 }
 
 pub async fn live_loop<R, W>(
-    root: PathBuf,
+    ctx: SessionCtx,
     mut reader: R,
     writer: Arc<Mutex<W>>,
-    mode: SyncMode,
-    compress: bool,
-    is_client: bool,
-    ignores: Arc<IgnoreStack>,
     // Carried over from the init-sync apply phase: marks for every file we
     // wrote during initial sync stay valid here (TTL 60s) so the watcher's
     // FSEvents/inotify echoes for those writes are filtered, not bounced
@@ -749,7 +754,7 @@ where
     R: AsyncRead + AsyncReadExt + Unpin + Send + 'static,
     W: AsyncWrite + AsyncWriteExt + Unpin + Send,
 {
-    let (send_local, apply_remote) = directions(mode, is_client);
+    let (send_local, apply_remote) = directions(ctx.mode, ctx.is_client);
 
     // Dedicated reader task → channel. read_exact is not cancel-safe in select!.
     let (msg_tx, mut msg_rx) =
@@ -785,7 +790,7 @@ where
             _ = &mut sigint => {
                 tracing::info!("ctrl+c — closing");
                 let mut w = writer.lock().await;
-                let _ = write_message(&mut *w, &Message::Bye, compress).await;
+                let _ = write_message(&mut *w, &Message::Bye, ctx.compress).await;
                 break;
             }
 
@@ -796,10 +801,10 @@ where
                         // Per-op apply errors are non-fatal — log and
                         // continue. Connection-level failures appear as
                         // Err from the reader task (the next arm).
-                        if let Err(e) = handle_incoming(&root, m, &suppress, &pending, compress, &writer, apply_remote, Some(&ignores), is_client).await {
+                        if let Err(e) = handle_incoming(&ctx, m, &suppress, &pending, &writer, apply_remote).await {
                             tracing::warn!("apply failed: {}", e);
                             let mut w = writer.lock().await;
-                            let _ = write_message(&mut *w, &Message::Error(format!("{e}")), compress).await;
+                            let _ = write_message(&mut *w, &Message::Error(format!("{e}")), ctx.compress).await;
                         }
                     }
                     Some(Err(e)) => {
@@ -813,7 +818,7 @@ where
             ev = event_rx.recv() => {
                 let Some(events) = ev else { break };
                 if send_local {
-                    forward_local_events(&root, events, &writer, compress, &suppress, is_client).await?;
+                    forward_local_events(&ctx.root, events, &writer, ctx.compress, &suppress, ctx.is_client).await?;
                 }
             }
         }
@@ -823,32 +828,26 @@ where
     Ok(())
 }
 
-/// True if `ignores` rejects this path. `None` means "no filter".
-fn ignored(ignores: Option<&IgnoreStack>, rel: &Path, is_dir: bool) -> bool {
-    match ignores {
-        Some(s) => s.is_ignored_rel(rel, is_dir),
-        None => false,
-    }
-}
-
 pub async fn handle_incoming<W>(
-    root: &Path,
+    ctx: &SessionCtx,
     msg: Message,
     suppress: &Suppression,
     pending: &Pending,
-    compress: bool,
     writer: &Arc<Mutex<W>>,
     apply_remote: bool,
-    ignores: Option<&IgnoreStack>,
-    is_client: bool,
 ) -> Result<()>
 where
     W: AsyncWriteExt + Unpin,
 {
+    // Locals so the existing body reads naturally and we don't repeat
+    // `ctx.foo` access dozens of times. Cheap; nothing is cloned.
+    let root: &Path = &ctx.root;
+    let compress = ctx.compress;
+    let ignores = &ctx.ignores;
     // Only the client prints user-facing event lines. The agent's stderr is
     // forwarded over SSH to the same terminal, so any logs there would just
     // duplicate the client's transcript.
-    let log_event = is_client;
+    let log_event = ctx.is_client;
     // If git is mid-operation locally, refuse to apply any change under
     // `.git/`. Otherwise the peer (who may NOT be busy) would clobber our
     // in-progress rebase/merge state and break ref locking.
@@ -881,7 +880,7 @@ where
             if !apply_remote {
                 return Ok(());
             }
-            if ignored(ignores, &entry.path, false) {
+            if ignores.is_ignored_rel(&entry.path, false) {
                 tracing::debug!("ignored (recv FileData): {}", entry.path.display());
                 return Ok(());
             }
@@ -925,7 +924,7 @@ where
             if !apply_remote {
                 return Ok(());
             }
-            if ignored(ignores, &entry.path, false) {
+            if ignores.is_ignored_rel(&entry.path, false) {
                 tracing::debug!("ignored (recv FileStart): {}", entry.path.display());
                 return Ok(());
             }
@@ -953,7 +952,7 @@ where
             if !apply_remote {
                 return Ok(());
             }
-            if ignored(ignores, &path, false) {
+            if ignores.is_ignored_rel(&path, false) {
                 return Ok(());
             }
             pending.chunk(&path, &data).await?;
@@ -962,7 +961,7 @@ where
             if !apply_remote {
                 return Ok(());
             }
-            if ignored(ignores, &path, false) {
+            if ignores.is_ignored_rel(&path, false) {
                 return Ok(());
             }
             if let Some(entry) = pending.end(root, &path).await? {
@@ -982,7 +981,7 @@ where
             if !apply_remote {
                 return Ok(());
             }
-            if ignored(ignores, &path, false) {
+            if ignores.is_ignored_rel(&path, false) {
                 return Ok(());
             }
             let full = root.join(&path);
@@ -1018,7 +1017,7 @@ where
             if !apply_remote {
                 return Ok(());
             }
-            if ignored(ignores, &entry.path, true) {
+            if ignores.is_ignored_rel(&entry.path, true) {
                 tracing::debug!("ignored (recv MkDir): {}", entry.path.display());
                 return Ok(());
             }
@@ -1045,7 +1044,7 @@ where
             if !apply_remote {
                 return Ok(());
             }
-            if ignored(ignores, &entry.path, false) {
+            if ignores.is_ignored_rel(&entry.path, false) {
                 return Ok(());
             }
             if is_already_equal(root, &entry) {
@@ -1069,25 +1068,21 @@ where
             if !apply_remote {
                 return Ok(());
             }
-            if ignored(ignores, &path, false) && ignored(ignores, &path, true) {
+            if ignores.is_ignored_rel(&path, false) && ignores.is_ignored_rel(&path, true) {
                 return Ok(());
             }
             let existed_before = fs::symlink_metadata(root.join(&path)).is_ok();
             apply_delete(root, &path)?;
             suppress.mark_deleted(path.clone());
             if existed_before && log_event {
-                eprintln!(
-                    "  {} {}",
-                    "←".bright_cyan(),
-                    format!("× {}", path.display())
-                );
+                eprintln!("  {} × {}", "←".bright_cyan(), path.display());
             }
         }
         Message::Rename { from, to } => {
             if !apply_remote {
                 return Ok(());
             }
-            if ignored(ignores, &from, false) || ignored(ignores, &to, false) {
+            if ignores.is_ignored_rel(&from, false) || ignores.is_ignored_rel(&to, false) {
                 tracing::debug!(
                     "ignored (recv Rename): {} → {}",
                     from.display(),
@@ -1112,7 +1107,7 @@ where
             suppress.mark_mtime(to, mt);
         }
         Message::FileGet { path } => {
-            if ignored(ignores, &path, false) && ignored(ignores, &path, true) {
+            if ignores.is_ignored_rel(&path, false) && ignores.is_ignored_rel(&path, true) {
                 return Ok(());
             }
             if let Some(entry) = build_entry(root, &path, None)? {
@@ -1246,7 +1241,7 @@ where
                         // (FSEvents on macOS is chatty during `rm`). The
                         // user's intent is a delete — treat it as such.
                         if log_event {
-                            eprintln!("  {} {}", "→".bright_green(), format!("× {}", p.display()));
+                            eprintln!("  {} × {}", "→".bright_green(), p.display());
                         }
                         {
                             let mut w = writer.lock().await;
@@ -1355,7 +1350,7 @@ where
             }
             FsEvent::Removed(p) => {
                 if log_event {
-                    eprintln!("  {} {}", "→".bright_green(), format!("× {}", p.display()));
+                    eprintln!("  {} × {}", "→".bright_green(), p.display());
                 }
                 {
                     let mut w = writer.lock().await;

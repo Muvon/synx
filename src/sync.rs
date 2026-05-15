@@ -545,7 +545,7 @@ async fn run_inner(
                         .ok()
                         .map(|m| {
                             use std::os::unix::fs::MetadataExt;
-                            m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                            m.mtime() * 1_000_000_000 + m.mtime_nsec()
                         })
                         .unwrap_or(entry.mtime);
                     suppress.mark_mtime(path, mt);
@@ -560,7 +560,7 @@ async fn run_inner(
                         .ok()
                         .map(|m| {
                             use std::os::unix::fs::MetadataExt;
-                            m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                            m.mtime() * 1_000_000_000 + m.mtime_nsec()
                         })
                         .unwrap_or(entry.mtime);
                     suppress.mark_mtime(path, mt);
@@ -582,7 +582,7 @@ async fn run_inner(
                         .ok()
                         .map(|m| {
                             use std::os::unix::fs::MetadataExt;
-                            m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                            m.mtime() * 1_000_000_000 + m.mtime_nsec()
                         })
                         .unwrap_or(0);
                     suppress.mark_mtime(to, mt);
@@ -677,19 +677,14 @@ async fn run_inner(
     }
 
     crate::ui::info("watching for changes — ctrl+c to stop");
-    let result = live_loop(
-        local_root,
-        reader,
-        writer,
-        args.mode,
+    let ctx = crate::peer::SessionCtx {
+        root: local_root,
+        mode: args.mode,
         compress,
-        true,
+        is_client: true,
         ignores,
-        suppress,
-        pending,
-        watcher_handle,
-    )
-    .await;
+    };
+    let result = live_loop(ctx, reader, writer, suppress, pending, watcher_handle).await;
     let _ = child.wait().await;
     result
 }
@@ -702,12 +697,10 @@ async fn receive_manifest<R>(reader: &mut R) -> Result<Vec<Entry>>
 where
     R: tokio::io::AsyncReadExt + Unpin,
 {
-    loop {
-        match read_message(reader).await? {
-            Message::ManifestBegin => break,
-            Message::Error(e) => anyhow::bail!("remote: {e}"),
-            m => anyhow::bail!("expected ManifestBegin, got {:?}", m),
-        }
+    match read_message(reader).await? {
+        Message::ManifestBegin => {}
+        Message::Error(e) => anyhow::bail!("remote: {e}"),
+        m => anyhow::bail!("expected ManifestBegin, got {:?}", m),
     }
     let mut entries = Vec::new();
     loop {
