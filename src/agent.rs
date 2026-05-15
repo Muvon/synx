@@ -115,6 +115,17 @@ pub async fn run(path: PathBuf) -> Result<()> {
     // `suppress` and `pending` were created above (before the walk) so the
     // watcher already shares the suppression map. Marks recorded here
     // (one per apply op) are matched against watcher events later.
+    //
+    // Per-op apply errors (e.g. type conflict slipping past the plan check,
+    // permission denied) are logged + reported to the client via
+    // Message::Error and we CONTINUE — losing the session over one bad
+    // file would just trigger the outer reconnect loop and repeat the
+    // exact same failure indefinitely.
+    let report_err = |path: &std::path::Path, e: &anyhow::Error| -> String {
+        let msg = format!("apply {}: {}", path.display(), e);
+        tracing::warn!("agent: {}", msg);
+        msg
+    };
     loop {
         let msg = read_message(&mut reader).await?;
         match msg {
@@ -122,43 +133,87 @@ pub async fn run(path: PathBuf) -> Result<()> {
                 let path = entry.path.clone();
                 let mtime = entry.mtime;
                 let hash = entry.hash;
-                apply_file_data(&root, &entry, &content)?;
-                suppress.mark_set(path, mtime, hash);
-            }
-            Message::FileStart { entry, .. } => pending.start(&root, entry).await?,
-            Message::FileChunk { path, data } => pending.chunk(&path, &data).await?,
-            Message::FileEnd { path } => {
-                if let Some(entry) = pending.end(&root, &path).await? {
-                    suppress.mark_set(entry.path, entry.mtime, entry.hash);
+                if let Err(e) = apply_file_data(&root, &entry, &content) {
+                    let s = report_err(&path, &e);
+                    let mut w = writer.lock().await;
+                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                } else {
+                    suppress.mark_set(path, mtime, hash);
                 }
             }
+            Message::FileStart { entry, .. } => {
+                let path = entry.path.clone();
+                if let Err(e) = pending.start(&root, entry).await {
+                    let s = report_err(&path, &e);
+                    let mut w = writer.lock().await;
+                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                }
+            }
+            Message::FileChunk { path, data } => {
+                if let Err(e) = pending.chunk(&path, &data).await {
+                    let s = report_err(&path, &e);
+                    let mut w = writer.lock().await;
+                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                }
+            }
+            Message::FileEnd { path } => match pending.end(&root, &path).await {
+                Ok(Some(entry)) => {
+                    suppress.mark_set(entry.path, entry.mtime, entry.hash);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    let s = report_err(&path, &e);
+                    let mut w = writer.lock().await;
+                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                }
+            },
             Message::MkDir { entry } => {
                 let path = entry.path.clone();
                 let mtime = entry.mtime;
-                apply_mkdir(&root, &entry)?;
-                suppress.mark_mtime(path, mtime);
+                if let Err(e) = apply_mkdir(&root, &entry) {
+                    let s = report_err(&path, &e);
+                    let mut w = writer.lock().await;
+                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                } else {
+                    suppress.mark_mtime(path, mtime);
+                }
             }
             Message::MkSymlink { entry } => {
                 let path = entry.path.clone();
                 let mtime = entry.mtime;
-                apply_symlink(&root, &entry)?;
-                suppress.mark_mtime(path, mtime);
+                if let Err(e) = apply_symlink(&root, &entry) {
+                    let s = report_err(&path, &e);
+                    let mut w = writer.lock().await;
+                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                } else {
+                    suppress.mark_mtime(path, mtime);
+                }
             }
             Message::Delete { path } => {
-                apply_delete(&root, &path)?;
-                suppress.mark_deleted(path);
+                if let Err(e) = apply_delete(&root, &path) {
+                    let s = report_err(&path, &e);
+                    let mut w = writer.lock().await;
+                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                } else {
+                    suppress.mark_deleted(path);
+                }
             }
             Message::Rename { from, to } => {
-                apply_rename(&root, &from, &to)?;
-                suppress.mark_deleted(from);
-                let mt = std::fs::symlink_metadata(root.join(&to))
-                    .ok()
-                    .map(|m| {
-                        use std::os::unix::fs::MetadataExt;
-                        m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
-                    })
-                    .unwrap_or(0);
-                suppress.mark_mtime(to, mt);
+                if let Err(e) = apply_rename(&root, &from, &to) {
+                    let s = report_err(&to, &e);
+                    let mut w = writer.lock().await;
+                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                } else {
+                    suppress.mark_deleted(from);
+                    let mt = std::fs::symlink_metadata(root.join(&to))
+                        .ok()
+                        .map(|m| {
+                            use std::os::unix::fs::MetadataExt;
+                            m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                        })
+                        .unwrap_or(0);
+                    suppress.mark_mtime(to, mt);
+                }
             }
             Message::SignatureRequest { path, base_hash } => {
                 // Read our local copy, verify hash, compute signature.
@@ -197,8 +252,13 @@ pub async fn run(path: PathBuf) -> Result<()> {
                 let path = entry.path.clone();
                 let mtime = entry.mtime;
                 let hash = entry.hash;
-                apply_delta_to_file(&root, &entry, base_hash, &delta)?;
-                suppress.mark_set(path, mtime, hash);
+                if let Err(e) = apply_delta_to_file(&root, &entry, base_hash, &delta) {
+                    let s = report_err(&path, &e);
+                    let mut w = writer.lock().await;
+                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                } else {
+                    suppress.mark_set(path, mtime, hash);
+                }
             }
             Message::PullDelta {
                 path,

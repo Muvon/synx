@@ -467,68 +467,99 @@ async fn run_inner(
     // Receive: apply incoming server responses until peer SyncDone.
     let mut bytes_recv: u64 = 0;
     let mut received_files: u64 = 0;
+    // Per-op apply errors during init-sync are non-fatal. A single bad file
+    // (type conflict, permission denied) should not tear down the whole
+    // session — the outer reconnect loop would just retry it and hit the
+    // exact same failure forever. Log and continue.
+    let warn_apply = |path: &std::path::Path, e: &anyhow::Error| {
+        tracing::warn!("apply {} failed: {}", path.display(), e);
+    };
     loop {
         let msg = read_message(&mut reader).await?;
         match msg {
             Message::FileData { entry, content } => {
                 bytes_recv += content.len() as u64;
-                received_files += 1;
                 let mt = entry.mtime;
                 let hash = entry.hash;
                 let path = entry.path.clone();
-                apply_file_data(&local_root, &entry, &content)?;
-                suppress.mark_set(path, mt, hash);
+                if let Err(e) = apply_file_data(&local_root, &entry, &content) {
+                    warn_apply(&path, &e);
+                } else {
+                    received_files += 1;
+                    suppress.mark_set(path, mt, hash);
+                }
             }
-            Message::FileStart { entry, .. } => pending.start(&local_root, entry).await?,
+            Message::FileStart { entry, .. } => {
+                let path = entry.path.clone();
+                if let Err(e) = pending.start(&local_root, entry).await {
+                    warn_apply(&path, &e);
+                }
+            }
             Message::FileChunk { path, data } => {
                 bytes_recv += data.len() as u64;
-                pending.chunk(&path, &data).await?;
+                if let Err(e) = pending.chunk(&path, &data).await {
+                    warn_apply(&path, &e);
+                }
             }
-            Message::FileEnd { path } => {
-                if let Some(entry) = pending.end(&local_root, &path).await? {
+            Message::FileEnd { path } => match pending.end(&local_root, &path).await {
+                Ok(Some(entry)) => {
                     received_files += 1;
                     suppress.mark_set(entry.path, entry.mtime, entry.hash);
                 }
-            }
+                Ok(None) => {}
+                Err(e) => warn_apply(&path, &e),
+            },
             Message::MkDir { entry } => {
                 let path = entry.path.clone();
-                apply_mkdir(&local_root, &entry)?;
-                let mt = std::fs::metadata(local_root.join(&path))
-                    .ok()
-                    .map(|m| {
-                        use std::os::unix::fs::MetadataExt;
-                        m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
-                    })
-                    .unwrap_or(entry.mtime);
-                suppress.mark_mtime(path, mt);
+                if let Err(e) = apply_mkdir(&local_root, &entry) {
+                    warn_apply(&path, &e);
+                } else {
+                    let mt = std::fs::metadata(local_root.join(&path))
+                        .ok()
+                        .map(|m| {
+                            use std::os::unix::fs::MetadataExt;
+                            m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                        })
+                        .unwrap_or(entry.mtime);
+                    suppress.mark_mtime(path, mt);
+                }
             }
             Message::MkSymlink { entry } => {
                 let path = entry.path.clone();
-                apply_symlink(&local_root, &entry)?;
-                let mt = std::fs::symlink_metadata(local_root.join(&path))
-                    .ok()
-                    .map(|m| {
-                        use std::os::unix::fs::MetadataExt;
-                        m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
-                    })
-                    .unwrap_or(entry.mtime);
-                suppress.mark_mtime(path, mt);
+                if let Err(e) = apply_symlink(&local_root, &entry) {
+                    warn_apply(&path, &e);
+                } else {
+                    let mt = std::fs::symlink_metadata(local_root.join(&path))
+                        .ok()
+                        .map(|m| {
+                            use std::os::unix::fs::MetadataExt;
+                            m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                        })
+                        .unwrap_or(entry.mtime);
+                    suppress.mark_mtime(path, mt);
+                }
             }
             Message::Delete { path } => {
-                apply_delete(&local_root, &path)?;
-                suppress.mark_deleted(path);
+                if let Err(e) = apply_delete(&local_root, &path) {
+                    warn_apply(&path, &e);
+                } else {
+                    suppress.mark_deleted(path);
+                }
             }
             Message::Rename { from, to } => {
-                apply_rename(&local_root, &from, &to)?;
-                suppress.mark_deleted(from);
-                let mt = std::fs::symlink_metadata(local_root.join(&to))
-                    .ok()
-                    .map(|m| {
-                        use std::os::unix::fs::MetadataExt;
-                        m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
-                    })
-                    .unwrap_or(0);
-                suppress.mark_mtime(to, mt);
+                if let Err(e) = apply_rename(&local_root, &from, &to) {
+                    warn_apply(&to, &e);
+                } else {
+                    suppress.mark_deleted(from);
+                    let mt = std::fs::symlink_metadata(local_root.join(&to))
+                        .ok()
+                        .map(|m| {
+                            use std::os::unix::fs::MetadataExt;
+                            m.mtime() * 1_000_000_000 + m.mtime_nsec() as i64
+                        })
+                        .unwrap_or(0);
+                    suppress.mark_mtime(to, mt);
+                }
             }
             Message::Signature { path, sig } => {
                 // Forward to send_task, which has a matching SignatureRequest
@@ -546,12 +577,15 @@ async fn run_inner(
                 // (older) copy in place after both base- and result-hash
                 // verification (done inside apply_delta_to_file).
                 bytes_recv += delta.len() as u64;
-                received_files += 1;
                 let path = entry.path.clone();
                 let mt = entry.mtime;
                 let hash = entry.hash;
-                apply_delta_to_file(&local_root, &entry, base_hash, &delta)?;
-                suppress.mark_set(path, mt, hash);
+                if let Err(e) = apply_delta_to_file(&local_root, &entry, base_hash, &delta) {
+                    warn_apply(&path, &e);
+                } else {
+                    received_files += 1;
+                    suppress.mark_set(path, mt, hash);
+                }
             }
             Message::Touch { path, mtime, mode } => {
                 // Server replied with metadata-only update (no content
@@ -569,7 +603,10 @@ async fn run_inner(
                 }
             }
             Message::SyncDone => break,
-            Message::Error(e) => anyhow::bail!("remote: {e}"),
+            // Remote reported a per-op failure (file conflict, perm denied,
+            // etc.). Log and continue — bailing here would just trigger a
+            // reconnect that hits the same error.
+            Message::Error(e) => tracing::warn!("remote: {e}"),
             Message::Bye => return Ok(()),
             _ => tracing::debug!("ignored msg in init-sync recv"),
         }
@@ -665,6 +702,11 @@ where
 struct Plan {
     push: Vec<Entry>,
     get: Vec<PathBuf>,
+    /// Paths where local and remote disagree on `kind` (e.g. one side has
+    /// a file, the other a directory). Skipped from sync because blindly
+    /// overwriting would either fail with EISDIR or destroy a directory
+    /// tree. User must resolve by hand.
+    conflicts: Vec<(PathBuf, EntryKind, EntryKind)>,
 }
 
 impl Plan {
@@ -698,6 +740,23 @@ impl Plan {
             push_links,
             self.get.len().to_string().bright_cyan(),
         ));
+        if !self.conflicts.is_empty() {
+            crate::ui::warn(&format!(
+                "{} type conflicts (file/dir/symlink mismatch) — skipped, resolve manually:",
+                self.conflicts.len()
+            ));
+            for (path, lk, rk) in self.conflicts.iter().take(10) {
+                eprintln!(
+                    "    {}  local={:?}  remote={:?}",
+                    path.display().to_string().bright_yellow(),
+                    lk,
+                    rk
+                );
+            }
+            if self.conflicts.len() > 10 {
+                eprintln!("    … and {} more", self.conflicts.len() - 10);
+            }
+        }
     }
 }
 
@@ -715,6 +774,7 @@ fn build_plan(local: &[Entry], remote: &[Entry], mode: SyncMode) -> Plan {
 
     let mut push: Vec<Entry> = Vec::new();
     let mut get: Vec<PathBuf> = Vec::new();
+    let mut conflicts: Vec<(PathBuf, EntryKind, EntryKind)> = Vec::new();
 
     for p in all_paths {
         let l = local_map.get(p).copied();
@@ -732,6 +792,13 @@ fn build_plan(local: &[Entry], remote: &[Entry], mode: SyncMode) -> Plan {
             }
             (Some(l), Some(r)) => {
                 if l.same_content(r) {
+                    continue;
+                }
+                // Type mismatch (file vs dir vs symlink): blindly applying
+                // would either fail (EISDIR) or destroy a directory tree.
+                // Skip and surface for manual resolution.
+                if l.kind != r.kind {
+                    conflicts.push((l.path.clone(), l.kind, r.kind));
                     continue;
                 }
                 let local_wins = match mode {
@@ -760,5 +827,9 @@ fn build_plan(local: &[Entry], remote: &[Entry], mode: SyncMode) -> Plan {
         (prio, e.path.clone())
     });
 
-    Plan { push, get }
+    Plan {
+        push,
+        get,
+        conflicts,
+    }
 }

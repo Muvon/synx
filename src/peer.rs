@@ -280,14 +280,27 @@ pub fn apply_delta_to_file(
 /// loud failure rather than a silent non-atomic fallback.
 fn finalize_path(tmp: &Path, final_path: &Path, mode: u32, mtime: i64) -> Result<()> {
     let _ = fs::set_permissions(tmp, fs::Permissions::from_mode(mode));
-    fs::rename(tmp, final_path).with_context(|| {
-        format!(
-            "rename {} → {} (if this is EXDEV, the sync target is on a different filesystem than $HOME — \
-             set TMPDIR to a path on the same fs as your target)",
+    if let Err(e) = fs::rename(tmp, final_path) {
+        // Don't leak the tmp; we're about to bail.
+        let _ = fs::remove_file(tmp);
+        use std::io::ErrorKind;
+        let hint = match e.kind() {
+            ErrorKind::CrossesDevices => {
+                " — target on a different filesystem than $HOME; set TMPDIR to a path on the same fs"
+            }
+            ErrorKind::IsADirectory | ErrorKind::DirectoryNotEmpty => {
+                " — target exists as a directory (type conflict); resolve manually"
+            }
+            _ => "",
+        };
+        anyhow::bail!(
+            "rename {} → {} failed: {}{}",
             tmp.display(),
-            final_path.display()
-        )
-    })?;
+            final_path.display(),
+            e,
+            hint
+        );
+    }
     let ft = filetime::FileTime::from_unix_time(
         mtime.div_euclid(1_000_000_000),
         mtime.rem_euclid(1_000_000_000) as u32,
@@ -684,7 +697,14 @@ where
                 match msg {
                     Some(Ok(Message::Bye)) => break,
                     Some(Ok(m)) => {
-                        handle_incoming(&root, m, &suppress, &pending, compress, &writer, apply_remote, Some(&ignores), is_client).await?;
+                        // Per-op apply errors are non-fatal — log and
+                        // continue. Connection-level failures show up as
+                        // Err(...) from the reader task (next arm).
+                        if let Err(e) = handle_incoming(&root, m, &suppress, &pending, compress, &writer, apply_remote, Some(&ignores), is_client).await {
+                            tracing::warn!("apply failed: {}", e);
+                            let mut w = writer.lock().await;
+                            let _ = write_message(&mut *w, &Message::Error(format!("{e}")), compress).await;
+                        }
                     }
                     Some(Err(e)) => {
                         tracing::debug!("peer closed: {e}");
@@ -993,7 +1013,10 @@ where
             let _ = write_message(&mut *w, &Message::Pong, compress).await;
         }
         Message::Pong => {}
-        Message::Error(e) => anyhow::bail!("peer error: {e}"),
+        // Per-op error reported by the peer (type conflict, perm denied,
+        // etc.). Log and keep the session alive — bailing would just
+        // trigger a reconnect that would repeat the same failure.
+        Message::Error(e) => tracing::warn!("peer error: {e}"),
         other => {
             tracing::debug!(
                 "ignoring message in live: {:?}",
