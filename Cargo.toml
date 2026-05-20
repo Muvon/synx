@@ -33,7 +33,7 @@ overflow-checks = false # Disable overflow checks in release mode
 
 [dependencies]
 # octolib = { path = "../octolib", default-features = false, features = ["huggingface"] }
-octolib = { version = "0.21.5", default-features = false, features = ["huggingface"] }
+octolib = { version = "0.21.6", default-features = false, features = ["huggingface"] }
 rmcp = { version = "1.7.0", default-features = false }
 
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time", "process", "fs", "sync", "signal", "io-std", "net"] }
@@ -46,7 +46,7 @@ uuid = { version = "1.23.1", features = ["v4"] }
 tiktoken-rs = "0.11.0" # Token counter
 reqwest = { version = "0.13.3", features = ["json", "rustls", "gzip"], default-features = false }
 rustls-webpki = ">=0.103.12"
-flate2 = "1.0"
+flate2 = "1.1"
 anyhow = "1.0.102"
 serde_json = "1.0.149"
 clap = { version = "4.6.1", features = ["derive"] }
