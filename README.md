@@ -8,6 +8,7 @@
   <br /><br />
 
   [![License](https://img.shields.io/badge/license-Apache%202.0-7c3aed?style=flat-square)](LICENSE)
+  [![Version](https://img.shields.io/crates/v/octomind?style=flat-square&color=7c3aed)](https://crates.io/crates/octomind)
   [![GitHub stars](https://img.shields.io/github/stars/muvon/octomind?style=flat-square&color=7c3aed)](https://github.com/muvon/octomind/stargazers)
   [![Website](https://img.shields.io/badge/website-octomind.run-7c3aed?style=flat-square)](https://octomind.run)
 
@@ -21,10 +22,12 @@
 ## Table of Contents
 
 - [The Problem](#the-problem)
-- [Three Pillars](#three-pillars)
+- [Five Pillars](#five-pillars)
 - [Pillar 1 — Zero Config, Full Flexibility](#pillar-1--zero-config-full-flexibility)
 - [Pillar 2 — Sessions That Stay Sharp at Hour 4](#pillar-2--sessions-that-stay-sharp-at-hour-4)
 - [Pillar 3 — Cost as a Control Plane](#pillar-3--cost-as-a-control-plane)
+- [Pillar 4 — Guardrails: Policy as Code, Not Approval Clicks](#pillar-4--guardrails-policy-as-code-not-approval-clicks)
+- [Pillar 5 — Intent-Driven Context: Skills Activate on What You Mean](#pillar-5--intent-driven-context-skills-activate-on-what-you-mean)
 - [Quick Start](#quick-start)
 - [How It Works](#how-it-works)
 - [Power Users — Roles, Workflows, Layers](#power-users--roles-workflows-layers)
@@ -51,13 +54,15 @@ Octomind ships specialist agents ready to run — and a runtime that grows with 
 
 ---
 
-## Three Pillars
+## Five Pillars
 
-| Pillar | What it gives you | Built on |
-|---|---|---|
-| **Zero config, full flexibility** | `octomind run lawyer:sg` works out of the box. Need a different model, MCP server, or pipeline? Same TOML, no framework code. | Tap registry, runtime self-extension |
-| **Sessions stay sharp at hour 4** | SOTA adaptive compaction: cache-aware, structurally preserving. Smaller context = faster responses + lower cost. | `src/mcp/core/plan/compression.rs` |
-| **Cost as a control plane** | Per-step model selection across many providers via octolib. Hard spending caps and cache-aware accounting come for free. | `src/config/roles.rs`, spending threshold enforcement |
+| Pillar | What it gives you |
+|---|---|
+| **Zero config, full flexibility** | `octomind run lawyer:sg` works out of the box. Need a different model, MCP server, or pipeline? Same TOML, no framework code. |
+| **Sessions stay sharp at hour 4** | Adaptive compaction: cache-aware, structurally preserving. Smaller context = faster responses + lower cost. |
+| **Cost as a control plane** | Per-step model selection across many providers. Hard spending caps and cache-aware accounting come for free. |
+| **Guardrails: policy as code** | Govern autonomous agents with deterministic scripts — pre-call guards, post-result hooks, post-turn validators. No modal approval clicks. Fits CI. |
+| **Intent-driven context** | Skills and capabilities activate only when what you're asking for matches them. Smaller context by default, lower cost, no surprise tools. |
 
 ---
 
@@ -105,7 +110,7 @@ Agent:
   → presents the analysis
 ```
 
-Most agent harnesses pre-load every available tool into context. Octomind starts focused for the domain and grows only when needed. **Smaller context, lower cost, faster responses, no surprise tools.**
+Most agent harnesses pre-load every available tool into context. Octomind starts focused for the domain and grows only when needed. **Smaller context, lower cost, faster responses, no surprise tools.** See [Pillar 5](#pillar-5--intent-driven-context-skills-activate-on-what-you-mean) for how activation actually works.
 
 ### Add your own taps
 
@@ -170,6 +175,89 @@ max_session_spending_threshold = 5.00    # USD per session
 
 ---
 
+## Pillar 4 — Guardrails: Policy as Code, Not Approval Clicks
+
+Other agent CLIs make the human the safety layer: every dangerous tool call pops a modal, every file write waits for a click. That works for one developer at the keyboard. It breaks the moment you point an agent at a long-running task, a CI job, or an autonomous loop.
+
+Octomind takes the opposite position. **Policy lives in scripts, not prompts.** Drop a `.agents/guardrails.toml` in your repo and the runtime enforces it deterministically — pre-call, post-result, post-turn.
+
+```toml
+# Pre-call deny — block a class of calls before they execute
+[[guard]]
+match   = "shell(command=^rm\\s+-rf?)"
+message = "rm -rf blocked."
+
+# Conditional rule — only fires after the agent ran git status this session
+[[guard]]
+match   = "shell(command=git push)"
+when    = ["+shell(command=git status)"]
+message = "Review changes before pushing."
+
+# Post-result hook — non-zero exit injects feedback into the agent's inbox
+[[hook]]
+match  = "text_editor(path=src/.*\\.rs)"
+on     = "success"
+script = ".agents/check-clippy.sh"
+
+# Post-turn validator — fires only over the call slice since it last ran
+[[validator]]
+name   = "tests-pass"
+roles  = ["developer"]
+script = ".agents/run-tests.sh"
+```
+
+- **Guards** — pre-call deny rules. Match by `capability(arg_name=regex)`, gate by history (`+used` / `-unused`), require loaded capabilities (`has = [...]`). The agent never even attempts a blocked call.
+- **Hooks** — post-result scripts. Run after each tool returns. Non-zero exit injects stdout into the agent's inbox as a user message — clippy errors, lint failures, format diffs become *automatic corrections without restarting the turn*.
+- **Validators** — post-turn scripts. Fire only over the new call-log slice (cursor-based, never re-fires on old activity). Filter by role. Output is wrapped in `<validation>` blocks the agent reads on its next turn. **This is what replaces "approve this change?" prompts in autonomous loops.**
+
+The DSL is richer than competitor lifecycle hooks: capability+arg-regex+history+role+result-regex in one declarative file. No code to compile, no plugin to install. **Designed for full automation: fits CI, daemons, scheduled runs, ACP sub-agents.**
+
+> The world is going autonomous. The choice isn't "ask vs auto" — it's "auto with deterministic policy" vs "auto with hope." Octomind ships the former.
+
+---
+
+## Pillar 5 — Intent-Driven Context: Skills Activate on What You Mean
+
+Every other agent CLI loads every tool, every skill, every instruction pack into context up front. The model sees fifty tool definitions and a wall of system prompts before the user types a single character. **Token bills follow. Cache misses follow. Confused tool selection follows.**
+
+Octomind inverts this. Skills and capabilities sit dormant until the user's intent matches them — then they activate, inject their content, and stay only as long as they're relevant. **Context is a function of what the user is actually trying to do.**
+
+### How activation works (no keyword guessing)
+
+Skills describe what they're for. The runtime matches your prompt against those descriptions and only loads the skills that fit:
+
+- **Meaning, not keywords.** A dedicated embedding model — trained on activation traffic — scores how well your request matches each skill. "Help me refactor this auth flow" and "the login is broken" both find the same skill; "what's the weather" finds none.
+- **Hand-authored rules where precision matters.** Skill authors can pin activation to file names, file contents, or exact phrases when they know better than a similarity score.
+- **Abstain on near-ties.** When two skills score close, **neither fires.** Better to load nothing than the wrong thing.
+- **Calibrated to skip, not guess.** Wrong activations bloat context and waste tokens. The system defaults to silence when in doubt.
+
+### Why this matters
+
+```
+Other agent CLIs:                       Octomind:
+─────────────────────                   ──────────
+1. User starts session                  1. User starts session
+2. Load 50 tools into context           2. Load 5 core tools into context
+3. Load 30 skills into system prompt    3. Skills sit dormant
+4. User types one sentence              4. User types one sentence
+5. Model picks tool from a wall         5. Embed model scores → 1 skill matches
+                                           → skill content injected
+                                           → 6 tools in context, not 80
+                                        6. Skill goes silent again when no longer relevant
+```
+
+**Smaller context = faster first token, lower cost per turn, fewer wrong tool calls.** The same prompt that costs $0.12 in a preloaded-everything CLI costs $0.03 here.
+
+### What this combines with
+
+- **`mcp.enable` mid-session.** Even when a skill activates, the underlying MCP server only spins up if the skill actually calls it. Inactive servers = zero token cost.
+- **Compression interplay (Pillar 2).** A deactivated skill is dropped during compaction — its content is recoverable on next activation, not pinned forever.
+- **Guardrails (Pillar 4).** A guard can require `has = ["filesystem-read"]` and only fire when that capability is currently loaded. Policy and activation share the same capability namespace.
+
+> Most "agentic" CLIs pretend context is free. Octomind treats it as the scarcest resource in the system — and only spends it on what the user actually meant.
+
+---
+
 ## Quick Start
 
 ```bash
@@ -183,7 +271,12 @@ export OPENROUTER_API_KEY="your_key"
 octomind run developer
 ```
 
-That's it. You're in an interactive session with a specialist that can read your code, run commands, edit files, and grow capabilities as needed.
+```
+octomind v0.29.0 · role: developer · model: openrouter:...
+> _
+```
+
+You're in an interactive session with a specialist that can read your code, run commands, edit files, and grow capabilities as needed.
 
 ---
 
@@ -367,28 +460,9 @@ Full list: [Session Commands](doc/reference/02-session-commands.md).
 
 ## Architecture
 
-```
-CLI / WebSocket / ACP / Daemon
-            |
-            v
-       ChatSession                  <- src/session/chat/session/
-            |
-            +-- Roles               <- src/config/roles.rs
-            +-- Layers              <- src/session/layers/
-            +-- Pipelines           <- src/session/pipelines/
-            +-- Workflows           <- src/session/workflows/
-            +-- Learning            <- src/learning/
-            +-- Adaptive compaction <- src/mcp/core/plan/compression.rs
-            |
-            +-- MCP servers         <- src/mcp/
-                  +-- core/    plan, schedule, tap, capability
-                  +-- runtime/ mcp, agent, skill
-                  +-- (filesystem via external octofs)
-                  +-- (brain via external octobrain)
-                  +-- agent/   agent_* tools route tasks to layers
-```
+One binary. The session is the unit of work. Around it: roles (who's talking), layers and workflows (multi-step orchestration), pipelines (deterministic pre-processing), adaptive compaction (long-session quality), guardrails (deterministic policy), and MCP servers (tools). All of it driven by a single resolved TOML config — no hardcoded behavior, no framework code to edit.
 
-**Config is the single source of truth.** All defaults live in `config-templates/default.toml`. The resolved config drives everything: which model, which MCP servers, which layers, which role. No hardcoded values in code.
+Embedders pick their surface: interactive CLI, ACP for multi-agent orchestration, WebSocket for IDEs and dashboards, daemon mode for long-running background agents.
 
 See [Architecture](doc/dev/02-architecture.md) for internals.
 
