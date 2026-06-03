@@ -1,5 +1,141 @@
 # Changelog
 
+## [0.30.0] - 2026-06-03
+
+### 📋 Release Summary
+
+This release introduces advanced AI-driven conversation compression, a new lesson management system for learning, and robust project-local guardrails to ensure higher quality interactions (4e32734b, 8a269847, f917b4ad). Users can now leverage an external workflow orchestrator, session sharing, and improved terminal controls for a more flexible development experience (e7b56c13, 3a1e12cc, 12818db1). Significant stability improvements address MCP tool call sequencing, session persistence, and general system reliability (ac22fc5d, d27da3d3, bdcfe77b).
+
+
+### 🚨 Breaking Changes
+
+⚠️ **Important**: This release contains breaking changes that may require code updates.
+
+- **workflow**: route all outputs to stderr `277f1ce1`
+- **session**: remove provider field from session info `fc1289ad`
+
+### ✨ New Features & Enhancements
+
+- **session**: integrate handle_done into main loop `a06b9d41`
+- **acp**: implement /done command with instructions `a9466cf3`
+- **learning**: add global scope support to lessons `639c23fb`
+- **learning**: implement global scope and tiered recall `faa0ff3a`
+- **session**: implement persistent command logging `6aafd225`
+- **workflow**: implement standalone TOML execution `89bd7ac3`
+- **session**: implement zstd compression for logs `3cc45f41`
+- **workflow**: expand prompts with system placeholders `065ae7aa`
+- **workflow**: add markdown rendering to step outputs `4cf48565`
+- **workflow**: implement per-step model overrides `1c6b9a8b`
+- **workflow**: track and display tool failure statistics `a04ba41b`
+- **term**: implement tty echo suppression and fd control `12818db1`
+- **workflow**: enhance step rendering and execution UI `65911396`
+- **config**: add develop workflow template `3e31309e`
+- **workflow**: migrate internal workflows to external CLI `a74aab7f`
+- **workflow**: implement contextual prompts for continue sessions `c5a7cc71`
+- **workflow**: implement external workflow orchestrator `e7b56c13`
+- **config**: add toggle for auto-activating capabilities `d39d761b`
+- **compression**: implement XML fallback for structured output `1aa8e221`
+- **chat**: improve /done command feedback `707a3dec`
+- **chat**: hide system tags in welcome messages `ac519131`
+- **compression**: migrate to structured JSON and XML formats `94564637`
+- **compression**: implement synthetic continuation wrappers `185a17bc`
+- **guardrails**: implement post-turn validator scripts `632a09e7`
+- **guardrails**: implement post-tool execution hooks `a8ae170c`
+- **session**: implement project-local guardrails system `f917b4ad`
+- **session**: track tool calls in assistant messages `6ac4a06e`
+- **session**: persist chat session role `55cc8e50`
+- **session**: warn about local share URLs and add tips `7ca5bde7`
+- **session**: implement /analyze command and local bridge `7b272387`
+- **session**: implement session sharing functionality `3a1e12cc`
+- **session**: add critical knowledge to plan display `3a44fe0c`
+- **schedule**: implement idle-based message triggering `c9773625`
+- **session**: improve content cache marker management `610f150b`
+- **learning**: implement lesson management system `8a269847`
+- **compression**: allow compression when ignoring costs `a622d1c0`
+- **acp**: persist session info after messages `8ddf32ee`
+- **compression**: implement cost-aware decision logic `a61f333e`
+- **session**: implement conversation compression `4e32734b`
+- **session**: implement AI-driven conversation compression `2f4fd29d`
+- **compression**: implement advanced conversation compression `3d4f6d83`
+
+### 🔧 Improvements & Optimizations
+
+- **session**: remove obsolete cache marker logic `b8225527`
+- **test**: reformat write_zstd_line calls `3da9a4fa`
+- **session**: simplify session file writing in tests `27a0fe34`
+- **workflow**: improve execution log visualization `2b588704`
+- **core**: clean up whitespace and formatting `c4d8813c`
+- **mcp**: clarify discovery flow requirements `02ed57f7`
+- **config**: set gpt-5-mini as default compression model `f1a6e86e`
+- **session**: optimize conversation compression prompts `8aa15ba4`
+- **compression**: remove first_prompt_idx tracking `6a825609`
+- **guardrails**: rename rules to guards and fix session logging `33884349`
+- **guardrails**: clarify history-based rule tests `0182aac3`
+- **session**: add role field to session mock data `0844f491`
+- **session**: replace provider field with role `9cd65d0b`
+- **session**: improve report and list formatting `19104886`
+- **cli**: implement structured block rendering for output `6f8c0edb`
+- **mcp**: lower routing accuracy threshold to 80% `efdc097a`
+- **mcp**: recalibrate semantic thresholds for fine-tuned model `de8eb12b`
+- **learning**: simplify file deletion logic `52a9dba7`
+- **compression**: remove unused imports `4f974721`
+- **compression**: decouple range logic to new module `8bbd24f0`
+- **compression**: decouple knowledge handling `f5303b31`
+- **mcp**: remove unused tool call parsing fallback `6e82aa19`
+- **mcp**: remove legacy is_server_already_running `4154d042`
+- **session**: remove legacy layers enabled state `5b22c856`
+- **session**: encapsulate runtime initialization `85c071cb`
+- **mcp**: centralize background job termination `8b8287c9`
+- **learning**: consolidate lesson extraction logic `1f206b0d`
+- **session**: extract keepalive drain logic `b4b378cc`
+- **config**: simplify caching and remove MCP warnings `04e3025b`
+- **session**: streamline llm calls and compression tests `45a6e9a1`
+- **mcp**: stabilize connection type serialization `736613f7`
+- **session**: implement typed cancellation errors `89fa6aa2`
+- **session**: replace string parsing with GenericSessionArgs `f8fa078b`
+- **workflow**: migrate pr brief to reusable workflow `4cba0b35`
+
+### 🐛 Bug Fixes & Stability
+
+- **agent**: improve tap loading and cloning errors `1b7b9851`
+- **session**: suspend animation during idle prompt `edb8a623`
+- **mcp**: prevent invalid tool call sequences during compression `ac22fc5d`
+- **chat**: handle transient cursor position report failures `f22be27c`
+- **mcp**: prevent orphaned tool calls during compression `50177ab3`
+- **session**: prevent MCP tool ownership errors during role swap `0cdf3b50`
+- **mcp**: prevent deadlock on stdin server timeout `8c560499`
+- **session**: recover JSON from AI text content `fd314250`
+- **mcp**: restart dead stdin servers during tool calls `bdcfe77b`
+- **compression**: prevent invalid tool use sequence `03b97a0b`
+- **chat**: show tool preview for single tool calls `b23ee611`
+- **compression**: prevent ratio wrap-around during escalation `588b09c2`
+- **session**: skip credential check for cli provider `81c8bc0a`
+- **session**: log errors when appending to session file `baa8246f`
+- **config**: prevent panic on missing role lookup `06862ce7`
+- **session**: log errors during chat session save `d27da3d3`
+- **session**: prevent panic on tokenizer initialization failure `94d72bb0`
+- **providers**: prevent panic on malformed tool calls `c9c34007`
+- **session**: propagate errors in non-daemon mode `bf865767`
+- **session**: preserve assistant response id during compression `48e6e3c4`
+- **chat**: align compression log style with cost display `33abefba`
+
+### 📚 Documentation & Examples
+
+- comprehensively expand project and protocol documentation `2a521251`
+- **config**: set gpt-5-mini as default compression model `6f1eef92`
+- add contribution guidelines `4435f767`
+- **mcp**: clarify session requirement for run action `6088a1e4`
+- **instructions**: remove redundant workflow guides `19ad243a`
+- **readme**: expand pillars to include guardrails and intent-driven context `2ce0e98d`
+- **config**: document BINARIES variable `278f7774`
+- **general**: bump rust version and refine guides `99b34200`
+- **usage**: add guardrails documentation `80c39781`
+- comprehensive update to developer and user guides `555e969c`
+
+### 🔄 Other Changes
+
+7 maintenance, dependency, and tooling updates not listed individually.
+
 ## [0.29.0] - 2026-05-15
 
 ### 📋 Release Summary
