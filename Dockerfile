@@ -1,47 +1,72 @@
-# Multi-stage Dockerfile for octomind
-# Stage 1: Build
-FROM rust:1.95-slim AS builder
+# Copyright 2026 Muvon Un Limited
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-		pkg-config \
-		libssl-dev \
-		curl \
-		g++ \
-		&& rm -rf /var/lib/apt/lists/*
-
-# Create app directory
-WORKDIR /app
-
-# Copy manifests
-COPY Cargo.toml Cargo.lock ./
-
-# Copy source code and config templates
-COPY src ./src
-COPY config-templates ./config-templates
-COPY assets ./assets
-
-# Build the application
-RUN cargo build --release
-
-# Install additional tools in builder stage
-RUN cargo install ripgrep --locked --root /usr/local && \
-    cargo install ast-grep --locked --root /usr/local
-
-# Install octocode to a specific directory
-ENV OCTOCODE_INSTALL_DIR=/usr/local/bin
-RUN curl -fsSL https://raw.githubusercontent.com/Muvon/octocode/master/install.sh | sh
-
-# Stage 2: Runtime
+# Single-stage Dockerfile for octomind — downloads pre-built static binary
+# from GitHub Releases instead of compiling from source.
+# Build with: docker build --build-arg OCTOMIND_VERSION=0.30.0 .
 FROM debian:bookworm-slim
 
-# Install runtime dependencies only
+ARG OCTOMIND_VERSION
+ARG TARGETARCH
+
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
 		ca-certificates \
 		curl \
 		wget \
+		ripgrep \
 		&& rm -rf /var/lib/apt/lists/* \
 		&& update-ca-certificates
+
+# Map Docker TARGETARCH to the release asset target triple
+# amd64 → x86_64-unknown-linux-musl
+# arm64 → aarch64-unknown-linux-musl
+RUN set -eu; \
+		case "${TARGETARCH}" in \
+			amd64)  ASSET_TARGET="x86_64-unknown-linux-musl" ;; \
+			arm64)  ASSET_TARGET="aarch64-unknown-linux-musl" ;; \
+			*) echo "unsupported arch ${TARGETARCH}"; exit 1 ;; \
+		esac; \
+		ASSET="octomind-${OCTOMIND_VERSION}-${ASSET_TARGET}.tar.gz"; \
+		URL="https://github.com/muvon/octomind/releases/download/${OCTOMIND_VERSION}/${ASSET}"; \
+		echo "Downloading ${URL}"; \
+		curl -fsSL "${URL}" -o /tmp/octomind.tar.gz; \
+		tar xzf /tmp/octomind.tar.gz -C /tmp; \
+		mv /tmp/octomind /usr/local/bin/octomind; \
+		chmod +x /usr/local/bin/octomind; \
+		rm /tmp/octomind.tar.gz
+
+# Install ast-grep (sg) from GitHub Releases
+ARG AST_GREP_VERSION=0.38.6
+RUN set -eu; \
+		case "${TARGETARCH}" in \
+			amd64)  SG_TARGET="x86_64-unknown-linux-musl" ;; \
+			arm64)  SG_TARGET="aarch64-unknown-linux-musl" ;; \
+			*) echo "unsupported arch ${TARGETARCH}"; exit 1 ;; \
+		esac; \
+		ASSET="ast-grep-${AST_GREP_VERSION}-${SG_TARGET}.tar.gz"; \
+		URL="https://github.com/ast-grep/ast-grep/releases/download/${AST_GREP_VERSION}/${ASSET}"; \
+		echo "Downloading ${URL}"; \
+		curl -fsSL "${URL}" -o /tmp/ast-grep.tar.gz; \
+		tar xzf /tmp/ast-grep.tar.gz -C /tmp; \
+		mv /tmp/ast-grep /usr/local/bin/sg || mv /tmp/sg /usr/local/bin/sg || true; \
+		chmod +x /usr/local/bin/sg; \
+		rm /tmp/ast-grep.tar.gz
+
+# Install octocode via install script
+ENV OCTOCODE_INSTALL_DIR=/usr/local/bin
+RUN curl -fsSL https://raw.githubusercontent.com/Muvon/octocode/master/install.sh | sh
 
 # Create a non-root user
 RUN groupadd -r octomind && useradd -r -g octomind octomind
@@ -49,24 +74,13 @@ RUN groupadd -r octomind && useradd -r -g octomind octomind
 # Create app directory
 WORKDIR /app
 
-# Copy the binary from builder stage
-COPY --from=builder /app/target/release/octomind /usr/local/bin/octomind
-
-# Copy additional tools from builder stage
-COPY --from=builder /usr/local/bin/rg /usr/local/bin/rg
-COPY --from=builder /usr/local/bin/sg /usr/local/bin/sg
-COPY --from=builder /usr/local/bin/octocode /usr/local/bin/octocode
-
 # Change ownership to non-root user
 RUN chown -R octomind:octomind /app
 
 # Switch to non-root user
 USER octomind
 
-# Expose port (if applicable)
-# EXPOSE 8080
-
-# Health check (customize based on your application)
+# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 		CMD octomind --help || exit 1
 
