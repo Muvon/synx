@@ -11,12 +11,13 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{stdin, stdout, BufReader, BufWriter, Stdout};
 use tokio::sync::Mutex;
 
+use crate::baseline::LiveBaseline;
 use crate::cache::HashCache;
 use crate::ignores::IgnoreStack;
 use crate::peer::{
     apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
     cleanup_orphan_tmps, compute_delta, compute_signature, forward_local_events, live_loop,
-    send_file, Pending, Suppression,
+    send_file, GitGate, Pending, Suppression,
 };
 use crate::protocol::{read_message, write_message, EntryKind, Message, PROTOCOL_VERSION};
 use crate::walker::{build_entry, ensure_root, walk_manifest};
@@ -352,13 +353,27 @@ pub async fn run(path: PathBuf) -> Result<()> {
     // user edits made on the remote during the startup window flow to the
     // client.
     let ignores = Arc::new(IgnoreStack::load(&root));
+    // Agent has no plan/baseline; a disabled one keeps the shared signatures
+    // uniform while skipping all persistence. The git gate, however, is real.
+    let gate = GitGate::default();
+    let live_baseline = LiveBaseline::disabled();
     let mut buffered: Vec<crate::watcher::FsEvent> = Vec::new();
     while let Ok(batch) = watcher_handle.events.try_recv() {
         buffered.extend(batch);
     }
     if !buffered.is_empty() {
         tracing::debug!("agent: draining {} buffered watcher events", buffered.len());
-        forward_local_events(&root, buffered, &writer, compress, &suppress, false).await?;
+        forward_local_events(
+            &root,
+            buffered,
+            &writer,
+            compress,
+            &suppress,
+            false,
+            &gate,
+            &live_baseline,
+        )
+        .await?;
     }
 
     // ── Live mode ──
@@ -368,6 +383,8 @@ pub async fn run(path: PathBuf) -> Result<()> {
         compress,
         is_client: false,
         ignores,
+        gate,
+        baseline: live_baseline,
     };
     live_loop(ctx, reader, writer, suppress, pending, watcher_handle).await
 }

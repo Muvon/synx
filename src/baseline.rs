@@ -9,48 +9,47 @@
 //! is now absent on one side can be classified: gone-and-unchanged-elsewhere
 //! is a genuine deletion (propagate), anything else is kept (never lose data).
 //!
-//! Lives next to the hash cache in the user-cache dir, keyed by root path.
+//! `Baseline` is the read side, loaded at session start for the plan.
+//! `LiveBaseline` is the write side: seeded with the converged manifest after
+//! init sync, then kept current as the live loop applies/forwards changes, so
+//! even a file created and deleted within one session is recorded correctly
+//! and never resurrects. Both share one on-disk file (a bare path → Entry
+//! map), keyed by root, living next to the hash cache in the user-cache dir.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::protocol::Entry;
 
-#[derive(Default, Serialize, Deserialize)]
+/// At most one disk write per this interval while the live loop is churning.
+/// A slightly stale baseline is safe — it only makes the next diff fall back
+/// to the conservative pull-back for the un-persisted paths, never a wrong
+/// delete — so debouncing trades a tiny resurrection window for far less IO.
+const PERSIST_DEBOUNCE: Duration = Duration::from_secs(3);
+
+/// Read side: the baseline as it was at the last sync. Empty on first run.
+#[derive(Default)]
 pub struct Baseline {
     entries: HashMap<PathBuf, Entry>,
 }
 
 impl Baseline {
-    /// Load the baseline for `root`. Any failure (missing, corrupt, older
-    /// format) yields an empty baseline, which makes the three-way diff fall
-    /// back to the conservative pull-back behavior — never a mass delete.
+    /// Any failure (missing, corrupt, older format) yields an empty baseline,
+    /// which makes the three-way diff fall back to the conservative pull-back
+    /// behavior — never a mass delete.
     pub fn load(root: &Path) -> Self {
         let Some(path) = baseline_path_for(root) else {
             return Self::default();
         };
         match fs::read(&path) {
-            Ok(bytes) => postcard::from_bytes(&bytes).unwrap_or_default(),
+            Ok(bytes) => Self {
+                entries: postcard::from_bytes(&bytes).unwrap_or_default(),
+            },
             Err(_) => Self::default(),
         }
-    }
-
-    pub fn save(&self, root: &Path) {
-        let Some(path) = baseline_path_for(root) else {
-            return;
-        };
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Ok(bytes) = postcard::to_allocvec(self) {
-            let _ = fs::write(&path, bytes);
-        }
-    }
-
-    pub fn from_map(entries: HashMap<PathBuf, Entry>) -> Self {
-        Self { entries }
     }
 
     pub fn get(&self, path: &Path) -> Option<&Entry> {
@@ -59,6 +58,118 @@ impl Baseline {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+}
+
+/// Write side: a shared, mutable baseline kept current during a live session
+/// and persisted (debounced) to the same file `Baseline::load` reads.
+#[derive(Clone, Default)]
+pub struct LiveBaseline {
+    inner: Arc<Mutex<Inner>>,
+    root: PathBuf,
+    /// Only the client owns a persistent baseline (it builds the plan). The
+    /// agent gets a disabled one whose mutations and writes are no-ops.
+    enabled: bool,
+}
+
+#[derive(Default)]
+struct Inner {
+    entries: HashMap<PathBuf, Entry>,
+    dirty: bool,
+    last_save: Option<Instant>,
+}
+
+impl LiveBaseline {
+    /// Seed with the converged manifest and persist immediately, so even a
+    /// `--once` run or an instant disconnect leaves a correct baseline.
+    pub fn seed(root: PathBuf, entries: HashMap<PathBuf, Entry>) -> Self {
+        let lb = Self {
+            inner: Arc::new(Mutex::new(Inner {
+                entries,
+                dirty: true,
+                last_save: None,
+            })),
+            root,
+            enabled: true,
+        };
+        lb.persist_now();
+        lb
+    }
+
+    /// A no-op baseline for the agent side (no planning, nothing to persist).
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+
+    /// Record that `path` now holds `entry`'s content on both sides.
+    pub fn set(&self, entry: Entry) {
+        if !self.enabled {
+            return;
+        }
+        if let Ok(mut g) = self.inner.lock() {
+            g.entries.insert(entry.path.clone(), entry);
+            g.dirty = true;
+        }
+        self.persist_due();
+    }
+
+    /// Record that `path` is now gone on both sides.
+    pub fn remove(&self, path: &Path) {
+        if !self.enabled {
+            return;
+        }
+        if let Ok(mut g) = self.inner.lock() {
+            if g.entries.remove(path).is_some() {
+                g.dirty = true;
+            }
+        }
+        self.persist_due();
+    }
+
+    /// Persist if dirty and the debounce interval has elapsed.
+    fn persist_due(&self) {
+        self.write(false);
+    }
+
+    /// Persist unconditionally if dirty (called on clean live-loop exit).
+    pub fn persist_now(&self) {
+        self.write(true);
+    }
+
+    fn write(&self, force: bool) {
+        if !self.enabled {
+            return;
+        }
+        // Serialize under the lock, write outside it — keep the critical
+        // section to a single in-memory pass, never an IO syscall.
+        let bytes = {
+            let Ok(mut g) = self.inner.lock() else {
+                return;
+            };
+            if !g.dirty {
+                return;
+            }
+            let due = force
+                || g.last_save
+                    .map(|t| t.elapsed() >= PERSIST_DEBOUNCE)
+                    .unwrap_or(true);
+            if !due {
+                return;
+            }
+            let Ok(bytes) = postcard::to_allocvec(&g.entries) else {
+                return;
+            };
+            g.dirty = false;
+            g.last_save = Some(Instant::now());
+            bytes
+        };
+        let Some(path) = baseline_path_for(&self.root) else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(&path, &bytes);
     }
 }
 
