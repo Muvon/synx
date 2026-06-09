@@ -12,14 +12,14 @@ use tokio::io::{BufReader, BufWriter};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 
-use crate::baseline::Baseline;
+use crate::baseline::{Baseline, LiveBaseline};
 use crate::cache::HashCache;
 use crate::cli::ClientArgs;
 use crate::ignores::IgnoreStack;
 use crate::peer::{
     apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
     compute_delta, compute_signature, forward_local_events, git_busy, is_under_git, live_loop,
-    send_file, Pending, Suppression,
+    send_file, GitGate, Pending, Suppression,
 };
 use crate::protocol::{
     read_message, write_message, Entry, EntryKind, Message, SyncMode, PROTOCOL_VERSION,
@@ -684,12 +684,14 @@ async fn run_inner(
         c.save(&local_root);
     }
 
-    // Persist the converged manifest as the next session's baseline. After
-    // init sync the local tree equals the merged result: start from the local
+    // Seed the next session's baseline from the converged manifest. After init
+    // sync the local tree equals the merged result: start from the local
     // manifest, drop what we just deleted locally, and overwrite pulled paths
-    // with the remote's version (we now hold its content). This is what lets
-    // the next run tell a genuine deletion from a peer creation.
-    {
+    // with the remote's version (we now hold its content). This live baseline
+    // is then kept current by the live loop and persisted on exit — it's what
+    // lets the next run tell a genuine deletion from a peer creation, even for
+    // a file created and removed within a single session.
+    let live_baseline = {
         let remote_by_path: HashMap<&PathBuf, &Entry> =
             remote_manifest.iter().map(|e| (&e.path, e)).collect();
         let deleted_local: std::collections::HashSet<PathBuf> =
@@ -704,8 +706,8 @@ async fn run_inner(
                 converged.insert(p.clone(), (*r).clone());
             }
         }
-        Baseline::from_map(converged).save(&local_root);
-    }
+        LiveBaseline::seed(local_root.clone(), converged)
+    };
 
     let _ = received_files;
 
@@ -717,6 +719,9 @@ async fn run_inner(
         return Ok(());
     }
 
+    // Shared per-session git gate (sticky .git/ pause + defer queue).
+    let gate = GitGate::default();
+
     // Drain any watcher events that accumulated during the walk + manifest
     // exchange + init-sync apply. With suppress now populated for every
     // file we just wrote, echoes of our own writes filter out and real
@@ -727,7 +732,17 @@ async fn run_inner(
     }
     if !buffered.is_empty() {
         tracing::debug!("draining {} buffered watcher events", buffered.len());
-        forward_local_events(&local_root, buffered, &writer, compress, &suppress, true).await?;
+        forward_local_events(
+            &local_root,
+            buffered,
+            &writer,
+            compress,
+            &suppress,
+            true,
+            &gate,
+            &live_baseline,
+        )
+        .await?;
     }
 
     crate::ui::info("watching for changes — ctrl+c to stop");
@@ -737,6 +752,8 @@ async fn run_inner(
         compress,
         is_client: true,
         ignores,
+        gate,
+        baseline: live_baseline,
     };
     let result = live_loop(ctx, reader, writer, suppress, pending, watcher_handle).await;
     let _ = child.wait().await;

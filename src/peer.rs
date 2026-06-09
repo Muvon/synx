@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use humansize::{format_size, BINARY};
 use owo_colors::OwoColorize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
 
+use crate::baseline::LiveBaseline;
 use crate::ignores::IgnoreStack;
 use crate::protocol::{
     read_message, write_message, Entry, EntryKind, Message, SyncMode, CHUNK_SIZE, CHUNK_THRESHOLD,
@@ -275,6 +276,80 @@ fn newest_age(p: &Path, meta: &fs::Metadata, now: std::time::SystemTime) -> Dura
         }
     }
     youngest
+}
+
+/// Keep `.git/` paused this long after git's markers disappear. `git_busy`
+/// flickers false between a multi-step operation's sub-steps (lock files
+/// appear and vanish per step), so without hysteresis a burst of transient
+/// `.git/` churn — lock files, half-written objects — leaks to the peer in
+/// the gaps. This bridges them.
+const GIT_SETTLE: Duration = Duration::from_secs(5);
+
+/// Sticky gate around `git_busy` plus a defer queue for `.git/` events.
+///
+/// While git is busy (with hysteresis) we don't drop `.git/` events — we
+/// stash them. Once git settles, the caller replays each deferred *path*
+/// against its current on-disk state, so intermediate churn collapses to the
+/// final result and stray lock files resolve to deletes. Deferred incoming
+/// ops are replayed in arrival order.
+#[derive(Clone, Default)]
+pub struct GitGate {
+    inner: Arc<std::sync::Mutex<GitGateInner>>,
+}
+
+#[derive(Default)]
+struct GitGateInner {
+    last_busy: Option<Instant>,
+    /// Local `.git/` paths touched while paused — replayed by current state.
+    deferred_out: HashSet<PathBuf>,
+    /// Incoming `.git/` ops received while paused — replayed in order.
+    deferred_in: Vec<Message>,
+}
+
+impl GitGate {
+    /// Sticky busy check: true while git is mid-operation and for `GIT_SETTLE`
+    /// after its markers clear. Refreshes the hysteresis timer when actually
+    /// busy.
+    pub fn busy(&self, root: &Path) -> bool {
+        let raw = git_busy(root);
+        let Ok(mut g) = self.inner.lock() else {
+            return raw;
+        };
+        if raw {
+            g.last_busy = Some(Instant::now());
+            return true;
+        }
+        matches!(g.last_busy, Some(t) if t.elapsed() < GIT_SETTLE)
+    }
+
+    pub fn defer_out(&self, path: PathBuf) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.deferred_out.insert(path);
+        }
+    }
+
+    pub fn defer_in(&self, msg: Message) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.deferred_in.push(msg);
+        }
+    }
+
+    pub fn has_deferred(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|g| !g.deferred_out.is_empty() || !g.deferred_in.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Drain everything deferred while git was busy; the caller replays it.
+    pub fn take_deferred(&self) -> (Vec<PathBuf>, Vec<Message>) {
+        let Ok(mut g) = self.inner.lock() else {
+            return (Vec::new(), Vec::new());
+        };
+        let out: Vec<PathBuf> = g.deferred_out.drain().collect();
+        let inc = std::mem::take(&mut g.deferred_in);
+        (out, inc)
+    }
 }
 
 /// Remove tmp files left over from a previous crashed run.
@@ -723,6 +798,11 @@ pub struct SessionCtx {
     pub compress: bool,
     pub is_client: bool,
     pub ignores: Arc<IgnoreStack>,
+    /// Sticky `.git/` pause + defer queue (see `GitGate`).
+    pub gate: GitGate,
+    /// Live three-way-diff baseline, kept current as the loop converges.
+    /// Disabled (no-op) on the agent side.
+    pub baseline: LiveBaseline,
 }
 
 fn directions(mode: SyncMode, is_client: bool) -> (bool, bool) {
@@ -783,6 +863,12 @@ where
     let sigint = tokio::signal::ctrl_c();
     tokio::pin!(sigint);
 
+    // Drives the deferred-`.git/` replay: once git settles, the queued events
+    // are flushed against their current state. 1s latency to resume `.git/`
+    // sync after an operation finishes is imperceptible.
+    let mut git_tick = tokio::time::interval(Duration::from_secs(1));
+    git_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         tokio::select! {
             biased;
@@ -818,12 +904,34 @@ where
             ev = event_rx.recv() => {
                 let Some(events) = ev else { break };
                 if send_local {
-                    forward_local_events(&ctx.root, events, &writer, ctx.compress, &suppress, ctx.is_client).await?;
+                    forward_local_events(&ctx.root, events, &writer, ctx.compress, &suppress, ctx.is_client, &ctx.gate, &ctx.baseline).await?;
+                }
+            }
+
+            _ = git_tick.tick() => {
+                // Replay `.git/` events deferred during a git operation, but
+                // only once git has actually settled.
+                if ctx.gate.has_deferred() && !ctx.gate.busy(&ctx.root) {
+                    let (paths, msgs) = ctx.gate.take_deferred();
+                    if send_local && !paths.is_empty() {
+                        // Synthesize a Modified for each touched path;
+                        // forward_local_events re-reads current state, so a
+                        // path that's now gone becomes a Delete.
+                        let events: Vec<FsEvent> = paths.into_iter().map(FsEvent::Modified).collect();
+                        forward_local_events(&ctx.root, events, &writer, ctx.compress, &suppress, ctx.is_client, &ctx.gate, &ctx.baseline).await?;
+                    }
+                    for m in msgs {
+                        if let Err(e) = handle_incoming(&ctx, m, &suppress, &pending, &writer, apply_remote).await {
+                            tracing::warn!("deferred apply failed: {}", e);
+                        }
+                    }
                 }
             }
         }
     }
 
+    // Flush the latest converged state before we tear down / reconnect.
+    ctx.baseline.persist_now();
     reader_task.abort();
     Ok(())
 }
@@ -848,10 +956,11 @@ where
     // forwarded over SSH to the same terminal, so any logs there would just
     // duplicate the client's transcript.
     let log_event = ctx.is_client;
-    // If git is mid-operation locally, refuse to apply any change under
-    // `.git/`. Otherwise the peer (who may NOT be busy) would clobber our
-    // in-progress rebase/merge state and break ref locking.
-    let busy = git_busy(root);
+    // If git is mid-operation locally, don't apply any change under `.git/` —
+    // the peer (who may NOT be busy) would clobber our in-progress rebase/merge
+    // state and break ref locking. Sticky (hysteresis) so brief gaps between
+    // git's sub-steps don't open the gate.
+    let busy = ctx.gate.busy(root);
     let path_of = |m: &Message| -> Option<PathBuf> {
         match m {
             Message::FileData { entry, .. } => Some(entry.path.clone()),
@@ -870,7 +979,9 @@ where
     if busy {
         if let Some(p) = path_of(&msg) {
             if is_under_git(&p) {
-                tracing::debug!("git busy: skip incoming for {}", p.display());
+                // Defer, don't drop: replayed once git settles (see live_loop).
+                tracing::debug!("git busy: defer incoming for {}", p.display());
+                ctx.gate.defer_in(msg);
                 return Ok(());
             }
         }
@@ -890,6 +1001,7 @@ where
                 let mt = lstat_mtime_ns(&root.join(&entry.path));
                 suppress.mark_set(entry.path.clone(), mt, entry.hash);
                 tracing::trace!("dedup (recv FileData): {}", entry.path.display());
+                ctx.baseline.set(entry);
                 return Ok(());
             }
             // Stale-create guard: peer is sending us a file we just deleted.
@@ -919,6 +1031,7 @@ where
                     format_size(size, BINARY).dimmed()
                 );
             }
+            ctx.baseline.set(entry);
         }
         Message::FileStart { entry, .. } => {
             if !apply_remote {
@@ -935,6 +1048,7 @@ where
                 let mt = lstat_mtime_ns(&root.join(&entry.path));
                 suppress.mark_set(entry.path.clone(), mt, entry.hash);
                 tracing::trace!("dedup (recv FileStart): {}", entry.path.display());
+                ctx.baseline.set(entry);
                 return Ok(());
             }
             // Stale-create guard (chunked transfer variant).
@@ -975,6 +1089,7 @@ where
                         format_size(entry.size, BINARY).dimmed()
                     );
                 }
+                ctx.baseline.set(entry);
             }
         }
         Message::Touch { path, mtime, mode } => {
@@ -1024,6 +1139,7 @@ where
             if is_already_equal(root, &entry) {
                 let mt = lstat_mtime_ns(&root.join(&entry.path));
                 suppress.mark_mtime(entry.path.clone(), mt);
+                ctx.baseline.set(entry);
                 return Ok(());
             }
             let full = root.join(&entry.path);
@@ -1035,6 +1151,7 @@ where
                 return Ok(());
             }
             apply_mkdir(root, &entry)?;
+            ctx.baseline.set(entry.clone());
             // Use the actual on-disk mtime (dir mtime changes whenever
             // children are added) so future echoes match precisely.
             let mt = lstat_mtime_ns(&full);
@@ -1050,6 +1167,7 @@ where
             if is_already_equal(root, &entry) {
                 let mt = lstat_mtime_ns(&root.join(&entry.path));
                 suppress.mark_mtime(entry.path.clone(), mt);
+                ctx.baseline.set(entry);
                 return Ok(());
             }
             let full = root.join(&entry.path);
@@ -1061,6 +1179,7 @@ where
                 return Ok(());
             }
             apply_symlink(root, &entry)?;
+            ctx.baseline.set(entry.clone());
             let mt = lstat_mtime_ns(&full);
             suppress.mark_mtime(entry.path, mt);
         }
@@ -1073,6 +1192,7 @@ where
             }
             let existed_before = fs::symlink_metadata(root.join(&path)).is_ok();
             apply_delete(root, &path)?;
+            ctx.baseline.remove(&path);
             suppress.mark_deleted(path.clone());
             if existed_before && log_event {
                 eprintln!("  {} × {}", "←".bright_cyan(), path.display());
@@ -1102,6 +1222,10 @@ where
                 return Ok(());
             }
             apply_rename(root, &from, &to)?;
+            ctx.baseline.remove(&from);
+            if let Some(e) = build_entry(root, &to, None)? {
+                ctx.baseline.set(e);
+            }
             suppress.mark_deleted(from);
             let mt = lstat_mtime_ns(&root.join(&to));
             suppress.mark_mtime(to, mt);
@@ -1195,6 +1319,7 @@ fn coalesce(events: Vec<FsEvent>) -> Vec<FsEvent> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)] // distinct session pieces; also called pre-SessionCtx
 pub async fn forward_local_events<W>(
     root: &Path,
     events: Vec<FsEvent>,
@@ -1202,6 +1327,8 @@ pub async fn forward_local_events<W>(
     compress: bool,
     suppress: &Suppression,
     is_client: bool,
+    gate: &GitGate,
+    baseline: &LiveBaseline,
 ) -> Result<()>
 where
     W: AsyncWriteExt + Unpin,
@@ -1210,10 +1337,11 @@ where
     // forwarded over SSH stderr and duplicate every transfer line.
     let log_event = is_client;
     let events = coalesce(events);
-    // Once per batch: if git is mid-operation, suppress every event that
-    // touches .git/. Prevents partial rebase/merge state from leaking to
-    // the peer where it would race with the peer's own ref updates.
-    let pause_git = git_busy(root);
+    // Once per batch: if git is mid-operation, defer every event that touches
+    // .git/. Prevents partial rebase/merge state from leaking to the peer
+    // where it would race with the peer's own ref updates. Sticky (hysteresis)
+    // so the brief gaps between git's sub-steps don't open the gate.
+    let pause_git = gate.busy(root);
     for ev in events {
         if suppress.is_echo(root, &ev) {
             tracing::trace!("echo suppressed: {:?}", ev);
@@ -1225,7 +1353,10 @@ where
                 FsEvent::Renamed { to, .. } => to,
             };
             if is_under_git(key) {
-                tracing::debug!("git busy: skip event {:?}", ev);
+                // Defer, don't drop: replayed against current state once git
+                // settles (see live_loop's git_tick).
+                tracing::debug!("git busy: defer event {:?}", ev);
+                gate.defer_out(key.clone());
                 continue;
             }
         }
@@ -1248,6 +1379,7 @@ where
                             write_message(&mut *w, &Message::Delete { path: p.clone() }, compress)
                                 .await?;
                         }
+                        baseline.remove(&p);
                         suppress.mark_deleted(p);
                         continue;
                     }
@@ -1256,6 +1388,9 @@ where
                 let entry_mtime = entry.mtime;
                 let entry_hash = entry.hash;
                 let entry_kind = entry.kind;
+                // Snapshot for the baseline before `entry` is moved into the
+                // outgoing message below.
+                let baseline_entry = entry.clone();
                 match entry.kind {
                     EntryKind::Dir => {
                         let mut w = writer.lock().await;
@@ -1347,6 +1482,9 @@ where
                     _ => NO_HASH,
                 };
                 suppress.mark_set(path_clone, entry_mtime, hash_to_mark);
+                // This content is now on both sides — record it as the
+                // converged baseline (so a later delete of it is detectable).
+                baseline.set(baseline_entry);
             }
             FsEvent::Removed(p) => {
                 if log_event {
@@ -1359,6 +1497,7 @@ where
                 // Record that *we* deleted this — receiver dedup uses this
                 // to drop stale FileData / MkDir for the same path arriving
                 // out-of-order from the peer.
+                baseline.remove(&p);
                 suppress.mark_deleted(p);
             }
             FsEvent::Renamed { from, to } => {
@@ -1376,6 +1515,7 @@ where
                 }
                 if let Some(entry) = build_entry(root, &to, None)? {
                     let to_mtime = entry.mtime;
+                    let baseline_entry = entry.clone();
                     match entry.kind {
                         EntryKind::File => {
                             send_file(writer, root, &entry, compress).await?;
@@ -1390,7 +1530,9 @@ where
                         }
                     }
                     suppress.mark_mtime(to.clone(), to_mtime);
+                    baseline.set(baseline_entry);
                 }
+                baseline.remove(&from);
                 suppress.mark_deleted(from.clone());
                 if log_event {
                     eprintln!(
