@@ -1,4 +1,5 @@
 mod agent;
+mod baseline;
 mod cache;
 mod cli;
 mod ignores;
