@@ -12,6 +12,7 @@ use tokio::io::{BufReader, BufWriter};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 
+use crate::baseline::Baseline;
 use crate::cache::HashCache;
 use crate::cli::ClientArgs;
 use crate::ignores::IgnoreStack;
@@ -264,7 +265,15 @@ async fn run_inner(
         .collect();
 
     // ── Diff ──
-    let plan = build_plan(&local_manifest, &remote_manifest, args.mode);
+    // Baseline = the converged manifest from our last successful sync. It is
+    // the common ancestor that lets the three-way diff distinguish a genuine
+    // deletion from a creation on the peer (see build_plan). Empty on first
+    // run → conservative pull-back, no deletes propagate that session.
+    let baseline = Baseline::load(&local_root);
+    if baseline.is_empty() {
+        tracing::debug!("no baseline yet — deletions won't propagate until next sync");
+    }
+    let plan = build_plan(&local_manifest, &remote_manifest, &baseline, args.mode);
     plan.print();
 
     if args.dry_run {
@@ -273,6 +282,20 @@ async fn run_inner(
         drop(w);
         let _ = child.wait().await;
         return Ok(());
+    }
+
+    // Apply remote-originated deletions locally. These are paths the peer
+    // removed whose local copy is still byte-identical to the last baseline,
+    // so it's a propagated deletion (not an unsynced local edit). Destructive,
+    // hence gated on the baseline match computed in build_plan.
+    for path in &plan.del_local {
+        match apply_delete(&local_root, path) {
+            Ok(()) => {
+                suppress.mark_deleted(path.clone());
+                eprintln!("  {} × {}", "←".bright_cyan(), path.display());
+            }
+            Err(e) => tracing::warn!("local delete {}: {}", path.display(), e),
+        }
     }
 
     // ── Execute initial sync ──
@@ -300,6 +323,7 @@ async fn run_inner(
 
     let push_plan = plan.push.clone();
     let get_plan = plan.get.clone();
+    let del_remote_plan = plan.del_remote.clone();
     let writer_for_send = writer.clone();
     let local_root_for_send = local_root.clone();
     let remote_hash_by_send = remote_hash_by.clone();
@@ -311,6 +335,13 @@ async fn run_inner(
         let (non_files, all_files): (Vec<Entry>, Vec<Entry>) = push_plan
             .into_iter()
             .partition(|e| !matches!(e.kind, EntryKind::File));
+
+        // Phase 0: propagate local deletions to the remote. The agent's
+        // init-sync loop applies these (apply_delete + mark_deleted).
+        for path in del_remote_plan {
+            let mut w = writer_for_send.lock().await;
+            write_message(&mut *w, &Message::Delete { path }, compress).await?;
+        }
 
         // Phase 1.
         for e in non_files {
@@ -653,6 +684,29 @@ async fn run_inner(
         c.save(&local_root);
     }
 
+    // Persist the converged manifest as the next session's baseline. After
+    // init sync the local tree equals the merged result: start from the local
+    // manifest, drop what we just deleted locally, and overwrite pulled paths
+    // with the remote's version (we now hold its content). This is what lets
+    // the next run tell a genuine deletion from a peer creation.
+    {
+        let remote_by_path: HashMap<&PathBuf, &Entry> =
+            remote_manifest.iter().map(|e| (&e.path, e)).collect();
+        let deleted_local: std::collections::HashSet<PathBuf> =
+            plan.del_local.iter().cloned().collect();
+        let mut converged: HashMap<PathBuf, Entry> = local_manifest
+            .iter()
+            .filter(|e| !deleted_local.contains(&e.path))
+            .map(|e| (e.path.clone(), e.clone()))
+            .collect();
+        for p in &plan.get {
+            if let Some(r) = remote_by_path.get(p) {
+                converged.insert(p.clone(), (*r).clone());
+            }
+        }
+        Baseline::from_map(converged).save(&local_root);
+    }
+
     let _ = received_files;
 
     if args.once {
@@ -722,6 +776,12 @@ where
 struct Plan {
     push: Vec<Entry>,
     get: Vec<PathBuf>,
+    /// Deletions to propagate to the remote: paths the user removed locally
+    /// whose remote copy is still byte-identical to the last synced baseline.
+    del_remote: Vec<PathBuf>,
+    /// Deletions to apply locally: paths the remote removed whose local copy
+    /// is still byte-identical to the last synced baseline.
+    del_local: Vec<PathBuf>,
     /// Paths where local and remote disagree on `kind` (e.g. one side has
     /// a file, the other a directory). Skipped from sync because blindly
     /// overwriting would either fail with EISDIR or destroy a directory
@@ -752,13 +812,23 @@ impl Plan {
             .filter(|e| matches!(e.kind, EntryKind::File))
             .map(|e| e.size)
             .sum();
+        let del_note = if self.del_remote.is_empty() && self.del_local.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "  •  delete {} remote {} local",
+                self.del_remote.len().to_string().bright_red(),
+                self.del_local.len().to_string().bright_red(),
+            )
+        };
         crate::ui::info(&format!(
-            "plan: push {} files ({}) {} dirs {} links  •  pull {} entries",
+            "plan: push {} files ({}) {} dirs {} links  •  pull {} entries{}",
             push_files.to_string().bright_green(),
             format_size(push_bytes, BINARY).bright_green(),
             push_dirs,
             push_links,
             self.get.len().to_string().bright_cyan(),
+            del_note,
         ));
         if !self.conflicts.is_empty() {
             crate::ui::warn(&format!(
@@ -780,7 +850,14 @@ impl Plan {
     }
 }
 
-fn build_plan(local: &[Entry], remote: &[Entry], mode: SyncMode) -> Plan {
+/// Three-way diff. `baseline` is the converged manifest from the last
+/// successful sync (empty on first run). It is what lets us tell a genuine
+/// deletion ("present in baseline, gone here, unchanged there") apart from a
+/// creation on the other side ("not in baseline") — the two are identical
+/// from the live manifests alone. When the evidence is ambiguous (no
+/// baseline) or the surviving side has its own changes (modify-vs-delete),
+/// we never propagate the destructive op: we keep the data.
+fn build_plan(local: &[Entry], remote: &[Entry], baseline: &Baseline, mode: SyncMode) -> Plan {
     let local_map: HashMap<&PathBuf, &Entry> = local.iter().map(|e| (&e.path, e)).collect();
     let remote_map: HashMap<&PathBuf, &Entry> = remote.iter().map(|e| (&e.path, e)).collect();
 
@@ -792,21 +869,47 @@ fn build_plan(local: &[Entry], remote: &[Entry], mode: SyncMode) -> Plan {
     all_paths.sort();
     all_paths.dedup();
 
+    // What this sync direction is allowed to mutate.
+    let (allow_push, allow_pull) = match mode {
+        SyncMode::Push => (true, false),
+        SyncMode::Pull => (false, true),
+        SyncMode::Both => (true, true),
+    };
+
     let mut push: Vec<Entry> = Vec::new();
     let mut get: Vec<PathBuf> = Vec::new();
+    let mut del_remote: Vec<PathBuf> = Vec::new();
+    let mut del_local: Vec<PathBuf> = Vec::new();
     let mut conflicts: Vec<(PathBuf, EntryKind, EntryKind)> = Vec::new();
 
     for p in all_paths {
         let l = local_map.get(p).copied();
         let r = remote_map.get(p).copied();
+        let b = baseline.get(p);
         match (l, r) {
             (Some(l), None) => {
-                if matches!(mode, SyncMode::Push | SyncMode::Both) {
+                // Present locally, absent on remote. Either the remote
+                // deleted a file we both had, or we created it. It's a real
+                // remote deletion only if our copy is unchanged since the
+                // baseline; otherwise (we changed it, or no baseline) keep
+                // local and re-push.
+                let remote_deleted = b.map(|b| l.same_content(b)).unwrap_or(false);
+                if remote_deleted && allow_pull {
+                    del_local.push(l.path.clone());
+                } else if allow_push {
                     push.push(l.clone());
                 }
             }
             (None, Some(r)) => {
-                if matches!(mode, SyncMode::Pull | SyncMode::Both) {
+                // Absent locally, present on remote. Either we deleted a file
+                // we both had, or the remote created it. It's a real local
+                // deletion only if the remote copy is unchanged since the
+                // baseline; otherwise (remote changed it, or no baseline)
+                // keep remote and pull.
+                let local_deleted = b.map(|b| r.same_content(b)).unwrap_or(false);
+                if local_deleted && allow_push {
+                    del_remote.push(r.path.clone());
+                } else if allow_pull {
                     get.push(r.path.clone());
                 }
             }
@@ -850,6 +953,8 @@ fn build_plan(local: &[Entry], remote: &[Entry], mode: SyncMode) -> Plan {
     Plan {
         push,
         get,
+        del_remote,
+        del_local,
         conflicts,
     }
 }
