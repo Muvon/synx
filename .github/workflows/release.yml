@@ -16,90 +16,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.get_version.outputs.VERSION }}
-      changelog: ${{ steps.changelog.outputs.CHANGELOG }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Get version from tag
-        id: get_version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.tag }}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-
-      - name: Validate semver format
-        run: |
-          VERSION="${{ steps.get_version.outputs.VERSION }}"
-          case "$VERSION" in
-            [0-9]*.[0-9]*.[0-9]*) ;;
-            *)
-              echo "Error: '$VERSION' is not a valid semver (expected X.Y.Z[-pre][+build])"
-              exit 1
-              ;;
-          esac
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -z "$PREV_TAG" ]; then
-            CHANGELOG="Initial release"
-          else
-            CHANGELOG=$(git log "${PREV_TAG}"..HEAD --pretty=format:"- %s" --no-merges | head -50)
-            if [ -z "$CHANGELOG" ]; then
-              CHANGELOG="- No changes since last release"
-            fi
-          fi
-          CHANGELOG=$(printf '%s\n' "$CHANGELOG" | sed 's/%/%25/g; s/\r/%0D/g' | awk '{printf "%s%0A", $0}' | sed 's/%0A$//')
-          echo "CHANGELOG=$CHANGELOG" >> $GITHUB_OUTPUT
-
-      - name: Check if release exists
-        id: check_release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if gh release view "${{ steps.get_version.outputs.VERSION }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create Release (draft)
-        if: steps.check_release.outputs.exists == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${{ steps.get_version.outputs.VERSION }}"
-          IS_PRE="false"
-          case "$VERSION" in
-            *-*|0.*) IS_PRE="true" ;;
-          esac
-          if [ "$IS_PRE" = "true" ]; then
-            gh release create "$VERSION" \
-              --title "Release $VERSION" \
-              --notes "${{ steps.changelog.outputs.CHANGELOG }}" \
-              --draft --prerelease
-          else
-            gh release create "$VERSION" \
-              --title "Release $VERSION" \
-              --notes "${{ steps.changelog.outputs.CHANGELOG }}" \
-              --draft
-          fi
-
   build:
     name: Build ${{ matrix.target }}
-    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -149,119 +67,31 @@ jobs:
         run: |
           mkdir -p dist
           BIN_DIR="target/${{ matrix.target }}/release"
-          ARCHIVE="synx-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz"
+          ARCHIVE="synx-${{ inputs.tag || github.ref_name }}-${{ matrix.target }}.tar.gz"
           tar czf "dist/${ARCHIVE}" -C "${BIN_DIR}" synx
           ls -la dist/
 
-      - name: Upload release asset
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${{ needs.create-release.outputs.version }}" \
-            "dist/synx-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz" \
-            --clobber
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
 
   publish-crate:
-    name: Publish to crates.io
-    needs: [create-release, build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    name: Publish to Crates.io
+    needs: build
+    uses: muvon/ci-workflow/.github/workflows/rust-publish.yml@master
+    secrets: inherit
+    with:
+      tag: ${{ inputs.tag }}
+      toolchain: stable
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-publish-
-            ${{ runner.os }}-cargo-
-
-      - name: Validate Cargo.toml version matches tag
-        run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          if [ "$VERSION" != "$CARGO_VERSION" ]; then
-            echo "::error::Tag $VERSION does not match Cargo.toml version $CARGO_VERSION"
-            exit 1
-          fi
-          echo "Version validated: $VERSION"
-
-      - name: Check if already published
-        id: check_published
-        run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          if cargo search synx --limit 1 | grep -q "^synx = \"$VERSION\""; then
-            echo "already_published=true" >> $GITHUB_OUTPUT
-            echo "::notice::Version $VERSION already on crates.io — skipping"
-          else
-            echo "already_published=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Dry-run publish
-        if: steps.check_published.outputs.already_published == 'false'
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --dry-run
-
-      - name: Publish
-        if: steps.check_published.outputs.already_published == 'false'
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish
-
-  finalize-release:
-    name: Finalize Release
-    needs: [create-release, build, publish-crate]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Publish release (drop draft) with download links
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          cat > release_notes.md << EOF
-          ## What's changed
-
-          ${{ needs.create-release.outputs.changelog }}
-
-          ## Install
-
-          ### One-liner (Linux & macOS)
-          \`\`\`sh
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
-          \`\`\`
-
-          ### From crates.io
-          \`\`\`sh
-          cargo install synx
-          \`\`\`
-
-          ### Manual download
-
-          | Platform | Architecture | Download |
-          |----------|--------------|----------|
-          | Linux    | x86_64 (static musl) | [synx-${VERSION}-x86_64-unknown-linux-musl.tar.gz](https://github.com/${{ github.repository }}/releases/download/${VERSION}/synx-${VERSION}-x86_64-unknown-linux-musl.tar.gz) |
-          | Linux    | aarch64 (static musl) | [synx-${VERSION}-aarch64-unknown-linux-musl.tar.gz](https://github.com/${{ github.repository }}/releases/download/${VERSION}/synx-${VERSION}-aarch64-unknown-linux-musl.tar.gz) |
-          | macOS    | x86_64 | [synx-${VERSION}-x86_64-apple-darwin.tar.gz](https://github.com/${{ github.repository }}/releases/download/${VERSION}/synx-${VERSION}-x86_64-apple-darwin.tar.gz) |
-          | macOS    | aarch64 (Apple Silicon) | [synx-${VERSION}-aarch64-apple-darwin.tar.gz](https://github.com/${{ github.repository }}/releases/download/${VERSION}/synx-${VERSION}-aarch64-apple-darwin.tar.gz) |
-
-          ### Verify
-          \`\`\`sh
-          synx --version
-          \`\`\`
-
-          Synx is a real-time bidirectional file sync over SSH. You need it
-          installed on **both** ends. See the README for usage.
-          EOF
-          gh release edit "$VERSION" --draft=false --notes-file release_notes.md
+  release:
+    name: Create Release
+    needs: [build, publish-crate]
+    uses: muvon/ci-workflow/.github/workflows/release.yml@master
+    with:
+      tag: ${{ inputs.tag }}
+      artifacts: 'release-*'
+      draft: false
