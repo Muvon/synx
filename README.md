@@ -1,7 +1,13 @@
 # synx
 
-**Fast, real-time bidirectional file sync over SSH.** A simpler alternative to
-Mutagen, written in Rust.
+> Fast, real-time bidirectional file sync over SSH.
+
+A simpler alternative to Mutagen, written in Rust.
+
+[![CI](https://github.com/Muvon/synx/actions/workflows/ci.yml/badge.svg)](https://github.com/Muvon/synx/actions/workflows/ci.yml)
+[![Release](https://github.com/Muvon/synx/actions/workflows/release.yml/badge.svg)](https://github.com/Muvon/synx/actions/workflows/release.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![crates.io](https://img.shields.io/crates/v/synx.svg)](https://crates.io/crates/synx)
 
 ```
 synx  /Users/dk/proj  ◀─▶  dev@beefy:/srv/proj
@@ -25,10 +31,13 @@ synx  /Users/dk/proj  ◀─▶  dev@beefy:/srv/proj
   changes the moment they happen. Push, pull, or two-way (default).
 - **Production-grade transfer.** Parallel hashing (blake3 + multi-threaded
   walk), persistent hash cache (re-runs skip re-hashing unchanged files),
-  zstd compression on the wire, atomic file writes, chunked transfer for
-  large files.
+  rsync-style delta sync for large mutable files, zstd compression on the wire,
+  atomic file writes, chunked transfer for large files.
 - **Just SSH.** Uses your existing `ssh` setup — keys, agents, `~/.ssh/config`,
   `ProxyJump`, `ControlMaster`. No new auth to manage.
+- **Git-aware.** Pauses `.git/` synchronization when it detects an active git
+  operation (rebase, merge, cherry-pick, etc.) so you never corrupt a repo
+  mid-operation.
 - **macOS + Linux.** FSEvents on macOS, inotify on Linux, via the `notify`
   crate.
 
@@ -64,8 +73,7 @@ synx ./src dev@host:/srv/app/src
 synx ./build host:/var/www --mode push
 
 # one-way pull (remote → local)
-synx host:/etc/nginx ./nginx --mode pull   # ← note: remote comes first
-# (actually: synx ./nginx host:/etc/nginx --mode pull)
+synx ./nginx host:/etc/nginx --mode pull
 
 # do the initial sync and exit (no live watch)
 synx ./code host:/work --once
@@ -132,7 +140,7 @@ rules.
 │                               │   ssh   │                              │
 │  watcher (notify) ──┐         │ ◀─────▶ │  watcher (notify) ──┐        │
 │  walker (parallel)  │         │  stdio  │  walker (parallel)  │        │
-│  hash cache         │         │ bincode │  hash cache         │        │
+│  hash cache         │         │ postcard│  hash cache         │        │
 │                     ▼         │ + zstd  │                     ▼        │
 │  ┌─────────────────────┐      │         │  ┌────────────────────┐      │
 │  │ diff plan + executor│ ◀────┼─────────┼─▶│ message dispatcher │      │
@@ -141,18 +149,36 @@ rules.
 ```
 
 - The client spawns `ssh user@host -- synx --agent /remote/path`. The same
-  binary runs on both sides; agent mode is hidden in `--help`.
+  binary runs on both sides; agent mode is hidden from `--help`.
 - Both sides walk their tree **in parallel** with `ignore::WalkBuilder::build_parallel()`,
   hashing files with **blake3**. A persistent cache keyed on `(path, size, mtime)`
   in `~/.cache/synx/` means re-runs skip rehashing unchanged files.
-- Manifests stream over the wire (length-prefixed bincode, optionally zstd
+- Manifests stream over the wire (length-prefixed postcard, optionally zstd
   level 3 — compressed only when it saves space).
 - The client computes a diff plan filtered through `.gitignore`. Operations
   are: dirs first → symlinks → files, then `FileGet` requests for pulls,
   then `SyncDone`.
+- **Delta sync.** Files between 256 KiB and 256 MiB where the remote already
+  has a different version are synced via rsync-style deltas (`fast_rsync`,
+  SIMD-accelerated librsync). The receiver requests a signature of its
+  current copy, the sender computes a delta against it, and the result is
+  verified with blake3 before accepting — fast_rsync uses MD4 internally,
+  so the blake3 check is the only honest integrity guarantee. Files outside
+  the delta band fall back to full transfer.
 - Files larger than **16 MiB** are streamed in **4 MiB chunks** to a temp
   file, then atomically renamed (`rename(2)`) into place with original mode
   and mtime preserved.
+- **Three-way deletion diff.** A persistent baseline manifest records what
+  both sides agreed on at the last successful sync. Without it, "the user
+  deleted this file here" and "the peer created this file there" are
+  indistinguishable — a stateless diff would silently resurrect deletions.
+  The baseline lets synx classify a missing path as a genuine deletion
+  (propagate) or a concurrent change (keep, never lose data).
+- **Git gate.** When synx detects an active git operation (rebase, merge,
+  cherry-pick, revert, bisect, or a live `index.lock` / `HEAD.lock`), it
+  pauses `.git/` synchronization and queues `.git/` events until the
+  operation finishes. Stale markers older than 10 minutes are ignored, so
+  a crashed git self-heals.
 - Live mode runs both sides simultaneously. A 200ms debounce on the watcher
   coalesces editor save-storms and macOS FSEvent batching. Per-path event
   coalescing inside each batch ensures `Create+Modify` (typical editor save)
@@ -178,6 +204,8 @@ rules.
   rate ~100%). A 100k-file repo re-syncs in ~1 second.
 - **Live mode** has sub-second latency from save to remote write. Most of the
   time is the 200ms debounce.
+- **Delta sync** cuts wire traffic on large mutable files (logs, dumps,
+  binaries that change slightly) — only the changed blocks are sent.
 - **Compression** is on by default (zstd level 3). For local-network sync of
   binary blobs that don't compress, `--no-compress` is faster.
 
@@ -215,21 +243,40 @@ ignored files on the remote, delete them by hand once.
 There's no config file. Everything is CLI flags. Persistent state:
 
 ```
-~/.cache/synx/<hash>.cache    # (size,mtime)→blake3 hash, per sync root
-~/.ssh/synx-%C                # SSH ControlMaster sockets
+~/.cache/synx/<hash>.cache       # (size,mtime)→blake3 hash, per sync root
+~/.cache/synx/<hash>.baseline    # last converged manifest, per sync root
+~/.ssh/synx-%C                   # SSH ControlMaster sockets
 ```
 
 ## Limits / future work
 
-- **No delta sync** yet (full files over the wire). Designed for: drop in
-  `fast_rsync` (Dropbox's SIMD librsync port) behind a flag in v0.2.
-- **No three-way merge.** Conflicts use mtime-wins, not ancestor-aware
-  detection. Reliable as long as both clocks are sane.
+- **No three-way content merge.** Conflicts use mtime-wins, not
+  ancestor-aware content merging. Deletions are three-way (baseline-backed),
+  but file content conflicts are not. Reliable as long as both clocks are
+  sane.
 - **No daemon mode.** synx is foreground-only; `&` it or use `tmux`/`screen`
   for now. Daemonization with `synx status` / `synx stop` is planned.
 - **Hash cache invalidation** is by (size, mtime) only. A file changed in
   place with the same size and mtime won't be re-hashed. This is the same
   heuristic git uses and is correct in practice.
+
+## Contributing
+
+```sh
+# clone and build
+git clone https://github.com/Muvon/synx.git
+cd synx
+cargo build --release
+
+# run tests
+cargo test
+
+# run synx locally against a remote
+./target/release/synx ./src user@host:/srv/src -v
+```
+
+CI runs on every push (`.github/workflows/ci.yml`). Releases are built and
+published automatically from tags (`.github/workflows/release.yml`).
 
 ## License
 
