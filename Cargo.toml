@@ -30,7 +30,7 @@ notify = "8"
 notify-debouncer-full = "0.7"
 owo-colors = "4.3"
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "io-util", "io-std", "fs", "process", "sync", "time", "signal"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "io-util", "io-std", "fs", "process", "sync", "time", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 zstd = "0.13"
