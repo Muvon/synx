@@ -164,8 +164,7 @@ async fn run_inner(
     // .gitignore / .synxignore is authoritative for what we sync. Load once
     // and share with the watcher; its own load would re-walk the whole tree.
     let ignores = Arc::new(IgnoreStack::load(&local_root));
-    let mut watcher_handle =
-        watcher::spawn(local_root.clone(), suppress.clone(), ignores.clone())?;
+    let mut watcher_handle = watcher::spawn(local_root.clone(), suppress.clone(), ignores.clone())?;
 
     // ── Local manifest (parallel walk with hash cache) ──
     let cache = Arc::new(StdMutex::new(HashCache::load(&local_root)));

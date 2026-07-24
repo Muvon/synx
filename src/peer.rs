@@ -768,7 +768,8 @@ impl Suppression {
             .map(|t| now.duration_since(t) >= SUPPRESS_SWEEP)
             .unwrap_or(true);
         if sweep_due {
-            g.map.retain(|_, (_, t)| now.duration_since(*t) < SUPPRESS_TTL);
+            g.map
+                .retain(|_, (_, t)| now.duration_since(*t) < SUPPRESS_TTL);
             g.last_sweep = Some(now);
         }
 
