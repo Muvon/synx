@@ -28,6 +28,12 @@ use crate::watcher::{self, FsEvent};
 /// it does NOT block legitimate user edits.
 const SUPPRESS_TTL: Duration = Duration::from_secs(60);
 
+/// Prune the suppression map at most this often. The TTL only bounds memory,
+/// so a few seconds of staleness is harmless; gating the sweep keeps the
+/// per-event echo check O(1) instead of O(map) after a large initial sync
+/// populates thousands of entries.
+const SUPPRESS_SWEEP: Duration = Duration::from_secs(5);
+
 /// Read the mtime of a path as nanoseconds since the Unix epoch, or 0 if the
 /// path doesn't exist or can't be stat'd. Does not follow symlinks.
 fn lstat_mtime_ns(p: &Path) -> i64 {
@@ -685,13 +691,20 @@ enum ApplyState {
 
 const NO_HASH: [u8; 32] = [0u8; 32];
 
+#[derive(Default)]
+struct SuppInner {
+    map: HashMap<PathBuf, (ApplyState, Instant)>,
+    /// Last time we pruned expired entries; gates the O(map) sweep.
+    last_sweep: Option<Instant>,
+}
+
 /// Synchronous suppression map — uses `std::sync::Mutex` so the watcher's
 /// notify thread can update it eagerly (before debouncing) and so all
 /// methods are callable from both sync and async contexts without holding
 /// an async lock across awaits.
 #[derive(Default, Clone)]
 pub struct Suppression {
-    inner: Arc<std::sync::Mutex<HashMap<PathBuf, (ApplyState, Instant)>>>,
+    inner: Arc<std::sync::Mutex<SuppInner>>,
 }
 
 impl Suppression {
@@ -699,7 +712,7 @@ impl Suppression {
     /// Use `NO_HASH` for dirs / symlinks.
     pub fn mark_set(&self, path: PathBuf, mtime_ns: i64, hash: [u8; 32]) {
         if let Ok(mut g) = self.inner.lock() {
-            g.insert(
+            g.map.insert(
                 path,
                 (
                     ApplyState::Set {
@@ -719,7 +732,7 @@ impl Suppression {
 
     pub fn mark_deleted(&self, path: PathBuf) {
         if let Ok(mut g) = self.inner.lock() {
-            g.insert(path, (ApplyState::Deleted, Instant::now()));
+            g.map.insert(path, (ApplyState::Deleted, Instant::now()));
         }
     }
 
@@ -728,14 +741,14 @@ impl Suppression {
         let Ok(g) = self.inner.lock() else {
             return false;
         };
-        matches!(g.get(path), Some((ApplyState::Deleted, _)))
+        matches!(g.map.get(path), Some((ApplyState::Deleted, _)))
     }
 
     /// Return the content hash we have on record for this file, if any.
     /// Used by the sender to skip retransmitting unchanged content.
     pub fn prior_hash(&self, path: &Path) -> Option<[u8; 32]> {
         let g = self.inner.lock().ok()?;
-        match g.get(path) {
+        match g.map.get(path) {
             Some((ApplyState::Set { hash, .. }, _)) if *hash != NO_HASH => Some(*hash),
             _ => None,
         }
@@ -748,13 +761,22 @@ impl Suppression {
             return false;
         };
         let now = Instant::now();
-        g.retain(|_, (_, t)| now.duration_since(*t) < SUPPRESS_TTL);
+        // Prune expired entries at most once per SUPPRESS_SWEEP rather than on
+        // every event — see SUPPRESS_SWEEP.
+        let sweep_due = g
+            .last_sweep
+            .map(|t| now.duration_since(t) >= SUPPRESS_SWEEP)
+            .unwrap_or(true);
+        if sweep_due {
+            g.map.retain(|_, (_, t)| now.duration_since(*t) < SUPPRESS_TTL);
+            g.last_sweep = Some(now);
+        }
 
         let key: &Path = match ev {
             FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => p,
             FsEvent::Renamed { to, .. } => to,
         };
-        let Some((state, _)) = g.get(key) else {
+        let Some((state, _)) = g.map.get(key) else {
             return false;
         };
         match (state, ev) {

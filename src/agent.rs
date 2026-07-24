@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::io::{stdin, stdout, BufReader, BufWriter, Stdout};
+use tokio::io::{stdin, stdout, AsyncWriteExt, BufReader, BufWriter, Stdout};
 use tokio::sync::Mutex;
 
 use crate::baseline::LiveBaseline;
@@ -19,7 +19,9 @@ use crate::peer::{
     cleanup_orphan_tmps, compute_delta, compute_signature, forward_local_events, live_loop,
     send_file, GitGate, Pending, Suppression,
 };
-use crate::protocol::{read_message, write_message, EntryKind, Message, PROTOCOL_VERSION};
+use crate::protocol::{
+    read_message, write_frame, write_message, EntryKind, Message, IO_BUF_SIZE, PROTOCOL_VERSION,
+};
 use crate::walker::{build_entry, ensure_root, walk_manifest};
 use crate::watcher;
 
@@ -29,8 +31,8 @@ pub async fn run(path: PathBuf) -> Result<()> {
 
     let stdin = stdin();
     let stdout = stdout();
-    let mut reader = BufReader::new(stdin);
-    let writer_inner = BufWriter::new(stdout);
+    let mut reader = BufReader::with_capacity(IO_BUF_SIZE, stdin);
+    let writer_inner = BufWriter::with_capacity(IO_BUF_SIZE, stdout);
 
     // ── Handshake ──
     let hello = read_message(&mut reader).await.context("reading Hello")?;
@@ -58,7 +60,10 @@ pub async fn run(path: PathBuf) -> Result<()> {
     // in the channel until we drain + replay them after init sync.
     let suppress = Suppression::default();
     let pending = Pending::default();
-    let mut watcher_handle = watcher::spawn(root.clone(), suppress.clone())?;
+    // Load ignore rules once and share with both the watcher and live mode;
+    // a second load would re-walk the whole tree.
+    let ignores = Arc::new(IgnoreStack::load(&root));
+    let mut watcher_handle = watcher::spawn(root.clone(), suppress.clone(), ignores.clone())?;
 
     let writer: Arc<Mutex<BufWriter<Stdout>>> = Arc::new(Mutex::new(writer_inner));
     {
@@ -102,12 +107,15 @@ pub async fn run(path: PathBuf) -> Result<()> {
     tracing::debug!("agent manifest: {} entries", local_manifest.len());
 
     {
+        // Stream with write_frame (no per-entry flush) + one flush at the end;
+        // the BufWriter auto-flushes when full so this can't deadlock.
         let mut w = writer.lock().await;
-        write_message(&mut *w, &Message::ManifestBegin, compress).await?;
+        write_frame(&mut *w, &Message::ManifestBegin, compress).await?;
         for e in &local_manifest {
-            write_message(&mut *w, &Message::ManifestEntry(e.clone()), compress).await?;
+            write_frame(&mut *w, &Message::ManifestEntry(e.clone()), compress).await?;
         }
-        write_message(&mut *w, &Message::ManifestEnd, compress).await?;
+        write_frame(&mut *w, &Message::ManifestEnd, compress).await?;
+        w.flush().await?;
     }
 
     // ── Initial-sync op loop. Process whatever the client sends until SyncDone. ──
@@ -352,7 +360,6 @@ pub async fn run(path: PathBuf) -> Result<()> {
     // ops loop. Echoes of our own writes filter through `suppress`; real
     // user edits made on the remote during the startup window flow to the
     // client.
-    let ignores = Arc::new(IgnoreStack::load(&root));
     // Agent has no plan/baseline; a disabled one keeps the shared signatures
     // uniform while skipping all persistence. The git gate, however, is real.
     let gate = GitGate::default();

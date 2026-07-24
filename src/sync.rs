@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
-use tokio::io::{BufReader, BufWriter};
+use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 
@@ -22,7 +22,8 @@ use crate::peer::{
     send_file, GitGate, Pending, Suppression,
 };
 use crate::protocol::{
-    read_message, write_message, Entry, EntryKind, Message, SyncMode, PROTOCOL_VERSION,
+    read_message, write_frame, write_message, Entry, EntryKind, Message, SyncMode, IO_BUF_SIZE,
+    PROTOCOL_VERSION,
 };
 use crate::transport::{parse_remote, spawn_ssh};
 use crate::walker::{ensure_root, walk_manifest};
@@ -92,8 +93,8 @@ async fn run_session(
     let mut child = spawn_ssh(remote, args.ssh_opts.as_deref(), &args.remote_synx)?;
     let stdin = child.stdin.take().context("ssh stdin missing")?;
     let stdout = child.stdout.take().context("ssh stdout missing")?;
-    let mut reader = BufReader::new(stdout);
-    let writer_inner = BufWriter::new(stdin);
+    let mut reader = BufReader::with_capacity(IO_BUF_SIZE, stdout);
+    let writer_inner = BufWriter::with_capacity(IO_BUF_SIZE, stdin);
     let compress = !args.no_compress;
 
     let mut w = writer_inner;
@@ -160,16 +161,24 @@ async fn run_inner(
     // suppress map populated.
     let suppress = Suppression::default();
     let pending = Pending::default();
-    let mut watcher_handle = watcher::spawn(local_root.clone(), suppress.clone())?;
+    // .gitignore / .synxignore is authoritative for what we sync. Load once
+    // and share with the watcher; its own load would re-walk the whole tree.
+    let ignores = Arc::new(IgnoreStack::load(&local_root));
+    let mut watcher_handle =
+        watcher::spawn(local_root.clone(), suppress.clone(), ignores.clone())?;
 
     // ── Local manifest (parallel walk with hash cache) ──
     let cache = Arc::new(StdMutex::new(HashCache::load(&local_root)));
     let started = Instant::now();
     let root_for_walk = local_root.clone();
     let cache_for_walk = cache.clone();
-    let mut local_manifest =
+    // Held behind an Arc so the concurrent send task can read it without
+    // cloning the whole manifest; reclaimed to a plain Vec once the send
+    // completes (its Arc clone is dropped by then, so try_unwrap succeeds).
+    let local_manifest = Arc::new(
         tokio::task::spawn_blocking(move || walk_manifest(&root_for_walk, &cache_for_walk))
-            .await??;
+            .await??,
+    );
     let walk_ms = started.elapsed().as_millis();
     tracing::debug!(
         "local walk: {} entries in {} ms",
@@ -178,25 +187,28 @@ async fn run_inner(
     );
 
     // ── Send local manifest in parallel with receiving remote's ──
+    // Streamed with write_frame (no per-entry flush) + one flush at the end;
+    // the BufWriter still auto-flushes when full, so a large manifest can't
+    // deadlock against the remote's concurrent send.
     let writer_for_send = writer.clone();
-    let local_manifest_clone = local_manifest.clone();
+    let manifest_for_send = Arc::clone(&local_manifest);
     let send_manifest_task = tokio::spawn(async move {
         let mut w = writer_for_send.lock().await;
-        write_message(&mut *w, &Message::ManifestBegin, compress).await?;
-        for e in &local_manifest_clone {
-            write_message(&mut *w, &Message::ManifestEntry(e.clone()), compress).await?;
+        write_frame(&mut *w, &Message::ManifestBegin, compress).await?;
+        for e in manifest_for_send.iter() {
+            write_frame(&mut *w, &Message::ManifestEntry(e.clone()), compress).await?;
         }
-        write_message(&mut *w, &Message::ManifestEnd, compress).await?;
+        write_frame(&mut *w, &Message::ManifestEnd, compress).await?;
+        w.flush().await?;
         Ok::<(), anyhow::Error>(())
     });
 
     let raw_remote = receive_manifest(&mut reader).await?;
     send_manifest_task.await??;
+    let mut local_manifest = Arc::try_unwrap(local_manifest).unwrap_or_else(|arc| (*arc).clone());
 
-    // .gitignore / .synxignore is authoritative for what we will sync.
     // The remote agent doesn't know our ignore rules, so we filter its
     // manifest through our local IgnoreStack before computing the plan.
-    let ignores = Arc::new(IgnoreStack::load(&local_root));
     let before = raw_remote.len();
     let remote_manifest: Vec<Entry> = raw_remote
         .into_iter()
@@ -248,20 +260,20 @@ async fn run_inner(
         },
     ));
 
-    // Build path indices up-front. `remote_hash_by` tells the push side
-    // which files are present on the remote at a different content (delta
-    // candidates). `local_file_by` tells the pull side which files we
-    // already have (so we can offer the server a signature → get a delta
-    // back instead of the whole file).
-    let remote_hash_by: HashMap<PathBuf, [u8; 32]> = remote_manifest
+    // Build path indices up-front, moved straight into the send task (below).
+    // `remote_hash_by_send` tells the push side which files exist on the remote
+    // at different content (delta candidates). `local_file_by_send` maps our
+    // files to (size, hash) — the only fields the pull side needs to offer the
+    // server a signature and get a delta back instead of the whole file.
+    let remote_hash_by_send: HashMap<PathBuf, [u8; 32]> = remote_manifest
         .iter()
         .filter(|e| matches!(e.kind, EntryKind::File))
         .map(|e| (e.path.clone(), e.hash))
         .collect();
-    let local_file_by: HashMap<PathBuf, Entry> = local_manifest
+    let local_file_by_send: HashMap<PathBuf, (u64, [u8; 32])> = local_manifest
         .iter()
         .filter(|e| matches!(e.kind, EntryKind::File))
-        .map(|e| (e.path.clone(), e.clone()))
+        .map(|e| (e.path.clone(), (e.size, e.hash)))
         .collect();
 
     // ── Diff ──
@@ -326,8 +338,6 @@ async fn run_inner(
     let del_remote_plan = plan.del_remote.clone();
     let writer_for_send = writer.clone();
     let local_root_for_send = local_root.clone();
-    let remote_hash_by_send = remote_hash_by.clone();
-    let local_file_by_send = local_file_by.clone();
     let send_task = tokio::spawn(async move {
         use std::sync::atomic::{AtomicU64, Ordering};
         use tokio::sync::Semaphore;
@@ -481,15 +491,15 @@ async fn run_inner(
         let (delta_pulls, regular_pulls): (Vec<PathBuf>, Vec<PathBuf>) = get_plan
             .into_iter()
             .partition(|p| match local_file_by_send.get(p) {
-                Some(local) => local.size >= DELTA_MIN_SIZE && local.size <= DELTA_MAX_SIZE,
+                Some(&(size, _)) => (DELTA_MIN_SIZE..=DELTA_MAX_SIZE).contains(&size),
                 None => false,
             });
 
         for path in delta_pulls {
-            let local_entry = local_file_by_send
+            let base_hash = local_file_by_send
                 .get(&path)
-                .expect("partitioned by local_file_by_send membership");
-            let base_hash = local_entry.hash;
+                .expect("partitioned by local_file_by_send membership")
+                .1;
             let full = local_root_for_send.join(&path);
             // Read + signature off the runtime; both are blocking.
             let sig = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, anyhow::Error> {

@@ -7,6 +7,10 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024; // 64 MiB per-message
 pub const COMPRESS_THRESHOLD: usize = 512;
 pub const COMPRESS_LEVEL: i32 = 3;
+/// Buffer size for the SSH stdin/stdout streams. The default 8 KiB flushes
+/// far too often when streaming a large manifest (one tiny write per entry);
+/// 64 KiB amortizes syscalls without a meaningful memory cost (one link).
+pub const IO_BUF_SIZE: usize = 64 * 1024;
 
 /// Files smaller than this are sent as a single `FileData` message;
 /// anything larger is streamed via `FileStart` / `FileChunk` / `FileEnd`.
@@ -196,7 +200,10 @@ where
     postcard::from_bytes(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
-pub async fn write_message<W>(writer: &mut W, msg: &Message, compress: bool) -> io::Result<()>
+/// Encode + frame a message into `writer` WITHOUT flushing. Use for bulk
+/// streaming (the manifest) where the caller flushes once at the end; the
+/// BufWriter still auto-flushes when full, so back-pressure is preserved.
+pub async fn write_frame<W>(writer: &mut W, msg: &Message, compress: bool) -> io::Result<()>
 where
     W: AsyncWriteExt + Unpin,
 {
@@ -223,6 +230,15 @@ where
     writer.write_all(&len).await?;
     writer.write_all(&[flags]).await?;
     writer.write_all(&payload).await?;
-    writer.flush().await?;
     Ok(())
+}
+
+/// Frame + flush a single message. The default for live traffic, where each
+/// message should hit the wire immediately.
+pub async fn write_message<W>(writer: &mut W, msg: &Message, compress: bool) -> io::Result<()>
+where
+    W: AsyncWriteExt + Unpin,
+{
+    write_frame(writer, msg, compress).await?;
+    writer.flush().await
 }

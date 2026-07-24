@@ -25,10 +25,13 @@ pub struct WatcherHandle {
     pub keepalive: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
 }
 
-pub fn spawn(root: PathBuf, suppress: Suppression) -> Result<WatcherHandle> {
+pub fn spawn(
+    root: PathBuf,
+    suppress: Suppression,
+    ignores: Arc<IgnoreStack>,
+) -> Result<WatcherHandle> {
     let (tx, rx) = mpsc::unbounded_channel::<Vec<FsEvent>>();
     let root_cb = root.clone();
-    let ignores = Arc::new(IgnoreStack::load(&root));
 
     let mut debouncer = new_debouncer(
         Duration::from_millis(200),
