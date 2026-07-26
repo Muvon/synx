@@ -59,6 +59,15 @@ impl Baseline {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    pub fn matches(&self, entries: &HashMap<PathBuf, Entry>) -> bool {
+        self.entries.len() == entries.len()
+            && self.entries.iter().all(|(path, previous)| {
+                entries
+                    .get(path)
+                    .is_some_and(|current| previous.same_content(current))
+            })
+    }
 }
 
 /// Write side: a shared, mutable baseline kept current during a live session
@@ -82,11 +91,12 @@ struct Inner {
 impl LiveBaseline {
     /// Seed with the converged manifest and persist immediately, so even a
     /// `--once` run or an instant disconnect leaves a correct baseline.
-    pub fn seed(root: PathBuf, entries: HashMap<PathBuf, Entry>) -> Self {
+    pub fn seed(root: PathBuf, entries: HashMap<PathBuf, Entry>, previous: &Baseline) -> Self {
+        let changed = !previous.matches(&entries);
         let lb = Self {
             inner: Arc::new(Mutex::new(Inner {
                 entries,
-                dirty: true,
+                dirty: changed,
                 last_save: None,
             })),
             root,
@@ -107,8 +117,14 @@ impl LiveBaseline {
             return;
         }
         if let Ok(mut g) = self.inner.lock() {
-            g.entries.insert(entry.path.clone(), entry);
-            g.dirty = true;
+            if !g
+                .entries
+                .get(&entry.path)
+                .is_some_and(|previous| previous.same_content(&entry))
+            {
+                g.entries.insert(entry.path.clone(), entry);
+                g.dirty = true;
+            }
         }
         self.persist_due();
     }
@@ -179,4 +195,41 @@ fn baseline_path_for(root: &Path) -> Option<PathBuf> {
     h.update(root.as_os_str().as_encoded_bytes());
     let id = h.finalize().to_hex();
     Some(base.join(format!("{}.baseline", &id.as_str()[..16])))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Baseline;
+    use crate::protocol::{Entry, EntryKind};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn entry(mtime: i64, hash: [u8; 32]) -> Entry {
+        Entry {
+            path: PathBuf::from("file.txt"),
+            kind: EntryKind::File,
+            size: 4,
+            mtime,
+            mode: 0o644,
+            hash,
+            link_target: None,
+        }
+    }
+
+    #[test]
+    fn baseline_equality_tracks_content_not_metadata() {
+        let previous_entry = entry(1, [3; 32]);
+        let baseline = Baseline {
+            entries: HashMap::from([(previous_entry.path.clone(), previous_entry)]),
+        };
+
+        let metadata_only = entry(2, [3; 32]);
+        assert!(baseline.matches(&HashMap::from([(
+            metadata_only.path.clone(),
+            metadata_only,
+        )])));
+
+        let changed = entry(2, [4; 32]);
+        assert!(!baseline.matches(&HashMap::from([(changed.path.clone(), changed)])));
+    }
 }

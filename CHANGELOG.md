@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Performance
+
+- Fold nested ignore-file discovery into the parallel manifest walk, removing
+  one complete tree traversal at startup while arming the watcher before any
+  scan begins.
+- Make manifest cache reads immutable and batch walker results per worker,
+  eliminating the global per-entry mutex and channel handoff.
+- Reuse walker metadata, skip unchanged cache/baseline writes, and bypass zstd
+  for common pre-compressed file formats.
+
 ## [0.1.0] - 2026-07-06
 
 ### 📋 Release Summary

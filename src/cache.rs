@@ -12,9 +12,12 @@ use std::path::{Path, PathBuf};
 #[derive(Default, Serialize, Deserialize)]
 pub struct HashCache {
     entries: HashMap<PathBuf, CacheEntry>,
+    /// Runtime-only: an unchanged walk should not rewrite the whole cache.
+    #[serde(skip)]
+    dirty: bool,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheEntry {
     pub size: u64,
     pub mtime: i64,
@@ -32,7 +35,10 @@ impl HashCache {
         }
     }
 
-    pub fn save(&self, root: &Path) {
+    pub fn save(&mut self, root: &Path) {
+        if !self.dirty {
+            return;
+        }
         let Some(path) = cache_path_for(root) else {
             return;
         };
@@ -40,7 +46,9 @@ impl HashCache {
             let _ = fs::create_dir_all(parent);
         }
         if let Ok(bytes) = postcard::to_allocvec(self) {
-            let _ = fs::write(&path, bytes);
+            if fs::write(&path, bytes).is_ok() {
+                self.dirty = false;
+            }
         }
     }
 
@@ -51,8 +59,13 @@ impl HashCache {
             .map(|e| e.hash)
     }
 
-    pub fn insert(&mut self, rel: PathBuf, size: u64, mtime: i64, hash: [u8; 32]) {
-        self.entries.insert(rel, CacheEntry { size, mtime, hash });
+    pub fn record(&mut self, rel: &Path, size: u64, mtime: i64, hash: [u8; 32]) {
+        let next = CacheEntry { size, mtime, hash };
+        if self.entries.get(rel) == Some(&next) {
+            return;
+        }
+        self.entries.insert(rel.to_path_buf(), next);
+        self.dirty = true;
     }
 }
 
@@ -62,4 +75,29 @@ fn cache_path_for(root: &Path) -> Option<PathBuf> {
     h.update(root.as_os_str().as_encoded_bytes());
     let id = h.finalize().to_hex();
     Some(base.join(format!("{}.cache", &id.as_str()[..16])))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HashCache;
+    use std::path::Path;
+
+    #[test]
+    fn unchanged_records_do_not_dirty_cache() {
+        let mut cache = HashCache::default();
+        let hash = [7; 32];
+        cache.record(Path::new("src/main.rs"), 42, 123, hash);
+        assert!(cache.dirty);
+
+        // dirty is runtime-only and therefore resets after a persisted cache
+        // is loaded; recording the same manifest entry must keep it clean.
+        let bytes = postcard::to_allocvec(&cache).unwrap();
+        let mut loaded: HashCache = postcard::from_bytes(&bytes).unwrap();
+        assert!(!loaded.dirty);
+        loaded.record(Path::new("src/main.rs"), 42, 123, hash);
+        assert!(!loaded.dirty);
+
+        loaded.record(Path::new("src/main.rs"), 43, 124, [8; 32]);
+        assert!(loaded.dirty);
+    }
 }

@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, OnceLock};
 use tokio::io::{stdin, stdout, AsyncWriteExt, BufReader, BufWriter, Stdout};
 use tokio::sync::Mutex;
 
@@ -60,10 +60,11 @@ pub async fn run(path: PathBuf) -> Result<()> {
     // in the channel until we drain + replay them after init sync.
     let suppress = Suppression::default();
     let pending = Pending::default();
-    // Load ignore rules once and share with both the watcher and live mode;
-    // a second load would re-walk the whole tree.
-    let ignores = Arc::new(IgnoreStack::load(&root));
-    let mut watcher_handle = watcher::spawn(root.clone(), suppress.clone(), ignores.clone())?;
+    // Start watching before any tree traversal. Ignore matchers are populated
+    // from the manifest below; until then events are buffered unfiltered and
+    // filtered again before forwarding.
+    let ignore_state = Arc::new(OnceLock::new());
+    let mut watcher_handle = watcher::spawn(root.clone(), suppress.clone(), ignore_state.clone())?;
 
     let writer: Arc<Mutex<BufWriter<Stdout>>> = Arc::new(Mutex::new(writer_inner));
     {
@@ -80,11 +81,13 @@ pub async fn run(path: PathBuf) -> Result<()> {
     }
 
     // ── Walk + send manifest, concurrently receive client manifest ──
-    let cache = Arc::new(StdMutex::new(HashCache::load(&root)));
+    let cache = HashCache::load(&root);
     let root_for_walk = root.clone();
-    let cache_for_walk = cache.clone();
-    let walk_task =
-        tokio::task::spawn_blocking(move || walk_manifest(&root_for_walk, &cache_for_walk));
+    let walk_task = tokio::task::spawn_blocking(move || {
+        let mut cache = cache;
+        let manifest = walk_manifest(&root_for_walk, &mut cache)?;
+        Ok::<_, anyhow::Error>((manifest, cache))
+    });
 
     // Drain client's manifest (we don't need to keep it; the client orchestrates).
     let mut client_count = 0usize;
@@ -103,7 +106,9 @@ pub async fn run(path: PathBuf) -> Result<()> {
     }
     tracing::debug!("client manifest: {client_count} entries");
 
-    let local_manifest = walk_task.await??;
+    let (local_manifest, mut cache) = walk_task.await??;
+    let ignores = Arc::new(IgnoreStack::from_manifest(&root, &local_manifest));
+    let _ = ignore_state.set(ignores.clone());
     tracing::debug!("agent manifest: {} entries", local_manifest.len());
 
     {
@@ -276,7 +281,7 @@ pub async fn run(path: PathBuf) -> Result<()> {
                 // what it already has. If we can produce a delta smaller
                 // than the file itself, do that. Otherwise fall back to a
                 // normal send.
-                match build_entry(&root, &path, None)? {
+                match build_entry(&root, &path)? {
                     None => {
                         // We don't have it — tell client to delete its copy.
                         let mut w = writer.lock().await;
@@ -320,7 +325,7 @@ pub async fn run(path: PathBuf) -> Result<()> {
                 }
             }
             Message::FileGet { path } => {
-                if let Some(entry) = build_entry(&root, &path, None)? {
+                if let Some(entry) = build_entry(&root, &path)? {
                     match entry.kind {
                         EntryKind::File => {
                             send_file(&writer, &root, &entry, compress).await?;
@@ -352,9 +357,7 @@ pub async fn run(path: PathBuf) -> Result<()> {
     }
 
     // Persist our cache.
-    if let Ok(c) = cache.lock() {
-        c.save(&root);
-    }
+    cache.save(&root);
 
     // Drain watcher events buffered during the walk + manifest exchange +
     // ops loop. Echoes of our own writes filter through `suppress`; real
@@ -377,6 +380,7 @@ pub async fn run(path: PathBuf) -> Result<()> {
             compress,
             &suppress,
             false,
+            &ignores,
             &gate,
             &live_baseline,
         )

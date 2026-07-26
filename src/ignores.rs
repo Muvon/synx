@@ -7,8 +7,10 @@
 //! need to ask "would we have walked this path?".
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use ignore::{Match, WalkBuilder};
+use ignore::Match;
 use std::path::{Path, PathBuf};
+
+use crate::protocol::Entry;
 
 pub struct IgnoreStack {
     root: PathBuf,
@@ -17,7 +19,9 @@ pub struct IgnoreStack {
 }
 
 impl IgnoreStack {
-    pub fn load(root: &Path) -> Self {
+    /// Build the arbitrary-path matchers from ignore files already discovered
+    /// by the manifest walk. This avoids a separate full-tree discovery pass.
+    pub fn from_manifest(root: &Path, manifest: &[Entry]) -> Self {
         let mut matchers: Vec<(PathBuf, Gitignore)> = Vec::new();
 
         // Root-level: combine .gitignore + .synxignore.
@@ -28,22 +32,18 @@ impl IgnoreStack {
             matchers.push((root.to_path_buf(), gi));
         }
 
-        // Nested .gitignore / .synxignore files (use a walker that respects
-        // the outer ignore rules so we don't descend into already-ignored dirs).
-        let walker = WalkBuilder::new(root)
-            .standard_filters(true)
-            .hidden(false)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .require_git(false)
-            .build();
-        for dent in walker.flatten() {
-            let name = dent.file_name();
+        // The configured manifest walker has already applied outer ignore
+        // rules, so the ignore files it reports are exactly the relevant
+        // nested matchers. Root files were combined above.
+        for entry in manifest {
+            let Some(name) = entry.path.file_name() else {
+                continue;
+            };
             if name != ".gitignore" && name != ".synxignore" {
                 continue;
             }
-            let dir = match dent.path().parent() {
+            let full = root.join(&entry.path);
+            let dir = match full.parent() {
                 Some(p) => p.to_path_buf(),
                 None => continue,
             };
@@ -52,7 +52,7 @@ impl IgnoreStack {
             }
             let mut b = GitignoreBuilder::new(&dir);
             // `GitignoreBuilder::add` returns Option<Error>; None means OK.
-            if b.add(dent.path()).is_some() {
+            if b.add(&full).is_some() {
                 continue;
             }
             if let Ok(gi) = b.build() {
@@ -96,5 +96,48 @@ impl IgnoreStack {
         // Translate into absolute form for prefix-stripping consistency.
         let abs = self.root.join(rel);
         self.is_ignored_abs(&abs, is_dir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IgnoreStack;
+    use crate::cache::HashCache;
+    use crate::walker::walk_manifest;
+    use std::fs;
+    use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn builds_nested_matchers_from_the_manifest_without_another_walk() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("synx-ignore-test-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::create_dir_all(root.join("other")).unwrap();
+        fs::write(root.join(".gitignore"), "/root-only\n").unwrap();
+        fs::write(root.join("nested/.gitignore"), "*.tmp\n").unwrap();
+        fs::write(root.join("root-only"), "ignored").unwrap();
+        fs::write(root.join("nested/cache.tmp"), "ignored").unwrap();
+        fs::write(root.join("nested/keep.txt"), "kept").unwrap();
+        fs::write(root.join("other/cache.tmp"), "kept").unwrap();
+
+        let manifest = walk_manifest(&root, &mut HashCache::default()).unwrap();
+        assert!(manifest
+            .iter()
+            .any(|entry| entry.path == Path::new("nested/.gitignore")));
+        assert!(!manifest
+            .iter()
+            .any(|entry| entry.path == Path::new("nested/cache.tmp")));
+        let ignores = IgnoreStack::from_manifest(&root, &manifest);
+
+        assert!(ignores.is_ignored_rel(Path::new("root-only"), false));
+        assert!(ignores.is_ignored_rel(Path::new("nested/cache.tmp"), false));
+        assert!(!ignores.is_ignored_rel(Path::new("other/cache.tmp"), false));
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

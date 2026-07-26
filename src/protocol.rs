@@ -36,7 +36,7 @@ pub enum EntryKind {
 }
 
 /// A single filesystem entry, relative to the sync root.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub path: PathBuf,
     pub kind: EntryKind,

@@ -6,7 +6,7 @@ use humansize::{format_size, BINARY};
 use owo_colors::OwoColorize;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{ChildStdin, ChildStdout};
@@ -161,23 +161,30 @@ async fn run_inner(
     // suppress map populated.
     let suppress = Suppression::default();
     let pending = Pending::default();
-    // .gitignore / .synxignore is authoritative for what we sync. Load once
-    // and share with the watcher; its own load would re-walk the whole tree.
-    let ignores = Arc::new(IgnoreStack::load(&local_root));
-    let mut watcher_handle = watcher::spawn(local_root.clone(), suppress.clone(), ignores.clone())?;
+    // Install the watcher before any tree traversal. Ignore matchers are
+    // derived from the manifest pass below, eliminating the old preliminary
+    // full-tree scan. Until then events queue unfiltered and are filtered
+    // again before forwarding.
+    let ignore_state = Arc::new(OnceLock::new());
+    let mut watcher_handle =
+        watcher::spawn(local_root.clone(), suppress.clone(), ignore_state.clone())?;
 
     // ── Local manifest (parallel walk with hash cache) ──
-    let cache = Arc::new(StdMutex::new(HashCache::load(&local_root)));
+    let cache = HashCache::load(&local_root);
     let started = Instant::now();
     let root_for_walk = local_root.clone();
-    let cache_for_walk = cache.clone();
     // Held behind an Arc so the concurrent send task can read it without
     // cloning the whole manifest; reclaimed to a plain Vec once the send
     // completes (its Arc clone is dropped by then, so try_unwrap succeeds).
-    let local_manifest = Arc::new(
-        tokio::task::spawn_blocking(move || walk_manifest(&root_for_walk, &cache_for_walk))
-            .await??,
-    );
+    let (local_manifest, mut cache) = tokio::task::spawn_blocking(move || {
+        let mut cache = cache;
+        let manifest = walk_manifest(&root_for_walk, &mut cache)?;
+        Ok::<_, anyhow::Error>((manifest, cache))
+    })
+    .await??;
+    let local_manifest = Arc::new(local_manifest);
+    let ignores = Arc::new(IgnoreStack::from_manifest(&local_root, &local_manifest));
+    let _ = ignore_state.set(ignores.clone());
     let walk_ms = started.elapsed().as_millis();
     tracing::debug!(
         "local walk: {} entries in {} ms",
@@ -689,9 +696,7 @@ async fn run_inner(
     ));
 
     // Persist cache (we may have hashed new files).
-    if let Ok(c) = cache.lock() {
-        c.save(&local_root);
-    }
+    cache.save(&local_root);
 
     // Seed the next session's baseline from the converged manifest. After init
     // sync the local tree equals the merged result: start from the local
@@ -715,7 +720,7 @@ async fn run_inner(
                 converged.insert(p.clone(), (*r).clone());
             }
         }
-        LiveBaseline::seed(local_root.clone(), converged)
+        LiveBaseline::seed(local_root.clone(), converged, &baseline)
     };
 
     let _ = received_files;
@@ -748,6 +753,7 @@ async fn run_inner(
             compress,
             &suppress,
             true,
+            &ignores,
             &gate,
             &live_baseline,
         )

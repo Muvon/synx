@@ -597,6 +597,10 @@ where
 {
     let full = root.join(&entry.path);
     let size = entry.size as usize;
+    // Like rsync's skip-compress policy, don't burn zstd CPU on formats that
+    // are already compressed. Framing is per message, so this is safe to
+    // decide independently for each file and does not change the protocol.
+    let payload_compress = compress && !is_precompressed(&entry.path);
     if size < CHUNK_THRESHOLD {
         // File may have vanished between manifest stat and now (user `rm`'d).
         // Return 0 so the caller knows there's nothing to send; subsequent
@@ -614,7 +618,7 @@ where
                 entry: entry.clone(),
                 content,
             },
-            compress,
+            payload_compress,
         )
         .await?;
         Ok(sent)
@@ -632,7 +636,7 @@ where
                     entry: entry.clone(),
                     total_size: entry.size,
                 },
-                compress,
+                payload_compress,
             )
             .await?;
         }
@@ -653,7 +657,7 @@ where
                     path: entry.path.clone(),
                     data: buf[..n].to_vec(),
                 },
-                compress,
+                payload_compress,
             )
             .await?;
         }
@@ -667,6 +671,78 @@ where
         )
         .await?;
         Ok(total)
+    }
+}
+
+/// Common compressed/container formats. Trying zstd and then discarding its
+/// output when it is larger saves no bandwidth but can dominate CPU for large
+/// media, archives, packages, and build artifacts.
+fn is_precompressed(path: &Path) -> bool {
+    const EXTENSIONS: &[&str] = &[
+        "3g2", "3gp", "7z", "aac", "ace", "apk", "avi", "bz2", "deb", "dmg", "ear", "flac", "flv",
+        "gpg", "gz", "iso", "jar", "jpeg", "jpg", "lz4", "lzma", "m4a", "m4v", "mkv", "mov", "mp3",
+        "mp4", "mpeg", "mpg", "ogg", "opus", "png", "rar", "rpm", "tgz", "webm", "webp", "xz",
+        "zip", "zst",
+    ];
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            EXTENSIONS
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{filter_outgoing_event, is_precompressed};
+    use crate::ignores::IgnoreStack;
+    use crate::watcher::FsEvent;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn identifies_precompressed_extensions_case_insensitively() {
+        assert!(is_precompressed(Path::new("artifacts/release.TAR.GZ")));
+        assert!(is_precompressed(Path::new("photo.JpG")));
+        assert!(!is_precompressed(Path::new("src/data.json")));
+        assert!(!is_precompressed(Path::new("archive.tar")));
+    }
+
+    #[test]
+    fn send_boundary_filters_events_buffered_before_ignore_discovery() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "synx-event-filter-test-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(".gitignore"), "/ignored\n").unwrap();
+        let ignores = IgnoreStack::from_manifest(&root, &[]);
+
+        assert!(filter_outgoing_event(
+            &root,
+            &ignores,
+            FsEvent::Modified(PathBuf::from("ignored")),
+        )
+        .is_none());
+        assert!(matches!(
+            filter_outgoing_event(
+                &root,
+                &ignores,
+                FsEvent::Renamed {
+                    from: PathBuf::from("visible"),
+                    to: PathBuf::from("ignored"),
+                },
+            ),
+            Some(FsEvent::Removed(path)) if path == Path::new("visible")
+        ));
+
+        fs::remove_dir_all(root).unwrap();
     }
 }
 
@@ -927,7 +1003,7 @@ where
             ev = event_rx.recv() => {
                 let Some(events) = ev else { break };
                 if send_local {
-                    forward_local_events(&ctx.root, events, &writer, ctx.compress, &suppress, ctx.is_client, &ctx.gate, &ctx.baseline).await?;
+                    forward_local_events(&ctx.root, events, &writer, ctx.compress, &suppress, ctx.is_client, &ctx.ignores, &ctx.gate, &ctx.baseline).await?;
                 }
             }
 
@@ -941,7 +1017,7 @@ where
                         // forward_local_events re-reads current state, so a
                         // path that's now gone becomes a Delete.
                         let events: Vec<FsEvent> = paths.into_iter().map(FsEvent::Modified).collect();
-                        forward_local_events(&ctx.root, events, &writer, ctx.compress, &suppress, ctx.is_client, &ctx.gate, &ctx.baseline).await?;
+                        forward_local_events(&ctx.root, events, &writer, ctx.compress, &suppress, ctx.is_client, &ctx.ignores, &ctx.gate, &ctx.baseline).await?;
                     }
                     for m in msgs {
                         if let Err(e) = handle_incoming(&ctx, m, &suppress, &pending, &writer, apply_remote).await {
@@ -1246,7 +1322,7 @@ where
             }
             apply_rename(root, &from, &to)?;
             ctx.baseline.remove(&from);
-            if let Some(e) = build_entry(root, &to, None)? {
+            if let Some(e) = build_entry(root, &to)? {
                 ctx.baseline.set(e);
             }
             suppress.mark_deleted(from);
@@ -1257,7 +1333,7 @@ where
             if ignores.is_ignored_rel(&path, false) && ignores.is_ignored_rel(&path, true) {
                 return Ok(());
             }
-            if let Some(entry) = build_entry(root, &path, None)? {
+            if let Some(entry) = build_entry(root, &path)? {
                 match entry.kind {
                     EntryKind::File => {
                         let _ = send_file(writer, root, &entry, compress).await?;
@@ -1342,6 +1418,37 @@ fn coalesce(events: Vec<FsEvent>) -> Vec<FsEvent> {
         .collect()
 }
 
+/// Apply authoritative ignore rules at the send boundary. The watcher also
+/// filters after its ignore state is ready, but this second check handles
+/// events buffered while the manifest was discovering nested ignore files.
+fn filter_outgoing_event(root: &Path, ignores: &IgnoreStack, event: FsEvent) -> Option<FsEvent> {
+    match event {
+        FsEvent::Created(path) => {
+            let is_dir = root.join(&path).is_dir();
+            (!ignores.is_ignored_rel(&path, is_dir)).then_some(FsEvent::Created(path))
+        }
+        FsEvent::Modified(path) => {
+            let is_dir = root.join(&path).is_dir();
+            (!ignores.is_ignored_rel(&path, is_dir)).then_some(FsEvent::Modified(path))
+        }
+        FsEvent::Removed(path) => {
+            let ignored =
+                ignores.is_ignored_rel(&path, false) || ignores.is_ignored_rel(&path, true);
+            (!ignored).then_some(FsEvent::Removed(path))
+        }
+        FsEvent::Renamed { from, to } => {
+            let from_ignored = ignores.is_ignored_rel(&from, false);
+            let to_ignored = ignores.is_ignored_rel(&to, root.join(&to).is_dir());
+            match (from_ignored, to_ignored) {
+                (false, false) => Some(FsEvent::Renamed { from, to }),
+                (false, true) => Some(FsEvent::Removed(from)),
+                (true, false) => Some(FsEvent::Created(to)),
+                (true, true) => None,
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // distinct session pieces; also called pre-SessionCtx
 pub async fn forward_local_events<W>(
     root: &Path,
@@ -1350,6 +1457,7 @@ pub async fn forward_local_events<W>(
     compress: bool,
     suppress: &Suppression,
     is_client: bool,
+    ignores: &IgnoreStack,
     gate: &GitGate,
     baseline: &LiveBaseline,
 ) -> Result<()>
@@ -1359,7 +1467,9 @@ where
     // Only the client prints. On the agent, the same eprintln would be
     // forwarded over SSH stderr and duplicate every transfer line.
     let log_event = is_client;
-    let events = coalesce(events);
+    let events = coalesce(events)
+        .into_iter()
+        .filter_map(|event| filter_outgoing_event(root, ignores, event));
     // Once per batch: if git is mid-operation, defer every event that touches
     // .git/. Prevents partial rebase/merge state from leaking to the peer
     // where it would race with the peer's own ref updates. Sticky (hysteresis)
@@ -1386,7 +1496,7 @@ where
 
         match ev {
             FsEvent::Created(p) | FsEvent::Modified(p) => {
-                let entry = match build_entry(root, &p, None)? {
+                let entry = match build_entry(root, &p)? {
                     Some(e) => e,
                     None => {
                         // The path doesn't exist anymore. This commonly
@@ -1536,7 +1646,7 @@ where
                     )
                     .await?;
                 }
-                if let Some(entry) = build_entry(root, &to, None)? {
+                if let Some(entry) = build_entry(root, &to)? {
                     let to_mtime = entry.mtime;
                     let baseline_entry = entry.clone();
                     match entry.kind {

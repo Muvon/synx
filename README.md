@@ -150,9 +150,13 @@ rules.
 
 - The client spawns `ssh user@host -- synx --agent /remote/path`. The same
   binary runs on both sides; agent mode is hidden from `--help`.
-- Both sides walk their tree **in parallel** with `ignore::WalkBuilder::build_parallel()`,
-  hashing files with **blake3**. A persistent cache keyed on `(path, size, mtime)`
-  in `~/.cache/synx/` means re-runs skip rehashing unchanged files.
+- Both sides walk their tree **once in parallel** with
+  `ignore::WalkBuilder::build_parallel()`, discovering nested ignore files and
+  hashing files with **blake3** in the same pass. Cache hits are immutable
+  lookups and walker results are batched per worker, so parallel traversal has
+  no global per-file lock. A persistent cache keyed on `(path, size, mtime)` in
+  `~/.cache/synx/` means re-runs skip rehashing unchanged files, and unchanged
+  cache/baseline state is not rewritten to disk.
 - Manifests stream over the wire (length-prefixed postcard, optionally zstd
   level 3 — compressed only when it saves space).
 - The client computes a diff plan filtered through `.gitignore`. Operations
@@ -207,7 +211,9 @@ rules.
 - **Delta sync** cuts wire traffic on large mutable files (logs, dumps,
   binaries that change slightly) — only the changed blocks are sent.
 - **Compression** is on by default (zstd level 3). For local-network sync of
-  binary blobs that don't compress, `--no-compress` is faster.
+  binary blobs that don't compress, `--no-compress` is faster. Common formats
+  that are already compressed (archives, media, packages) automatically bypass
+  zstd so they don't spend CPU proving they cannot shrink.
 
 ## Troubleshooting
 

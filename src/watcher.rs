@@ -2,7 +2,7 @@ use anyhow::Result;
 use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -28,7 +28,7 @@ pub struct WatcherHandle {
 pub fn spawn(
     root: PathBuf,
     suppress: Suppression,
-    ignores: Arc<IgnoreStack>,
+    ignores: Arc<OnceLock<Arc<IgnoreStack>>>,
 ) -> Result<WatcherHandle> {
     let (tx, rx) = mpsc::unbounded_channel::<Vec<FsEvent>>();
     let root_cb = root.clone();
@@ -53,8 +53,12 @@ pub fn spawn(
                                 if from.as_os_str().is_empty() || to.as_os_str().is_empty() {
                                     continue;
                                 }
-                                let from_ig = ignores.is_ignored_abs(&paths[0], false);
-                                let to_ig = ignores.is_ignored_abs(&paths[1], false);
+                                let from_ig = ignores
+                                    .get()
+                                    .is_some_and(|i| i.is_ignored_abs(&paths[0], false));
+                                let to_ig = ignores
+                                    .get()
+                                    .is_some_and(|i| i.is_ignored_abs(&paths[1], false));
                                 match (from_ig, to_ig) {
                                     (false, false) => {
                                         // A rename means the source is gone from
@@ -83,7 +87,10 @@ pub fn spawn(
                                 let is_dir = matches!(kind, EventKind::Remove(_))
                                     .then_some(false)
                                     .unwrap_or_else(|| path.is_dir());
-                                if ignores.is_ignored_abs(path, is_dir) {
+                                if ignores
+                                    .get()
+                                    .is_some_and(|i| i.is_ignored_abs(path, is_dir))
+                                {
                                     tracing::debug!(
                                         "watcher: IGNORED {:?} {}",
                                         kind,

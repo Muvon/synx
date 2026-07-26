@@ -3,7 +3,7 @@ use ignore::{WalkBuilder, WalkState};
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
 
 use crate::cache::HashCache;
 use crate::protocol::{Entry, EntryKind};
@@ -19,7 +19,14 @@ const MMAP_HASH_THRESHOLD: u64 = 1024 * 1024; // 1 MiB
 ///   on a single file. blake3 hits ~1 GB/s/core; an 8-core box hashes a
 ///   1 GiB file in ~125 ms with this path vs ~1 s sequential.
 pub fn hash_file(path: &Path) -> std::io::Result<[u8; 32]> {
-    let len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let len = fs::metadata(path)?.len();
+    hash_file_with_len(path, len)
+}
+
+/// Hash with metadata the caller already obtained. The manifest walker has
+/// just stat'd every entry, so asking the kernel for the size again adds one
+/// syscall per cache miss for no new information.
+fn hash_file_with_len(path: &Path, len: u64) -> std::io::Result<[u8; 32]> {
     let mut hasher = blake3::Hasher::new();
     if len >= MMAP_HASH_THRESHOLD {
         hasher.update_mmap_rayon(path)?;
@@ -51,19 +58,30 @@ pub fn build_walker(root: &Path) -> ignore::WalkBuilder {
     b
 }
 
-/// Compute an Entry for a path relative to `root`, consulting the cache for
-/// the (size, mtime) → hash mapping. Returns Ok(None) if the path doesn't exist.
-pub fn build_entry(
-    root: &Path,
-    rel: &Path,
-    cache: Option<&Mutex<HashCache>>,
-) -> std::io::Result<Option<Entry>> {
+/// Compute an Entry for a path relative to `root`.
+/// Returns Ok(None) if the path doesn't exist.
+pub fn build_entry(root: &Path, rel: &Path) -> std::io::Result<Option<Entry>> {
     let full = root.join(rel);
     let meta = match fs::symlink_metadata(&full) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
+    Ok(build_entry_from_metadata(rel, &full, meta, None)?.map(|built| built.entry))
+}
+
+struct BuiltEntry {
+    entry: Entry,
+    cache_miss: bool,
+}
+
+/// Build an entry from metadata already returned by the directory walker.
+fn build_entry_from_metadata(
+    rel: &Path,
+    full: &Path,
+    meta: fs::Metadata,
+    cache: Option<&HashCache>,
+) -> std::io::Result<Option<BuiltEntry>> {
     let ft = meta.file_type();
     let kind = if ft.is_symlink() {
         EntryKind::Symlink
@@ -77,7 +95,7 @@ pub fn build_entry(
     let mtime = meta
         .mtime()
         .saturating_mul(1_000_000_000)
-        .saturating_add(meta.mtime_nsec() as i64);
+        .saturating_add(meta.mtime_nsec());
     let mode = meta.permissions().mode();
     let size = if matches!(kind, EntryKind::File) {
         meta.len()
@@ -85,37 +103,32 @@ pub fn build_entry(
         0
     };
 
-    let hash = if matches!(kind, EntryKind::File) {
-        let cached = cache.and_then(|m| m.lock().ok().and_then(|g| g.lookup(rel, size, mtime)));
+    let (hash, cache_miss) = if matches!(kind, EntryKind::File) {
+        let cached = cache.and_then(|c| c.lookup(rel, size, mtime));
         match cached {
-            Some(h) => h,
-            None => {
-                let h = hash_file(&full)?;
-                if let Some(m) = cache {
-                    if let Ok(mut g) = m.lock() {
-                        g.insert(rel.to_path_buf(), size, mtime, h);
-                    }
-                }
-                h
-            }
+            Some(h) => (h, false),
+            None => (hash_file_with_len(full, size)?, cache.is_some()),
         }
     } else {
-        [0u8; 32]
+        ([0u8; 32], false)
     };
 
     let link_target = if matches!(kind, EntryKind::Symlink) {
-        fs::read_link(&full).ok()
+        fs::read_link(full).ok()
     } else {
         None
     };
-    Ok(Some(Entry {
-        path: rel.to_path_buf(),
-        kind,
-        size,
-        mtime,
-        mode,
-        hash,
-        link_target,
+    Ok(Some(BuiltEntry {
+        entry: Entry {
+            path: rel.to_path_buf(),
+            kind,
+            size,
+            mtime,
+            mode,
+            hash,
+            link_target,
+        },
+        cache_miss,
     }))
 }
 
@@ -127,18 +140,34 @@ pub fn build_entry(
 /// lock — see `peer::git_busy`), `.git/` is excluded from the walk. The
 /// manifest exchange and diff plan won't see VCS metadata in this state,
 /// so no sync of `.git/` is attempted until git finishes.
-pub fn walk_manifest(root: &Path, cache: &Arc<Mutex<HashCache>>) -> Result<Vec<Entry>> {
-    let (tx, rx) = std::sync::mpsc::channel::<Entry>();
-    let root_arc = Arc::new(root.to_path_buf());
+pub fn walk_manifest(root: &Path, cache: &mut HashCache) -> Result<Vec<Entry>> {
+    // Each visitor accumulates locally and sends one batch when its worker
+    // exits. This avoids both a cache mutex and one channel synchronization
+    // per path in the hot parallel walk.
+    let (tx, rx) = mpsc::channel::<Vec<BuiltEntry>>();
     let skip_git = crate::peer::git_busy(root);
     if skip_git {
         tracing::info!("git operation in progress — excluding .git/ from this walk");
     }
+    let cache_read: &HashCache = cache;
 
     build_walker(root).build_parallel().run(|| {
-        let tx = tx.clone();
-        let root = root_arc.clone();
-        let cache = cache.clone();
+        struct Batch {
+            entries: Vec<BuiltEntry>,
+            tx: mpsc::Sender<Vec<BuiltEntry>>,
+        }
+        impl Drop for Batch {
+            fn drop(&mut self) {
+                if !self.entries.is_empty() {
+                    let _ = self.tx.send(std::mem::take(&mut self.entries));
+                }
+            }
+        }
+
+        let mut batch = Batch {
+            entries: Vec::with_capacity(1024),
+            tx: tx.clone(),
+        };
         Box::new(move |result| {
             let dent = match result {
                 Ok(d) => d,
@@ -148,20 +177,29 @@ pub fn walk_manifest(root: &Path, cache: &Arc<Mutex<HashCache>>) -> Result<Vec<E
                 }
             };
             let path = dent.path();
-            if path == root.as_path() {
+            if path == root {
                 return WalkState::Continue;
             }
-            let rel = match path.strip_prefix(root.as_path()) {
-                Ok(r) => r.to_path_buf(),
+            let rel = match path.strip_prefix(root) {
+                Ok(r) => r,
                 Err(_) => return WalkState::Continue,
             };
-            if skip_git && crate::peer::is_under_git(&rel) {
+            if skip_git && crate::peer::is_under_git(rel) {
                 // Skip the .git entry itself AND all descendants.
                 return WalkState::Skip;
             }
-            match build_entry(&root, &rel, Some(&*cache)) {
+            // `DirEntry::metadata` is symlink-aware when follow_links=false,
+            // matching symlink_metadata without a second stat in build_entry.
+            let meta = match dent.metadata() {
+                Ok(meta) => meta,
+                Err(e) => {
+                    tracing::warn!("entry {}: {e}", rel.display());
+                    return WalkState::Continue;
+                }
+            };
+            match build_entry_from_metadata(rel, path, meta, Some(cache_read)) {
                 Ok(Some(e)) => {
-                    let _ = tx.send(e);
+                    batch.entries.push(e);
                 }
                 Ok(None) => {}
                 Err(e) => tracing::warn!("entry {}: {e}", rel.display()),
@@ -171,9 +209,17 @@ pub fn walk_manifest(root: &Path, cache: &Arc<Mutex<HashCache>>) -> Result<Vec<E
     });
 
     drop(tx);
-    let mut entries: Vec<Entry> = rx.iter().collect();
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(entries)
+    let mut built: Vec<BuiltEntry> = rx.into_iter().flatten().collect();
+    built.sort_by(|a, b| a.entry.path.cmp(&b.entry.path));
+    // Update misses after the parallel read-only phase. Cache hits remain a
+    // shared immutable HashMap lookup and never contend on a global lock.
+    for result in &built {
+        if result.cache_miss {
+            let entry = &result.entry;
+            cache.record(&entry.path, entry.size, entry.mtime, entry.hash);
+        }
+    }
+    Ok(built.into_iter().map(|result| result.entry).collect())
 }
 
 /// Ensure root is (or becomes) a directory we can walk.
