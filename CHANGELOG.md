@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.1] - 2026-07-26
+
+### 📋 Release Summary
+
+This release significantly improves system performance through optimized I/O, memory usage, and faster file synchronization (a7d64dab, 971feb44). Users will also benefit from enhanced filesystem security, increased stability, and expanded technical documentation (945b9bf3, 8dc1e45f).
+
+
+### 🔧 Improvements & Optimizations
+
+- **core**: enhance filesystem security and stability `945b9bf3`
+- **manifest**: optimize walking and caching efficiency `a7d64dab`
+- **peer**: format line wraps `06a311d5`
+- **agent**: optimize I/O, manifest sync and memory `971feb44`
+
+### 📚 Documentation & Examples
+
+- **readme**: expand feature set and technical details `8dc1e45f`
+
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
