@@ -3,6 +3,7 @@ mod baseline;
 mod cache;
 mod cli;
 mod ignores;
+mod paths;
 mod peer;
 mod protocol;
 mod sync;

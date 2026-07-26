@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use crate::cache::HashCache;
+use crate::paths::{is_internal_temp, resolve_beneath};
 use crate::protocol::{Entry, EntryKind};
 
 /// Files above this size are hashed via mmap + rayon (parallel across cores).
@@ -61,7 +62,7 @@ pub fn build_walker(root: &Path) -> ignore::WalkBuilder {
 /// Compute an Entry for a path relative to `root`.
 /// Returns Ok(None) if the path doesn't exist.
 pub fn build_entry(root: &Path, rel: &Path) -> std::io::Result<Option<Entry>> {
-    let full = root.join(rel);
+    let full = resolve_beneath(root, rel)?;
     let meta = match fs::symlink_metadata(&full) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -180,6 +181,9 @@ pub fn walk_manifest(root: &Path, cache: &mut HashCache) -> Result<Vec<Entry>> {
             if path == root {
                 return WalkState::Continue;
             }
+            if is_internal_temp(path) {
+                return WalkState::Continue;
+            }
             let rel = match path.strip_prefix(root) {
                 Ok(r) => r,
                 Err(_) => return WalkState::Continue,
@@ -233,4 +237,115 @@ pub fn ensure_root(path: &Path) -> Result<PathBuf> {
         anyhow::bail!("{} is not a directory", canon.display());
     }
     Ok(canon)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paths::INTERNAL_TMP_PREFIX;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(label: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "synx-walker-{label}-{}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn hashes_streamed_and_mmap_files_and_reports_missing_files() {
+        let root = TestDir::new("hash");
+        let small = root.0.join("small");
+        fs::write(&small, b"small").unwrap();
+        assert_eq!(
+            hash_file(&small).unwrap(),
+            *blake3::hash(b"small").as_bytes()
+        );
+
+        let large_content = vec![0x42; MMAP_HASH_THRESHOLD as usize];
+        let large = root.0.join("large");
+        fs::write(&large, &large_content).unwrap();
+        assert_eq!(
+            hash_file(&large).unwrap(),
+            *blake3::hash(&large_content).as_bytes()
+        );
+        assert!(hash_file(&root.0.join("missing")).is_err());
+    }
+
+    #[test]
+    fn builds_entries_for_files_directories_and_symlinks() {
+        let root = TestDir::new("entries");
+        fs::create_dir(root.0.join("dir")).unwrap();
+        fs::write(root.0.join("file"), b"content").unwrap();
+        std::os::unix::fs::symlink("file", root.0.join("link")).unwrap();
+
+        let dir = build_entry(&root.0, Path::new("dir")).unwrap().unwrap();
+        assert_eq!(dir.kind, EntryKind::Dir);
+        let file = build_entry(&root.0, Path::new("file")).unwrap().unwrap();
+        assert_eq!(file.kind, EntryKind::File);
+        assert_eq!(file.hash, *blake3::hash(b"content").as_bytes());
+        let link = build_entry(&root.0, Path::new("link")).unwrap().unwrap();
+        assert_eq!(link.kind, EntryKind::Symlink);
+        assert_eq!(link.link_target, Some(PathBuf::from("file")));
+        assert!(build_entry(&root.0, Path::new("missing"))
+            .unwrap()
+            .is_none());
+        assert!(build_entry(&root.0, Path::new("../escape")).is_err());
+    }
+
+    #[test]
+    fn walks_once_with_ignores_internal_temps_and_reusable_cache() {
+        let root = TestDir::new("manifest");
+        fs::create_dir(root.0.join("nested")).unwrap();
+        fs::write(root.0.join(".synxignore"), "*.ignored\n").unwrap();
+        fs::write(root.0.join("kept"), b"one").unwrap();
+        fs::write(root.0.join("nested/drop.ignored"), b"two").unwrap();
+        fs::write(
+            root.0.join(format!("{INTERNAL_TMP_PREFIX}orphan")),
+            b"temporary",
+        )
+        .unwrap();
+
+        let mut cache = HashCache::default();
+        let first = walk_manifest(&root.0, &mut cache).unwrap();
+        let listed: Vec<&Path> = first.iter().map(|entry| entry.path.as_path()).collect();
+        assert!(listed.contains(&Path::new("kept")));
+        assert!(listed.contains(&Path::new("nested")));
+        assert!(!listed.contains(&Path::new("nested/drop.ignored")));
+        assert!(!listed.iter().any(|path| is_internal_temp(path)));
+
+        let encoded = postcard::to_allocvec(&cache).unwrap();
+        let mut loaded: HashCache = postcard::from_bytes(&encoded).unwrap();
+        let second = walk_manifest(&root.0, &mut loaded).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn ensure_root_creates_and_rejects_invalid_roots() {
+        let parent = TestDir::new("ensure");
+        let missing = parent.0.join("new/root");
+        let ensured = ensure_root(&missing).unwrap();
+        assert!(ensured.is_absolute());
+        assert!(ensured.is_dir());
+
+        let file = parent.0.join("file");
+        fs::write(&file, b"x").unwrap();
+        assert!(ensure_root(&file).is_err());
+    }
 }

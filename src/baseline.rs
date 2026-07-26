@@ -37,6 +37,16 @@ pub struct Baseline {
 }
 
 impl Baseline {
+    #[cfg(test)]
+    pub(crate) fn from_entries(entries: impl IntoIterator<Item = Entry>) -> Self {
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|entry| (entry.path.clone(), entry))
+                .collect(),
+        }
+    }
+
     /// Any failure (missing, corrupt, older format) yields an empty baseline,
     /// which makes the three-way diff fall back to the conservative pull-back
     /// behavior — never a mass delete.
@@ -44,7 +54,11 @@ impl Baseline {
         let Some(path) = baseline_path_for(root) else {
             return Self::default();
         };
-        match fs::read(&path) {
+        Self::load_from_path(&path)
+    }
+
+    fn load_from_path(path: &Path) -> Self {
+        match fs::read(path) {
             Ok(bytes) => Self {
                 entries: postcard::from_bytes(&bytes).unwrap_or_default(),
             },
@@ -75,7 +89,7 @@ impl Baseline {
 #[derive(Clone, Default)]
 pub struct LiveBaseline {
     inner: Arc<Mutex<Inner>>,
-    root: PathBuf,
+    storage_path: Option<PathBuf>,
     /// Only the client owns a persistent baseline (it builds the plan). The
     /// agent gets a disabled one whose mutations and writes are no-ops.
     enabled: bool,
@@ -86,20 +100,30 @@ struct Inner {
     entries: HashMap<PathBuf, Entry>,
     dirty: bool,
     last_save: Option<Instant>,
+    generation: u64,
 }
 
 impl LiveBaseline {
     /// Seed with the converged manifest and persist immediately, so even a
     /// `--once` run or an instant disconnect leaves a correct baseline.
     pub fn seed(root: PathBuf, entries: HashMap<PathBuf, Entry>, previous: &Baseline) -> Self {
+        Self::seed_to_path(baseline_path_for(&root), entries, previous)
+    }
+
+    fn seed_to_path(
+        storage_path: Option<PathBuf>,
+        entries: HashMap<PathBuf, Entry>,
+        previous: &Baseline,
+    ) -> Self {
         let changed = !previous.matches(&entries);
         let lb = Self {
             inner: Arc::new(Mutex::new(Inner {
                 entries,
                 dirty: changed,
                 last_save: None,
+                generation: u64::from(changed),
             })),
-            root,
+            storage_path,
             enabled: true,
         };
         lb.persist_now();
@@ -124,6 +148,7 @@ impl LiveBaseline {
             {
                 g.entries.insert(entry.path.clone(), entry);
                 g.dirty = true;
+                g.generation = g.generation.wrapping_add(1);
             }
         }
         self.persist_due();
@@ -137,6 +162,7 @@ impl LiveBaseline {
         if let Ok(mut g) = self.inner.lock() {
             if g.entries.remove(path).is_some() {
                 g.dirty = true;
+                g.generation = g.generation.wrapping_add(1);
             }
         }
         self.persist_due();
@@ -158,8 +184,8 @@ impl LiveBaseline {
         }
         // Serialize under the lock, write outside it — keep the critical
         // section to a single in-memory pass, never an IO syscall.
-        let bytes = {
-            let Ok(mut g) = self.inner.lock() else {
+        let (bytes, generation) = {
+            let Ok(g) = self.inner.lock() else {
                 return;
             };
             if !g.dirty {
@@ -175,17 +201,22 @@ impl LiveBaseline {
             let Ok(bytes) = postcard::to_allocvec(&g.entries) else {
                 return;
             };
-            g.dirty = false;
-            g.last_save = Some(Instant::now());
-            bytes
+            (bytes, g.generation)
         };
-        let Some(path) = baseline_path_for(&self.root) else {
+        let Some(path) = &self.storage_path else {
             return;
         };
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let _ = fs::write(&path, &bytes);
+        if fs::write(path, &bytes).is_ok() {
+            if let Ok(mut g) = self.inner.lock() {
+                if g.generation == generation {
+                    g.dirty = false;
+                }
+                g.last_save = Some(Instant::now());
+            }
+        }
     }
 }
 
@@ -199,10 +230,22 @@ fn baseline_path_for(root: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::Baseline;
+    use super::{Baseline, LiveBaseline};
     use crate::protocol::{Entry, EntryKind};
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "synx-baseline-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
 
     fn entry(mtime: i64, hash: [u8; 32]) -> Entry {
         Entry {
@@ -231,5 +274,73 @@ mod tests {
 
         let changed = entry(2, [4; 32]);
         assert!(!baseline.matches(&HashMap::from([(changed.path.clone(), changed)])));
+    }
+
+    #[test]
+    fn persists_mutations_and_skips_semantically_unchanged_state() {
+        let path = temp_path("roundtrip");
+        let original = entry(1, [3; 32]);
+        let previous = Baseline::default();
+        let live = LiveBaseline::seed_to_path(
+            Some(path.clone()),
+            HashMap::from([(original.path.clone(), original.clone())]),
+            &previous,
+        );
+        assert!(path.is_file());
+        assert!(Baseline::load_from_path(&path)
+            .get(&original.path)
+            .is_some());
+
+        let metadata_only = entry(2, [3; 32]);
+        live.set(metadata_only);
+        assert!(!live.inner.lock().unwrap().dirty);
+
+        let changed = entry(3, [4; 32]);
+        live.set(changed.clone());
+        assert!(live.inner.lock().unwrap().dirty);
+        live.persist_now();
+        assert!(!live.inner.lock().unwrap().dirty);
+        assert!(Baseline::load_from_path(&path)
+            .get(&changed.path)
+            .unwrap()
+            .same_content(&changed));
+
+        live.remove(&changed.path);
+        live.persist_now();
+        assert!(Baseline::load_from_path(&path).is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn disabled_unchanged_corrupt_and_failed_storage_are_safe() {
+        let disabled = LiveBaseline::disabled();
+        disabled.set(entry(1, [1; 32]));
+        disabled.remove(PathBuf::from("file.txt").as_path());
+        disabled.persist_now();
+
+        let previous_entry = entry(1, [2; 32]);
+        let previous = Baseline::from_entries([previous_entry.clone()]);
+        let untouched = temp_path("unchanged");
+        let _live = LiveBaseline::seed_to_path(
+            Some(untouched.clone()),
+            HashMap::from([(previous_entry.path.clone(), previous_entry)]),
+            &previous,
+        );
+        assert!(!untouched.exists());
+
+        let corrupt = temp_path("corrupt");
+        std::fs::write(&corrupt, b"not postcard").unwrap();
+        assert!(Baseline::load_from_path(&corrupt).is_empty());
+        std::fs::remove_file(corrupt).unwrap();
+
+        let failure = temp_path("failure");
+        std::fs::create_dir(&failure).unwrap();
+        let live = LiveBaseline::seed_to_path(
+            Some(failure.clone()),
+            HashMap::from([(PathBuf::from("file.txt"), entry(1, [9; 32]))]),
+            &Baseline::default(),
+        );
+        assert!(live.inner.lock().unwrap().dirty);
+        std::fs::remove_dir(failure).unwrap();
     }
 }
