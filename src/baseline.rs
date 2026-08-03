@@ -74,6 +74,13 @@ impl Baseline {
         self.entries.is_empty()
     }
 
+    /// True iff `.git/` was part of the last converged state — the evidence
+    /// that lets a `.git`-less remote manifest be read as a deliberate wipe
+    /// rather than "never synced".
+    pub fn has_git(&self) -> bool {
+        self.entries.keys().any(|p| crate::peer::is_under_git(p))
+    }
+
     pub fn matches(&self, entries: &HashMap<PathBuf, Entry>) -> bool {
         self.entries.len() == entries.len()
             && self.entries.iter().all(|(path, previous)| {
@@ -257,6 +264,15 @@ mod tests {
             hash,
             link_target: None,
         }
+    }
+
+    #[test]
+    fn has_git_requires_git_entries() {
+        assert!(!Baseline::default().has_git());
+        assert!(!Baseline::from_entries([entry(1, [1; 32])]).has_git());
+        let mut git = entry(1, [1; 32]);
+        git.path = PathBuf::from(".git/HEAD");
+        assert!(Baseline::from_entries([git]).has_git());
     }
 
     #[test]

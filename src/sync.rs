@@ -232,20 +232,29 @@ where
         tracing::debug!("filtered {} ignored remote entries", filtered);
     }
 
+    // ── Baseline ──
+    // The converged manifest from our last successful sync — the common
+    // ancestor that lets the three-way diff distinguish a genuine deletion
+    // from a creation on the peer (see build_plan). Empty on first run →
+    // conservative pull-back, no deletes propagate that session. Loaded here
+    // because the stale-.git/ recovery below needs the same evidence.
+    let baseline = Baseline::load(&local_root);
+    if baseline.is_empty() {
+        tracing::debug!("no baseline yet — deletions won't propagate until next sync");
+    }
+
     // ── Stale-.git/ recovery ──
     // If local has leftover .git/ entries (from old-version synx propagating
-    // mid-rebase state, or a crashed git), remote has NO .git/, AND remote
-    // looks like a real populated workspace (substantial non-.git content),
-    // the user has clearly chosen to wipe .git/. Mirror that here so local
-    // doesn't stay stuck with phantom rebase state forever. Skip if local
-    // is genuinely mid-operation (git_busy after stale check).
+    // mid-rebase state, or a crashed git) and remote has NO .git/, mirror the
+    // wipe here — but ONLY when the baseline proves .git/ was part of the
+    // last converged state, which makes its absence on remote a deliberate
+    // delete. Without that evidence (first run, or .git/ never synced) local
+    // .git/ is unsynced data: keep it and let the plan push it instead —
+    // never lose data. Skip if local is genuinely mid-operation (git_busy
+    // after stale check).
     let local_has_git = local_manifest.iter().any(|e| is_under_git(&e.path));
     let remote_has_git = remote_manifest.iter().any(|e| is_under_git(&e.path));
-    let remote_non_git = remote_manifest
-        .iter()
-        .filter(|e| !is_under_git(&e.path))
-        .count();
-    if local_has_git && !remote_has_git && remote_non_git >= 5 && !git_busy(&local_root) {
+    if local_has_git && !remote_has_git && baseline.has_git() && !git_busy(&local_root) {
         crate::ui::warn(
             "local has leftover .git/ but remote has none — cleaning local .git/ to match",
         );
@@ -287,14 +296,6 @@ where
         .collect();
 
     // ── Diff ──
-    // Baseline = the converged manifest from our last successful sync. It is
-    // the common ancestor that lets the three-way diff distinguish a genuine
-    // deletion from a creation on the peer (see build_plan). Empty on first
-    // run → conservative pull-back, no deletes propagate that session.
-    let baseline = Baseline::load(&local_root);
-    if baseline.is_empty() {
-        tracing::debug!("no baseline yet — deletions won't propagate until next sync");
-    }
     let plan = build_plan(&local_manifest, &remote_manifest, &baseline, args.mode);
     plan.print();
 
