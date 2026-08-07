@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.2] - 2026-08-07
+
+### 📋 Release Summary
+
+This release improves data safety during synchronization by verifying Git repository presence before performing wipe operations (7d69862d).
+
+
+### ✨ New Features & Enhancements
+
+- **sync**: verify git presence via baseline before wiping `7d69862d`
+
 ## [0.1.1] - 2026-07-26
 
 ### 📋 Release Summary
