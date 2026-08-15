@@ -1,6 +1,8 @@
 use anyhow::Result;
 use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
+use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -104,6 +106,116 @@ pub struct WatcherHandle {
     pub keepalive: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
 }
 
+fn recoverable_watch_error(error: &notify::Error) -> bool {
+    match &error.kind {
+        notify::ErrorKind::Io(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+        ),
+        notify::ErrorKind::PathNotFound => true,
+        _ => false,
+    }
+}
+
+fn warn_watch_error(error: &notify::Error, warned: &mut HashSet<PathBuf>) {
+    if error.paths.is_empty() {
+        tracing::warn!("watcher: {error} — skipping inaccessible resource");
+        return;
+    }
+    for path in &error.paths {
+        if warned.insert(path.clone()) {
+            tracing::warn!(
+                "watcher: cannot watch {}: {} — skipping inaccessible resource",
+                path.display(),
+                error
+            );
+        }
+    }
+}
+
+/// Register a recursive native watch while isolating unreadable descendants.
+///
+/// Linux inotify implements a recursive watch by adding one watch per
+/// directory. A single inaccessible descendant makes `watch(root,
+/// Recursive)` return `PermissionDenied`, even though it has already covered
+/// part of the tree. Retry the immediate children independently: readable
+/// subtrees retain native recursive watching, while only the inaccessible
+/// branch is omitted.
+fn watch_subtree_tolerant<F>(
+    dir: &Path,
+    is_root: bool,
+    watch: &mut F,
+    warned: &mut HashSet<PathBuf>,
+) -> notify::Result<()>
+where
+    F: FnMut(&Path, RecursiveMode) -> notify::Result<()>,
+{
+    match watch(dir, RecursiveMode::Recursive) {
+        Ok(()) => return Ok(()),
+        Err(error) if recoverable_watch_error(&error) => {
+            // If the sync root itself is inaccessible, there is no useful
+            // watcher coverage to preserve. Only descendants are skippable.
+            if is_root && error.paths.iter().any(|path| path == dir) {
+                return Err(error);
+            }
+            warn_watch_error(&error, warned);
+        }
+        Err(error) => return Err(error),
+    }
+
+    let children = match fs::read_dir(dir) {
+        Ok(children) => children,
+        Err(error)
+            if !is_root
+                && matches!(
+                    error.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+                ) =>
+        {
+            let error = notify::Error::io(error).add_path(dir.to_path_buf());
+            warn_watch_error(&error, warned);
+            return Ok(());
+        }
+        Err(error) => return Err(notify::Error::io(error).add_path(dir.to_path_buf())),
+    };
+
+    for child in children {
+        let child = match child {
+            Ok(child) => child,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+                ) =>
+            {
+                warn_watch_error(&notify::Error::io(error), warned);
+                continue;
+            }
+            Err(error) => return Err(notify::Error::io(error)),
+        };
+        let path = child.path();
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+                ) =>
+            {
+                let error = notify::Error::io(error).add_path(path);
+                warn_watch_error(&error, warned);
+                continue;
+            }
+            Err(error) => return Err(notify::Error::io(error).add_path(path)),
+        };
+        if metadata.is_dir() {
+            watch_subtree_tolerant(&path, false, watch, warned)?;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn spawn(
     root: PathBuf,
     suppress: Suppression,
@@ -140,7 +252,14 @@ pub fn spawn(
     )?;
 
     // 0.7: direct .watch() on the Debouncer instead of .watcher().watch().
-    debouncer.watch(&root, RecursiveMode::Recursive)?;
+    // A permission-denied descendant must not tear down the whole session.
+    let mut warned = HashSet::new();
+    watch_subtree_tolerant(
+        &root,
+        true,
+        &mut |path, mode| debouncer.watch(path, mode),
+        &mut warned,
+    )?;
 
     Ok(WatcherHandle {
         events: rx,
@@ -326,5 +445,51 @@ mod tests {
             .is_ok());
         let handle = spawn(root.0.clone(), Suppression::default(), ignores).unwrap();
         drop(handle);
+    }
+
+    #[test]
+    fn isolates_a_permission_denied_subtree_and_watches_readable_siblings() {
+        let root = TestDir::new();
+        let readable_a = root.0.join("a");
+        let affected = root.0.join("affected");
+        let blocked = affected.join("blocked");
+        let readable_b = affected.join("readable-b");
+        let readable_c = root.0.join("c");
+        for dir in [&readable_a, &blocked, &readable_b, &readable_c] {
+            fs::create_dir_all(dir).unwrap();
+        }
+
+        let mut watched = Vec::new();
+        let mut fake_watch = |path: &Path, mode: RecursiveMode| {
+            assert_eq!(mode, RecursiveMode::Recursive);
+            if blocked.starts_with(path) {
+                Err(
+                    notify::Error::io(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                        .add_path(blocked.clone()),
+                )
+            } else {
+                watched.push(path.to_path_buf());
+                Ok(())
+            }
+        };
+
+        watch_subtree_tolerant(&root.0, true, &mut fake_watch, &mut HashSet::new()).unwrap();
+
+        assert!(watched.contains(&readable_a));
+        assert!(watched.contains(&readable_b));
+        assert!(watched.contains(&readable_c));
+        assert!(!watched.contains(&blocked));
+    }
+
+    #[test]
+    fn does_not_hide_fatal_watcher_errors() {
+        let root = TestDir::new();
+        let mut fake_watch = |_path: &Path, _mode: RecursiveMode| {
+            Err(notify::Error::new(notify::ErrorKind::MaxFilesWatch))
+        };
+
+        let error = watch_subtree_tolerant(&root.0, true, &mut fake_watch, &mut HashSet::new())
+            .unwrap_err();
+        assert!(matches!(error.kind, notify::ErrorKind::MaxFilesWatch));
     }
 }

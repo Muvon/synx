@@ -225,7 +225,11 @@ there (`cargo install synx`) or pass `--remote-synx /full/path/to/synx`.
 `synx 0.1` is wire-incompatible with future versions. Upgrade both sides.
 
 **"Permission denied" on initial sync.**
-SSH credentials issue, not a synx bug. Try `ssh user@host` manually first.
+If the denied path is inside the sync root, synx prints a warning, skips that
+inaccessible resource, and continues watching and syncing the readable parts of
+the tree. If the sync root itself is denied, verify the remote path permissions.
+For failures before a path is shown, also verify the SSH login with
+`ssh user@host`.
 
 **Files keep getting re-synced.**
 Most often clock skew between local and remote in `both` mode — the side
