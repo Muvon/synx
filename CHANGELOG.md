@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.3] - 2026-08-29
+
+### 📋 Release Summary
+
+This release improves synchronization reliability by reconciling missed filesystem events and safely skipping inaccessible directories during monitoring (a69d4efc, 3001d5c5). Documentation updates correct the installation command, crates.io references, and repository metadata (280e2df2).
+
+
+### 🐛 Bug Fixes & Stability
+
+- **sync**: reconcile missed filesystem events `a69d4efc`
+- **watcher**: skip inaccessible subtrees during watch `3001d5c5`
+
+### 📚 Documentation & Examples
+
+- **readme**: fix broken install one-liner, crates.io refs, and repo metadata `280e2df2`
+
 ## [0.1.2] - 2026-08-07
 
 ### 📋 Release Summary

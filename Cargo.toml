@@ -1,6 +1,6 @@
 [package]
 name = "synx"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Fast, real-time bidirectional file sync over SSH"
 license = "Apache-2.0"
