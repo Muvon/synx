@@ -256,7 +256,7 @@ fn validate_entry_kind(entry: &Entry, expected: EntryKind) -> io::Result<()> {
 
 // ── Wire framing ──
 // [u32 BE length][u8 flags][payload]
-// flag bit 0 (FLAG_COMPRESSED): payload is zstd-compressed bincode
+// flag bit 0 (FLAG_COMPRESSED): payload is zstd-compressed postcard
 
 const FLAG_COMPRESSED: u8 = 0x01;
 

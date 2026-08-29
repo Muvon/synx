@@ -1,13 +1,11 @@
 # synx
 
-> Fast, real-time bidirectional file sync over SSH.
-
-A simpler alternative to Mutagen, written in Rust.
+> Fast, real-time two-way file sync over SSH. One command, no daemons — a simpler Mutagen alternative, written in Rust.
 
 [![CI](https://github.com/Muvon/synx/actions/workflows/ci.yml/badge.svg)](https://github.com/Muvon/synx/actions/workflows/ci.yml)
-[![Release](https://github.com/Muvon/synx/actions/workflows/release.yml/badge.svg)](https://github.com/Muvon/synx/actions/workflows/release.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![crates.io](https://img.shields.io/crates/v/synx.svg)](https://crates.io/crates/synx)
+
+**Contents:** [Why synx](#why-synx) · [Install](#install) · [Quick start](#quick-start) · [Sync modes](#sync-modes) · [Ignore rules](#ignore-rules--authoritative) · [How it works](#how-it-works) · [Troubleshooting](#troubleshooting) · [Limits](#limits--future-work)
 
 ```
 synx  /Users/dk/proj  ◀─▶  dev@beefy:/srv/proj
@@ -45,12 +43,10 @@ synx  /Users/dk/proj  ◀─▶  dev@beefy:/srv/proj
 
 ```sh
 # one-liner (Linux & macOS, x86_64 + ARM64)
-curl -fsSL https://raw.githubusercontent.com/Muvon/synx/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Muvon/synx/master/install.sh | sh
 
-# from crates.io
-cargo install synx
-
-# from this repo
+# from source
+git clone https://github.com/Muvon/synx.git && cd synx
 cargo install --path .
 ```
 
@@ -202,10 +198,10 @@ rules.
 
 ## Performance notes
 
-- **First sync of a large repo** is bound by hash + transfer. On modern hardware,
-  blake3 hits ~1 GB/s per core; the parallel walker uses all your cores.
-- **Re-sync of an unchanged repo** is bound by the walk alone (cache hit
-  rate ~100%). A 100k-file repo re-syncs in ~1 second.
+- **First sync of a large repo** is bound by hash + transfer. blake3 hashes at
+  multi-GB/s on modern hardware, and the parallel walker uses all your cores.
+- **Re-sync of an unchanged repo** costs only the walk — the hash cache hit
+  rate is ~100%, so nothing is re-hashed.
 - **Live mode** has sub-second latency from save to remote write. Most of the
   time is the 200ms debounce.
 - **Delta sync** cuts wire traffic on large mutable files (logs, dumps,
@@ -219,7 +215,7 @@ rules.
 
 **"synx: command not found"** on the remote side.
 The agent must be in `$PATH` of the remote login shell. Either install it
-there (`cargo install synx`) or pass `--remote-synx /full/path/to/synx`.
+there (one-liner above) or pass `--remote-synx /full/path/to/synx`.
 
 **Protocol mismatch.**
 `synx 0.1` is wire-incompatible with future versions. Upgrade both sides.
