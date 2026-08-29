@@ -436,6 +436,62 @@ mod tests {
         assert_eq!(out.len(), before);
     }
 
+    fn recv_events(rx: &mut mpsc::UnboundedReceiver<Vec<FsEvent>>, secs: f64) -> Vec<FsEvent> {
+        let mut got = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs_f64(secs);
+        loop {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            match rx.try_recv() {
+                Ok(batch) => got.extend(batch),
+                Err(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+        got
+    }
+
+    // Exploratory: what does the real watcher report for git-style churn?
+    // Run with `cargo test exploratory -- --nocapture --ignored`.
+    #[test]
+    #[ignore]
+    fn exploratory_git_style_churn() {
+        let dir = TestDir::new();
+        fs::write(dir.0.join("f.txt"), b"v1").unwrap();
+        let root = dir.0.canonicalize().unwrap();
+        let ignores = Arc::new(OnceLock::new());
+        let mut handle = spawn(root.clone(), Suppression::default(), ignores).unwrap();
+        // Let the initial-create events drain.
+        let _ = recv_events(&mut handle.events, 1.0);
+
+        println!("── unlink + create + write (git checkout_entry style)");
+        fs::remove_file(root.join("f.txt")).unwrap();
+        fs::write(root.join("f.txt"), b"v2").unwrap();
+        println!("{:?}", recv_events(&mut handle.events, 1.0));
+
+        println!("── in-place write (truncate)");
+        fs::write(root.join("f.txt"), b"v3").unwrap();
+        println!("{:?}", recv_events(&mut handle.events, 1.0));
+
+        println!("── rapid double rewrite (rebase replay style)");
+        fs::remove_file(root.join("f.txt")).unwrap();
+        fs::write(root.join("f.txt"), b"a").unwrap();
+        fs::remove_file(root.join("f.txt")).unwrap();
+        fs::write(root.join("f.txt"), b"b").unwrap();
+        println!("{:?}", recv_events(&mut handle.events, 1.0));
+
+        println!("── delete only");
+        fs::remove_file(root.join("f.txt")).unwrap();
+        println!("{:?}", recv_events(&mut handle.events, 1.0));
+
+        println!("── recreate after delete");
+        fs::write(root.join("f.txt"), b"back").unwrap();
+        println!("{:?}", recv_events(&mut handle.events, 1.0));
+
+        drop(handle);
+    }
+
     #[test]
     fn starts_a_recursive_watcher() {
         let root = TestDir::new();

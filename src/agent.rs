@@ -408,7 +408,7 @@ where
         gate,
         baseline: live_baseline,
     };
-    live_loop(ctx, reader, writer, suppress, pending, watcher_handle).await
+    live_loop(ctx, reader, writer, suppress, pending, watcher_handle, None).await
 }
 
 #[cfg(test)]

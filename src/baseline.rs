@@ -174,6 +174,18 @@ impl LiveBaseline {
         }
         self.persist_due();
     }
+    /// Copy of the converged entries, for the reconciliation sweep to diff
+    /// the live tree against (see `peer::reconcile_sweep`). Empty when
+    /// disabled (agent side) — callers treat that as "nothing to diff".
+    pub fn snapshot(&self) -> HashMap<PathBuf, Entry> {
+        if !self.enabled {
+            return HashMap::new();
+        }
+        self.inner
+            .lock()
+            .map(|g| g.entries.clone())
+            .unwrap_or_default()
+    }
 
     /// Persist if dirty and the debounce interval has elapsed.
     fn persist_due(&self) {

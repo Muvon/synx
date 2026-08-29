@@ -10,18 +10,19 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 use crate::baseline::LiveBaseline;
+use crate::cache::HashCache;
 use crate::ignores::IgnoreStack;
 use crate::paths::{resolve_beneath, INTERNAL_TMP_PREFIX};
 use crate::protocol::{
     read_message, write_message, Entry, EntryKind, Message, SyncMode, CHUNK_SIZE, CHUNK_THRESHOLD,
 };
-use crate::walker::build_entry;
+use crate::walker::{build_entry, walk_manifest};
 use crate::watcher::{self, FsEvent};
 
 /// Suppression entries are pruned after this long. We use mtime comparison
@@ -1177,10 +1178,18 @@ mod tests {
 
     #[test]
     fn coalesces_event_storms_and_maps_sync_directions() {
+        let dir = TestDir::new("coalesce");
+        // Disk state is ground truth for the Created…Removed pattern:
+        // "ephemeral" is gone → dropped; "rewritten" exists (unlink+recreate
+        // coalesced by FSEvents) → kept as Modified, never as a delete.
+        fs::write(dir.0.join("kept"), b"x").unwrap();
+        fs::write(dir.0.join("rewritten"), b"y").unwrap();
         let events = vec![
             FsEvent::Created(PathBuf::from("ephemeral")),
             FsEvent::Modified(PathBuf::from("ephemeral")),
             FsEvent::Removed(PathBuf::from("ephemeral")),
+            FsEvent::Created(PathBuf::from("rewritten")),
+            FsEvent::Removed(PathBuf::from("rewritten")),
             FsEvent::Created(PathBuf::from("kept")),
             FsEvent::Modified(PathBuf::from("kept")),
             FsEvent::Renamed {
@@ -1188,11 +1197,12 @@ mod tests {
                 to: PathBuf::from("new"),
             },
         ];
-        let result = coalesce(events);
-        assert_eq!(result.len(), 2);
-        assert!(matches!(&result[0], FsEvent::Modified(path) if path == Path::new("kept")));
+        let result = coalesce(&dir.0, events);
+        assert_eq!(result.len(), 3);
+        assert!(matches!(&result[0], FsEvent::Modified(path) if path == Path::new("rewritten")));
+        assert!(matches!(&result[1], FsEvent::Modified(path) if path == Path::new("kept")));
         assert!(
-            matches!(&result[1], FsEvent::Renamed { from, to } if from == Path::new("old") && to == Path::new("new"))
+            matches!(&result[2], FsEvent::Renamed { from, to } if from == Path::new("old") && to == Path::new("new"))
         );
 
         assert_eq!(directions(SyncMode::Both, true), (true, true));
@@ -1558,6 +1568,9 @@ mod tests {
         fs::write(root.path().join("touch"), b"same").unwrap();
         fs::write(root.path().join("echo"), b"echo").unwrap();
         fs::write(root.path().join("ignored"), b"hidden").unwrap();
+        // Exists on disk: a `Removed` for it must be grounded to Modified,
+        // never forwarded as a delete (the unlink+recreate FSEvents case).
+        fs::write(root.path().join("zombie"), b"alive").unwrap();
 
         let ignores = IgnoreStack::from_manifest(root.path(), &[]);
         let suppress = Suppression::default();
@@ -1579,6 +1592,7 @@ mod tests {
                 FsEvent::Created(PathBuf::from("dir")),
                 FsEvent::Created(PathBuf::from("link")),
                 FsEvent::Removed(PathBuf::from("gone")),
+                FsEvent::Removed(PathBuf::from("zombie")),
                 FsEvent::Renamed {
                     from: PathBuf::from("old"),
                     to: PathBuf::from("renamed"),
@@ -1623,6 +1637,11 @@ mod tests {
         ));
         assert!(matches!(
             read_message(&mut reader).await.unwrap(),
+            Message::FileData { entry, content }
+                if entry.path == Path::new("zombie") && content == b"alive"
+        ));
+        assert!(matches!(
+            read_message(&mut reader).await.unwrap(),
             Message::Rename { from, to }
                 if from == Path::new("old") && to == Path::new("renamed")
         ));
@@ -1638,6 +1657,86 @@ mod tests {
         assert!(reader.is_empty());
     }
 
+    #[tokio::test]
+    async fn reconcile_sweep_catches_watcher_misses() {
+        let root = TestDir::new("reconcile");
+        fs::write(root.path().join("same"), b"same").unwrap();
+        fs::write(root.path().join("changed"), b"v1").unwrap();
+        fs::write(root.path().join("deleted"), b"x").unwrap();
+        let mut converged = HashMap::new();
+        for name in ["same", "changed", "deleted"] {
+            let e = build_entry(root.path(), Path::new(name)).unwrap().unwrap();
+            converged.insert(e.path.clone(), e);
+        }
+        let baseline = LiveBaseline::seed(
+            root.path().to_path_buf(),
+            converged,
+            &crate::baseline::Baseline::default(),
+        );
+
+        // Diverge exactly like a git checkout would: unlink+recreate one
+        // file, delete one, add one — with no watcher events at all.
+        fs::remove_file(root.path().join("changed")).unwrap();
+        fs::write(root.path().join("changed"), b"v2").unwrap();
+        fs::remove_file(root.path().join("deleted")).unwrap();
+        fs::write(root.path().join("added"), b"new").unwrap();
+
+        let cache = Arc::new(StdMutex::new(HashCache::load(root.path())));
+        let events = reconcile_sweep(root.path(), &baseline, &cache, &GitGate::default())
+            .await
+            .unwrap();
+
+        let mut paths: Vec<&Path> = events
+            .iter()
+            .map(|e| match e {
+                FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => p.as_path(),
+                _ => panic!("unexpected rename in sweep"),
+            })
+            .collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                Path::new("added"),
+                Path::new("changed"),
+                Path::new("deleted")
+            ]
+        );
+        // The rewritten file must surface as Modified (alive on disk),
+        // never as a delete — that inversion was the remote-data-loss bug.
+        assert!(matches!(
+            events
+                .iter()
+                .find(|e| matches!(e, FsEvent::Modified(p) if p == Path::new("changed"))),
+            Some(_)
+        ));
+        assert!(matches!(
+            events
+                .iter()
+                .find(|e| matches!(e, FsEvent::Removed(p) if p == Path::new("deleted"))),
+            Some(_)
+        ));
+
+        // No-op while git is mid-operation: the walk excludes `.git/` and
+        // would misreport those paths as deleted.
+        fs::create_dir(root.path().join(".git")).unwrap();
+        fs::write(root.path().join(".git/MERGE_HEAD"), b"busy").unwrap();
+        let busy = reconcile_sweep(root.path(), &baseline, &cache, &GitGate::default())
+            .await
+            .unwrap();
+        assert!(busy.is_empty());
+
+        // No-op without a baseline (first run — nothing to diff against).
+        let empty = reconcile_sweep(
+            root.path(),
+            &LiveBaseline::disabled(),
+            &cache,
+            &GitGate::default(),
+        )
+        .await
+        .unwrap();
+        assert!(empty.is_empty());
+    }
     #[tokio::test]
     async fn defers_only_git_events_while_repository_is_busy() {
         let root = TestDir::new("forward-git");
@@ -1718,6 +1817,7 @@ mod tests {
             Suppression::default(),
             Pending::default(),
             watcher,
+            None,
         )
         .await
         .unwrap();
@@ -1905,6 +2005,100 @@ fn directions(mode: SyncMode, is_client: bool) -> (bool, bool) {
     }
 }
 
+/// How often the client re-walks the tree to catch changes the watcher
+/// never reported. Unchanged files cost one stat (hash cache), so a sweep
+/// is cheap even on large trees.
+const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Diff the live tree against the converged baseline and return synthetic
+/// events for every divergence — the safety net for watcher misses.
+///
+/// Why this exists: the watcher pipeline is lossy under rapid churn. Measured
+/// on macOS FSEvents (see `watcher::tests::exploratory_git_style_churn`),
+/// unlink+recreate collapses into a single coalesced notification that the
+/// debouncer may drop entirely, and event *kinds* are unreliable (a delete
+/// can surface as `Modified`). A `git checkout` + `pull --rebase` rewrites
+/// hundreds of files in exactly this pattern, leaving the peer silently
+/// desynced until a restart re-ran the manifest diff. This sweep is that
+/// diff, run periodically against the live baseline.
+///
+/// No-op while git is mid-operation (the walk would exclude `.git/` and
+/// misreport those paths as deleted) and when there is no baseline yet.
+async fn reconcile_sweep(
+    root: &Path,
+    baseline: &LiveBaseline,
+    cache: &Arc<StdMutex<HashCache>>,
+    gate: &GitGate,
+) -> Result<Vec<FsEvent>> {
+    let base = baseline.snapshot();
+    if base.is_empty() {
+        return Ok(Vec::new());
+    }
+    if gate.busy(root) {
+        return Ok(Vec::new());
+    }
+
+    let walk_root = root.to_path_buf();
+    let cache = Arc::clone(cache);
+    let manifest = tokio::task::spawn_blocking(move || -> Result<Vec<Entry>> {
+        let mut cache = cache
+            .lock()
+            .map_err(|_| anyhow::anyhow!("hash cache mutex poisoned"))?;
+        Ok(walk_manifest(&walk_root, &mut cache)?)
+    })
+    .await??;
+
+    let on_disk: HashSet<&PathBuf> = manifest.iter().map(|e| &e.path).collect();
+    let mut events = Vec::new();
+    for entry in &manifest {
+        match base.get(&entry.path) {
+            Some(converged) if converged.same_content(entry) => {}
+            _ => events.push(FsEvent::Modified(entry.path.clone())),
+        }
+    }
+    for path in base.keys() {
+        if !on_disk.contains(path) {
+            events.push(FsEvent::Removed(path.clone()));
+        }
+    }
+    Ok(events)
+}
+
+/// Run one sweep and forward whatever it found through the normal event
+/// path (echo suppression, ignore rules, and disk-state grounding all
+/// apply). Also persists the hash cache if the walk hashed new content.
+async fn run_reconcile_sweep<W>(
+    ctx: &SessionCtx,
+    writer: &Arc<Mutex<W>>,
+    suppress: &Suppression,
+    cache: &Arc<StdMutex<HashCache>>,
+) -> Result<()>
+where
+    W: AsyncWriteExt + Unpin,
+{
+    let events = reconcile_sweep(&ctx.root, &ctx.baseline, cache, &ctx.gate).await?;
+    if events.is_empty() {
+        return Ok(());
+    }
+    tracing::debug!("reconcile: {} divergent path(s)", events.len());
+    forward_local_events(
+        &ctx.root,
+        events,
+        writer,
+        ctx.compress,
+        suppress,
+        ctx.is_client,
+        &ctx.ignores,
+        &ctx.gate,
+        &ctx.baseline,
+    )
+    .await?;
+    if let Ok(mut cache) = cache.lock() {
+        cache.save(&ctx.root);
+    }
+    Ok(())
+}
+
 pub async fn live_loop<R, W>(
     ctx: SessionCtx,
     mut reader: R,
@@ -1919,6 +2113,9 @@ pub async fn live_loop<R, W>(
     // the user modifies during the walk/exchange/apply window aren't lost.
     // Caller owns spawning; we receive the live channel + keepalive here.
     watcher_handle: watcher::WatcherHandle,
+    // Client-only: shared hash cache enabling the periodic reconciliation
+    // sweep (see `reconcile_sweep`). `None` on the agent.
+    reconcile: Option<Arc<StdMutex<HashCache>>>,
 ) -> Result<()>
 where
     R: AsyncRead + AsyncReadExt + Unpin + Send + 'static,
@@ -1958,6 +2155,14 @@ where
     // sync after an operation finishes is imperceptible.
     let mut git_tick = tokio::time::interval(Duration::from_secs(1));
     git_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    // Drives the client-side reconciliation sweep: re-walk the tree and
+    // diff it against the baseline to catch changes the watcher never
+    // reported. FSEvents/debouncer coalescing drops real events during
+    // rapid churn (git checkout/rebase); without this net they'd stay
+    // unsynced until a restart.
+    let mut reconcile_tick = tokio::time::interval(RECONCILE_INTERVAL);
+    reconcile_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         tokio::select! {
@@ -2013,6 +2218,26 @@ where
                     for m in msgs {
                         if let Err(e) = handle_incoming(&ctx, m, &suppress, &pending, &writer, apply_remote).await {
                             tracing::warn!("deferred apply failed: {}", e);
+                        }
+                    }
+                    // A git mass rewrite is the highest-risk window for
+                    // swallowed watcher events — sweep now instead of
+                    // waiting for the periodic tick.
+                    if send_local {
+                        if let Some(cache) = &reconcile {
+                            if let Err(e) = run_reconcile_sweep(&ctx, &writer, &suppress, cache).await {
+                                tracing::warn!("reconcile sweep failed: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+
+            _ = reconcile_tick.tick() => {
+                if send_local {
+                    if let Some(cache) = &reconcile {
+                        if let Err(e) = run_reconcile_sweep(&ctx, &writer, &suppress, cache).await {
+                            tracing::warn!("reconcile sweep failed: {}", e);
                         }
                     }
                 }
@@ -2367,15 +2592,20 @@ where
 /// Collapse a batch of watcher events to at most one per path.
 ///
 /// Per-path policy:
-///   - First event is `Created` AND last event is `Removed` → **drop the
-///     whole path**. The file lived and died inside the debouncer window;
-///     it's an ephemeral artifact (Vim's `4913` probe, atomic-write tmps,
-///     IDE scratch files). Sending a Delete for something the peer never
-///     saw is noise.
+///   - First event is `Created` AND last event is `Removed` AND the path is
+///     gone from disk → **drop the whole path**. The file lived and died
+///     inside the debouncer window; it's an ephemeral artifact (Vim's `4913`
+///     probe, atomic-write tmps, IDE scratch files). Sending a Delete for
+///     something the peer never saw is noise.
+///   - First event is `Created` AND last event is `Removed` BUT the path
+///     exists on disk → keep as `Modified`. FSEvents coalesces an
+///     unlink+recreate into a single notification carrying both the
+///     Created and Removed flags; the file is alive with new content, so
+///     dropping it would silently desync the peer.
 ///   - Otherwise → keep the last event (most recent state wins).
 ///
 /// Renames are keyed on their destination path.
-fn coalesce(events: Vec<FsEvent>) -> Vec<FsEvent> {
+fn coalesce(root: &Path, events: Vec<FsEvent>) -> Vec<FsEvent> {
     use std::collections::HashSet;
 
     let key_of = |ev: &FsEvent| -> PathBuf {
@@ -2396,10 +2626,20 @@ fn coalesce(events: Vec<FsEvent>) -> Vec<FsEvent> {
     }
 
     let mut keep: HashSet<usize> = HashSet::with_capacity(first_last.len());
+    // Paths kept as `Modified` instead of their recorded last event
+    // (removed+recreated inside the window — see policy above).
+    let mut as_modified: HashMap<usize, PathBuf> = HashMap::new();
     for &(first, last) in first_last.values() {
         if matches!(events[first], FsEvent::Created(_))
             && matches!(events[last], FsEvent::Removed(_))
         {
+            let key = key_of(&events[first]);
+            if root.join(&key).symlink_metadata().is_ok() {
+                // Removed+recreated inside the window (coalesced FSEvent):
+                // the file is alive — sync its current state.
+                keep.insert(last);
+                as_modified.insert(last, key);
+            }
             // Ephemeral: created and gone before we even fired. Skip entirely.
             continue;
         }
@@ -2410,7 +2650,10 @@ fn coalesce(events: Vec<FsEvent>) -> Vec<FsEvent> {
         .into_iter()
         .enumerate()
         .filter(|(i, _)| keep.contains(i))
-        .map(|(_, ev)| ev)
+        .map(|(i, ev)| match as_modified.get(&i) {
+            Some(path) => FsEvent::Modified(path.clone()),
+            None => ev,
+        })
         .collect()
 }
 
@@ -2463,7 +2706,7 @@ where
     // Only the client prints. On the agent, the same eprintln would be
     // forwarded over SSH stderr and duplicate every transfer line.
     let log_event = is_client;
-    let events = coalesce(events)
+    let events = coalesce(root, events)
         .into_iter()
         .filter_map(|event| filter_outgoing_event(root, ignores, event));
     // Once per batch: if git is mid-operation, defer every event that touches
@@ -2472,6 +2715,20 @@ where
     // so the brief gaps between git's sub-steps don't open the gate.
     let pause_git = gate.busy(root);
     for ev in events {
+        // Watcher event kinds are hints, not truth. Measured on macOS
+        // FSEvents: a plain delete can arrive as `Modified`, a write as
+        // `Created`, and an unlink+recreate collapses into one coalesced
+        // notification — so a `Removed` may surface for a path that has
+        // since come back (git checkout/rebase rewrite files this way).
+        // Ground the decision in current disk state: a "remove" for a path
+        // that exists is a content send, never a delete. Deletes only leave
+        // here when the file is verifiably gone.
+        let ev = match ev {
+            FsEvent::Removed(ref p) if root.join(p).symlink_metadata().is_ok() => {
+                FsEvent::Modified(p.clone())
+            }
+            ev => ev,
+        };
         if suppress.is_echo(root, &ev) {
             tracing::trace!("echo suppressed: {:?}", ev);
             continue;

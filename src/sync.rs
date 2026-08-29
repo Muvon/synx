@@ -174,16 +174,21 @@ where
         watcher::spawn(local_root.clone(), suppress.clone(), ignore_state.clone())?;
 
     // ── Local manifest (parallel walk with hash cache) ──
-    let cache = HashCache::load(&local_root);
+    // The cache lives behind an Arc<StdMutex> so the live loop's
+    // reconciliation sweeps can reuse it (stat-only for unchanged files)
+    // instead of re-hashing the tree every sweep.
+    let cache = Arc::new(std::sync::Mutex::new(HashCache::load(&local_root)));
     let started = Instant::now();
     let root_for_walk = local_root.clone();
     // Held behind an Arc so the concurrent send task can read it without
     // cloning the whole manifest; reclaimed to a plain Vec once the send
     // completes (its Arc clone is dropped by then, so try_unwrap succeeds).
-    let (local_manifest, mut cache) = tokio::task::spawn_blocking(move || {
-        let mut cache = cache;
-        let manifest = walk_manifest(&root_for_walk, &mut cache)?;
-        Ok::<_, anyhow::Error>((manifest, cache))
+    let cache_for_walk = Arc::clone(&cache);
+    let local_manifest = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Entry>> {
+        let mut cache = cache_for_walk
+            .lock()
+            .map_err(|_| anyhow::anyhow!("hash cache mutex poisoned"))?;
+        Ok(walk_manifest(&root_for_walk, &mut cache)?)
     })
     .await??;
     let local_manifest = Arc::new(local_manifest);
@@ -708,7 +713,9 @@ where
     ));
 
     // Persist cache (we may have hashed new files).
-    cache.save(&local_root);
+    if let Ok(mut c) = cache.lock() {
+        c.save(&local_root);
+    }
 
     // Seed the next session's baseline from the converged manifest. After init
     // sync the local tree equals the merged result: start from the local
@@ -784,7 +791,16 @@ where
         gate,
         baseline: live_baseline,
     };
-    let result = live_loop(ctx, reader, writer, suppress, pending, watcher_handle).await;
+    let result = live_loop(
+        ctx,
+        reader,
+        writer,
+        suppress,
+        pending,
+        watcher_handle,
+        Some(cache),
+    )
+    .await;
     if let Some(child) = child.as_mut() {
         let _ = child.wait().await;
     }
