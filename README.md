@@ -36,6 +36,9 @@ synx  /Users/dk/proj  ◀─▶  dev@beefy:/srv/proj
 - **Git-aware.** Pauses `.git/` synchronization when it detects an active git
   operation (rebase, merge, cherry-pick, etc.) so you never corrupt a repo
   mid-operation.
+- **Wrong-repo protection.** If both sync roots are git repositories, their
+  remotes are compared at connect time — syncing two different projects over
+  one path is refused (`--allow-repo-mismatch` overrides).
 - **macOS + Linux.** FSEvents on macOS, inotify on Linux, via the `notify`
   crate.
 
@@ -219,6 +222,12 @@ there (one-liner above) or pass `--remote-synx /full/path/to/synx`.
 
 **Protocol mismatch.**
 `synx 0.1` is wire-incompatible with future versions. Upgrade both sides.
+
+**"refusing to sync: different git repositories".**
+Both roots are git repos but track different remotes, so synx refuses to
+merge them. Point the remote path at the right directory, or pass
+`--allow-repo-mismatch` if the mismatch is intentional (e.g. a fork and
+its upstream).
 
 **"Permission denied" on initial sync.**
 If the denied path is inside the sync root, synx prints a warning, skips that

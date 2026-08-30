@@ -45,6 +45,7 @@ async fn main() -> Result<()> {
         no_compress: cli.no_compress,
         once: cli.once,
         dry_run: cli.dry_run,
+        allow_repo_mismatch: cli.allow_repo_mismatch,
         remote_synx: cli.remote_synx.clone(),
     })
     .await

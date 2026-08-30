@@ -18,8 +18,8 @@ use crate::ignores::IgnoreStack;
 use crate::paths::resolve_beneath;
 use crate::peer::{
     apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
-    compute_delta, compute_signature, forward_local_events, git_busy, is_under_git, live_loop,
-    send_file, GitGate, Pending, Suppression,
+    compute_delta, compute_signature, forward_local_events, git_busy, git_remotes,
+    git_remotes_conflict, is_under_git, live_loop, send_file, GitGate, Pending, Suppression,
 };
 use crate::protocol::{
     read_message, write_frame, write_message, Entry, EntryKind, Message, SyncMode, IO_BUF_SIZE,
@@ -74,6 +74,7 @@ fn is_fatal(e: &anyhow::Error) -> bool {
     s.contains("protocol mismatch")
         || s.contains("invalid local path")
         || s.contains("remote must be ")
+        || s.contains("refusing to sync")
 }
 
 fn short_err(e: &anyhow::Error) -> String {
@@ -115,11 +116,24 @@ async fn run_session(
         Message::HelloAck {
             version,
             root_existed,
+            git_remotes: remote_remotes,
         } => {
             if version != PROTOCOL_VERSION {
                 anyhow::bail!(
                     "protocol mismatch (local={PROTOCOL_VERSION}, remote={version}). \
                      Update synx on both sides."
+                );
+            }
+
+            let local_remotes = git_remotes(local_root);
+            if !args.allow_repo_mismatch && git_remotes_conflict(&local_remotes, &remote_remotes) {
+                anyhow::bail!(
+                    "refusing to sync: different git repositories\n  \
+                     local remotes:  {}\n  \
+                     remote remotes: {}\n  \
+                     pass --allow-repo-mismatch if this is intentional",
+                    local_remotes.join(", "),
+                    remote_remotes.join(", ")
                 );
             }
             if !root_existed && first_attempt {
@@ -1115,6 +1129,7 @@ mod tests {
             no_compress: true,
             once: true,
             dry_run: false,
+            allow_repo_mismatch: false,
             remote_synx: "synx".into(),
         }
     }
@@ -1525,6 +1540,9 @@ mod tests {
         assert!(is_fatal(&anyhow::anyhow!("protocol mismatch")));
         assert!(is_fatal(&anyhow::anyhow!("invalid local path")));
         assert!(is_fatal(&anyhow::anyhow!("remote must be host:path")));
+        assert!(is_fatal(&anyhow::anyhow!(
+            "refusing to sync: different git repositories"
+        )));
         assert!(!is_fatal(&anyhow::anyhow!("connection reset")));
         assert_eq!(short_err(&anyhow::anyhow!("first\nsecond")), "first");
     }

@@ -407,6 +407,123 @@ pub fn cleanup_orphan_tmps() {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Git repo identity.
+//
+// Syncing root A over root B silently merges two unrelated projects.
+// When both roots are git repos we compare their remote URL sets
+// (normalized) and refuse on zero overlap — the same repo cloned via
+// https and ssh still matches. Roots without `.git` or without any
+// remote can't be identified and pass through unchecked.
+// ─────────────────────────────────────────────────────────────
+
+/// Normalized remote URLs of the git repo at `root`, sorted and deduped.
+/// Empty when `root` is not a git repo, has no remotes, or its config
+/// can't be read — identification is best-effort and never blocks sync.
+pub fn git_remotes(root: &Path) -> Vec<String> {
+    let dot = root.join(".git");
+    let config = if dot.is_dir() {
+        dot.join("config")
+    } else if let Ok(content) = fs::read_to_string(&dot) {
+        // `.git` is a file for submodules and linked worktrees:
+        // "gitdir: <path>" relative to `root`.
+        let Some(target) = content.trim().strip_prefix("gitdir:") else {
+            return Vec::new();
+        };
+        let gitdir = root.join(target.trim());
+        // Linked worktrees keep the config in the common dir.
+        match fs::read_to_string(gitdir.join("commondir")) {
+            Ok(common) => gitdir.join(common.trim()).join("config"),
+            Err(_) => gitdir.join("config"),
+        }
+    } else {
+        return Vec::new();
+    };
+    match fs::read_to_string(&config) {
+        Ok(text) => parse_remote_urls(&text),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Extract and normalize `url = ...` values from `[remote "..."]`
+/// sections of a git config. Sorted and deduped.
+fn parse_remote_urls(config: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut in_remote = false;
+    for line in config.lines() {
+        let line = line.trim();
+        if let Some(header) = line.strip_prefix('[') {
+            in_remote = header
+                .split([']', ' ', '\t', '"'])
+                .next()
+                .is_some_and(|section| section == "remote");
+        } else if in_remote {
+            if let Some((key, value)) = line.split_once('=') {
+                if key.trim() == "url" {
+                    let value = value.trim().trim_matches('"');
+                    if !value.is_empty() {
+                        urls.push(normalize_git_url(value));
+                    }
+                }
+            }
+        }
+    }
+    urls.sort();
+    urls.dedup();
+    urls
+}
+
+fn strip_userinfo(authority: &str) -> &str {
+    authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host)
+}
+
+fn strip_default_port(host: &str) -> &str {
+    [":22", ":80", ":443"]
+        .iter()
+        .find_map(|port| host.strip_suffix(port))
+        .unwrap_or(host)
+}
+
+fn trim_repo_suffix(path: &str) -> &str {
+    let path = path.trim_end_matches('/');
+    path.strip_suffix(".git").unwrap_or(path)
+}
+
+/// Canonical form of a git remote URL for comparison: drops scheme,
+/// userinfo, default ports (22/80/443) and a trailing `.git`/`/`, then
+/// lowercases. `git@github.com:O/R.git`, `ssh://git@github.com:22/O/R`
+/// and `https://github.com/O/R` all normalize to `github.com/o/r`.
+pub fn normalize_git_url(url: &str) -> String {
+    let url = url.trim();
+    let (host, path) = if let Some((_, rest)) = url.split_once("://") {
+        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        (strip_default_port(strip_userinfo(authority)), path)
+    } else if let Some((prefix, suffix)) = url.split_once(':') {
+        if prefix.contains('/') {
+            // A plain local path that happens to contain ':'.
+            return trim_repo_suffix(url).to_lowercase();
+        }
+        // scp-like syntax: [user@]host:path
+        (strip_userinfo(prefix), suffix)
+    } else {
+        return trim_repo_suffix(url).to_lowercase();
+    };
+    let path = trim_repo_suffix(path);
+    if path.is_empty() {
+        host.to_lowercase()
+    } else {
+        format!("{}/{}", host.to_lowercase(), path.to_lowercase())
+    }
+}
+
+/// True when both sides are identifiable git repos sharing no remote —
+/// i.e. syncing would merge two different projects.
+pub fn git_remotes_conflict(local: &[String], remote: &[String]) -> bool {
+    !local.is_empty() && !remote.is_empty() && !local.iter().any(|url| remote.contains(url))
+}
+
+// ─────────────────────────────────────────────────────────────
 // Delta sync helpers (fast_rsync, SIMD-accelerated librsync).
 //
 // fast_rsync internally uses MD4 for block hashes (its origin is the rsync
@@ -1834,6 +1951,75 @@ mod tests {
         ));
         assert!(reader.is_empty());
         assert!(!root.path().join("bad").exists());
+    }
+
+    #[test]
+    fn reads_remotes_from_git_config_including_gitdir_files() {
+        let root = TestDir::new("git-remotes");
+        fs::create_dir_all(root.path().join(".git")).unwrap();
+        fs::write(
+            root.path().join(".git/config"),
+            "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = git@github.com:Muvon/synx.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[remote \"mirror\"]\n\turl = https://github.com/Muvon/synx\n[branch \"main\"]\n\tremote = origin\n\turl = https://example.com/ignored\n",
+        )
+        .unwrap();
+        assert_eq!(
+            git_remotes(root.path()),
+            vec!["github.com/muvon/synx".to_string()]
+        );
+
+        // `.git` as a file (submodule / linked worktree) with commondir.
+        let wt = TestDir::new("git-remotes-worktree");
+        fs::create_dir_all(wt.path().join(".git-common")).unwrap();
+        fs::write(wt.path().join(".git"), "gitdir: .git-common\n").unwrap();
+        fs::write(wt.path().join(".git-common/commondir"), ".\n").unwrap();
+        fs::write(
+            wt.path().join(".git-common/config"),
+            "[remote \"origin\"]\n\turl = ssh://git@github.com:22/Muvon/synx.git\n",
+        )
+        .unwrap();
+        assert_eq!(
+            git_remotes(wt.path()),
+            vec!["github.com/muvon/synx".to_string()]
+        );
+
+        // Not a repo → empty, never an error.
+        let plain = TestDir::new("git-remotes-plain");
+        assert!(git_remotes(plain.path()).is_empty());
+    }
+
+    #[test]
+    fn normalizes_git_urls_across_schemes_and_syntaxes() {
+        let canon = "github.com/muvon/synx";
+        for url in [
+            "git@github.com:Muvon/synx.git",
+            "ssh://git@github.com:22/Muvon/synx.git",
+            "ssh://github.com/Muvon/synx",
+            "https://github.com/Muvon/synx.git",
+            "http://user:pass@github.com:80/Muvon/synx.git/",
+            "HTTPS://GitHub.Com/Muvon/Synx",
+        ] {
+            assert_eq!(normalize_git_url(url), canon, "{url}");
+        }
+        assert_eq!(
+            normalize_git_url("/local/path/repo.git"),
+            "/local/path/repo"
+        );
+        assert_eq!(normalize_git_url("github.com"), "github.com");
+    }
+
+    #[test]
+    fn conflicts_only_when_both_sides_have_disjoint_remotes() {
+        let a = vec!["github.com/a".to_string()];
+        let b = vec!["github.com/b".to_string()];
+        assert!(git_remotes_conflict(&a, &b));
+        assert!(!git_remotes_conflict(
+            &a,
+            &["gitlab.com/x".to_string(), "github.com/a".to_string()]
+        ));
+        // Unidentifiable sides never conflict.
+        assert!(!git_remotes_conflict(&a, &[]));
+        assert!(!git_remotes_conflict(&[], &b));
+        assert!(!git_remotes_conflict(&[], &[]));
     }
 }
 

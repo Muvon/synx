@@ -3,7 +3,7 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024; // 64 MiB per-message
 pub const COMPRESS_THRESHOLD: usize = 512;
 pub const COMPRESS_LEVEL: i32 = 3;
@@ -75,6 +75,10 @@ pub enum Message {
     HelloAck {
         version: u32,
         root_existed: bool,
+        /// Normalized remote URLs of the agent's git repo; empty when the
+        /// root is not a repo or has no remotes. Lets the client refuse
+        /// syncing two different repositories over one path.
+        git_remotes: Vec<String>,
     },
 
     // ── Manifest exchange (streaming) ──
@@ -452,6 +456,27 @@ mod tests {
                 .kind(),
             io::ErrorKind::InvalidData
         );
+    }
+
+    #[tokio::test]
+    async fn hello_ack_round_trips_git_remotes() {
+        let mut wire = Vec::new();
+        write_frame(
+            &mut wire,
+            &Message::HelloAck {
+                version: PROTOCOL_VERSION,
+                root_existed: true,
+                git_remotes: vec!["github.com/muvon/synx".into()],
+            },
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            read_message(&mut wire.as_slice()).await.unwrap(),
+            Message::HelloAck { ref git_remotes, .. }
+                if git_remotes == &vec!["github.com/muvon/synx".to_string()]
+        ));
     }
 
     #[tokio::test]

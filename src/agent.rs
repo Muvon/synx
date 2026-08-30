@@ -19,8 +19,8 @@ use crate::ignores::IgnoreStack;
 use crate::paths::resolve_beneath;
 use crate::peer::{
     apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
-    cleanup_orphan_tmps, compute_delta, compute_signature, forward_local_events, live_loop,
-    send_file, GitGate, Pending, Suppression,
+    cleanup_orphan_tmps, compute_delta, compute_signature, forward_local_events, git_remotes,
+    live_loop, send_file, GitGate, Pending, Suppression,
 };
 use crate::protocol::{
     read_message, write_frame, write_message, EntryKind, Message, IO_BUF_SIZE, PROTOCOL_VERSION,
@@ -64,6 +64,7 @@ where
 
     let root_existed = path.exists();
     let root = ensure_root(&path)?;
+    let remotes = git_remotes(&root);
 
     // Spawn watcher BEFORE the walk so events for files modified during
     // the walk / manifest exchange / init-sync apply window are captured
@@ -84,6 +85,7 @@ where
             &Message::HelloAck {
                 version: PROTOCOL_VERSION,
                 root_existed,
+                git_remotes: remotes,
             },
             false,
         )
@@ -650,7 +652,8 @@ mod tests {
             messages.first(),
             Some(Message::HelloAck {
                 version: PROTOCOL_VERSION,
-                root_existed: true
+                root_existed: true,
+                ..
             })
         ));
         assert!(messages
@@ -749,5 +752,40 @@ mod tests {
             let result = run_io(parent.0.join(name), std::io::Cursor::new(input), writer).await;
             assert_eq!(result.is_err(), should_error, "{name}");
         }
+    }
+
+    #[tokio::test]
+    async fn reports_git_remotes_in_hello_ack() {
+        let parent = TestDir::new("hello-remotes");
+        let root = parent.0.join("repo");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(
+            root.join(".git/config"),
+            "[remote \"origin\"]\n\turl = git@github.com:Muvon/synx.git\n",
+        )
+        .unwrap();
+        let input = encode(vec![
+            Message::Hello {
+                version: PROTOCOL_VERSION,
+                root: PathBuf::from("client"),
+                mode: SyncMode::Both,
+                compress: false,
+            },
+            Message::ManifestBegin,
+            Message::ManifestEnd,
+            Message::Bye,
+        ])
+        .await;
+        let writer = Arc::new(Mutex::new(Vec::new()));
+        run_io(root, std::io::Cursor::new(input), writer.clone())
+            .await
+            .unwrap();
+        let output = writer.lock().await;
+        let mut reader = output.as_slice();
+        assert!(matches!(
+            read_message(&mut reader).await.unwrap(),
+            Message::HelloAck { ref git_remotes, .. }
+                if git_remotes == &vec!["github.com/muvon/synx".to_string()]
+        ));
     }
 }

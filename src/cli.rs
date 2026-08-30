@@ -56,6 +56,11 @@ pub struct Cli {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Sync even when local and remote roots are git repos with no
+    /// shared remote (i.e. different projects).
+    #[arg(long)]
+    pub allow_repo_mismatch: bool,
+
     /// Command used to invoke synx on the remote (must be in PATH).
     #[arg(long, default_value = "synx", value_name = "CMD")]
     pub remote_synx: String,
@@ -70,6 +75,7 @@ pub struct ClientArgs {
     pub no_compress: bool,
     pub once: bool,
     pub dry_run: bool,
+    pub allow_repo_mismatch: bool,
     pub remote_synx: String,
 }
 
@@ -93,6 +99,7 @@ mod tests {
         assert_eq!(defaults.verbose, 0);
         assert!(!defaults.once);
         assert!(!defaults.dry_run);
+        assert!(!defaults.allow_repo_mismatch);
 
         let full = Cli::try_parse_from([
             "synx",
@@ -106,6 +113,7 @@ mod tests {
             "--no-compress",
             "--once",
             "--dry-run",
+            "--allow-repo-mismatch",
             "--remote-synx",
             "/opt/synx",
         ])
@@ -113,7 +121,7 @@ mod tests {
         assert_eq!(full.mode, SyncMode::Push);
         assert_eq!(full.verbose, 2);
         assert_eq!(full.ssh_opts.as_deref(), Some("-p 2222"));
-        assert!(full.no_compress && full.once && full.dry_run);
+        assert!(full.no_compress && full.once && full.dry_run && full.allow_repo_mismatch);
         assert_eq!(full.remote_synx, "/opt/synx");
     }
 
