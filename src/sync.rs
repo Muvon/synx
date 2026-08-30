@@ -202,7 +202,7 @@ where
         let mut cache = cache_for_walk
             .lock()
             .map_err(|_| anyhow::anyhow!("hash cache mutex poisoned"))?;
-        Ok(walk_manifest(&root_for_walk, &mut cache)?)
+        walk_manifest(&root_for_walk, &mut cache)
     })
     .await??;
     let local_manifest = Arc::new(local_manifest);

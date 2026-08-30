@@ -2230,7 +2230,7 @@ async fn reconcile_sweep(
         let mut cache = cache
             .lock()
             .map_err(|_| anyhow::anyhow!("hash cache mutex poisoned"))?;
-        Ok(walk_manifest(&walk_root, &mut cache)?)
+        walk_manifest(&walk_root, &mut cache)
     })
     .await??;
 
