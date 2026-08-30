@@ -2,7 +2,8 @@
 
 > Fast, real-time two-way file sync over SSH. One command, no daemons — a simpler Mutagen alternative, written in Rust.
 
-[![CI](https://github.com/Muvon/synx/actions/workflows/ci.yml/badge.svg)](https://github.com/Muvon/synx/actions/workflows/ci.yml)
+[![CI](https://github.com/muvon/synx/actions/workflows/ci.yml/badge.svg)](https://github.com/muvon/synx/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmuvon%2Fsynx%2Fbadges%2Fcoverage.json&style=flat-square)](https://github.com/muvon/synx/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 **Contents:** [Why synx](#why-synx) · [Install](#install) · [Quick start](#quick-start) · [Sync modes](#sync-modes) · [Ignore rules](#ignore-rules--authoritative) · [How it works](#how-it-works) · [Troubleshooting](#troubleshooting) · [Limits](#limits--future-work)
