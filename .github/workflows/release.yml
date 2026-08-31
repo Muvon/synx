@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: ${{ matrix.target }}
 
@@ -85,7 +85,6 @@ jobs:
     secrets: inherit
     with:
       tag: ${{ inputs.tag }}
-      toolchain: stable
 
   release:
     name: Create Release
