@@ -80,7 +80,8 @@ fn walks_once_with_ignores_internal_temps_and_reusable_cache() {
     .unwrap();
 
     let mut cache = HashCache::default();
-    let first = walk_manifest(&root.0, &mut cache).unwrap();
+    let (first, first_skipped) = walk_manifest(&root.0, &mut cache).unwrap();
+    assert!(!first_skipped, "no git activity — nothing skipped");
     let listed: Vec<&Path> = first.iter().map(|entry| entry.path.as_path()).collect();
     assert!(listed.contains(&Path::new("kept")));
     assert!(listed.contains(&Path::new("nested")));
@@ -89,8 +90,33 @@ fn walks_once_with_ignores_internal_temps_and_reusable_cache() {
 
     let encoded = postcard::to_allocvec(&cache).unwrap();
     let mut loaded: HashCache = postcard::from_bytes(&encoded).unwrap();
-    let second = walk_manifest(&root.0, &mut loaded).unwrap();
+    let (second, _) = walk_manifest(&root.0, &mut loaded).unwrap();
     assert_eq!(first, second);
+}
+
+#[test]
+fn walk_includes_git_when_idle_and_skips_it_flagged_when_busy() {
+    let root = TestDir::new("gitbusy");
+    fs::create_dir(root.0.join(".git")).unwrap();
+    fs::write(root.0.join(".git/HEAD"), b"ref: refs/heads/master\n").unwrap();
+    fs::write(root.0.join("src.rs"), b"code").unwrap();
+
+    let (idle, idle_skipped) = walk_manifest(&root.0, &mut HashCache::default()).unwrap();
+    assert!(!idle_skipped, "no busy markers — .git/ syncs");
+    assert!(idle.iter().any(|e| e.path == Path::new(".git/HEAD")));
+
+    // A fresh index.lock marks git as mid-operation (see peer::git_busy).
+    fs::write(root.0.join(".git/index.lock"), b"").unwrap();
+    let (busy, busy_skipped) = walk_manifest(&root.0, &mut HashCache::default()).unwrap();
+    assert!(busy_skipped, "fresh index.lock must pause .git/");
+    assert!(
+        !busy.iter().any(|e| crate::peer::is_under_git(&e.path)),
+        "no .git/ entries while paused"
+    );
+    assert!(
+        busy.iter().any(|e| e.path == Path::new("src.rs")),
+        "working tree keeps syncing while .git/ is paused"
+    );
 }
 
 #[test]

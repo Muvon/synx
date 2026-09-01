@@ -1066,13 +1066,14 @@ async fn reconcile_sweep(
 
     let walk_root = root.to_path_buf();
     let cache = Arc::clone(cache);
-    let manifest = tokio::task::spawn_blocking(move || -> Result<Vec<Entry>> {
-        let mut cache = cache
-            .lock()
-            .map_err(|_| anyhow::anyhow!("hash cache mutex poisoned"))?;
-        walk_manifest(&walk_root, &mut cache)
-    })
-    .await??;
+    let (manifest, git_skipped) =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<Entry>, bool)> {
+            let mut cache = cache
+                .lock()
+                .map_err(|_| anyhow::anyhow!("hash cache mutex poisoned"))?;
+            walk_manifest(&walk_root, &mut cache)
+        })
+        .await??;
 
     let on_disk: HashSet<&PathBuf> = manifest.iter().map(|e| &e.path).collect();
     let mut events = Vec::new();
@@ -1084,6 +1085,12 @@ async fn reconcile_sweep(
     }
     for path in base.keys() {
         if !on_disk.contains(path) {
+            // Git went busy between the gate check above and the walk: the
+            // walker paused .git/, so its absence from the manifest is not
+            // deletion evidence (same contract as the manifest exchange).
+            if git_skipped && is_under_git(path) {
+                continue;
+            }
             events.push(FsEvent::Removed(path.clone()));
         }
     }

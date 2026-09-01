@@ -140,6 +140,55 @@ fn propagates_only_baseline_proven_deletions_for_each_mode() {
 }
 
 #[test]
+fn paused_git_manifest_never_reads_as_deletions() {
+    // Regression: a walker that paused .git/ (git op in progress on that
+    // side) sends a manifest without .git/ entries. Un-stripped, the plan
+    // reads the omission as proven deletion for every .git/ file still
+    // matching the baseline — HEAD and config die (stable content) while
+    // index/objects churn on, gutting a live repository.
+    let head = entry(".git/HEAD", EntryKind::File, 1, 1);
+    let config = entry(".git/config", EntryKind::File, 2, 1);
+    let src = entry("src/main.rs", EntryKind::File, 3, 1);
+    let baseline = Baseline::from_entries([head.clone(), config.clone(), src.clone()]);
+
+    // The bug, demonstrated: without stripping, the omission deletes.
+    let unstripped = build_plan(
+        &[head.clone(), config.clone(), src.clone()],
+        std::slice::from_ref(&src),
+        &baseline,
+        SyncMode::Both,
+    );
+    assert_eq!(
+        unstripped.del_local,
+        [PathBuf::from(".git/HEAD"), PathBuf::from(".git/config")],
+        "baseline-matching .git/ files are exactly what an unguarded plan kills"
+    );
+
+    // The fix: with the pause flag honored, .git/ is stripped from both
+    // sides before planning — nothing under .git/ moves or dies, the
+    // working tree keeps syncing.
+    let mut local = vec![head.clone(), config.clone(), src.clone()];
+    let mut remote = vec![src.clone()];
+    strip_git_entries(&mut local);
+    strip_git_entries(&mut remote);
+    assert_eq!(paths(&local), ["src/main.rs"]);
+    let plan = build_plan(&local, &remote, &baseline, SyncMode::Both);
+    assert!(plan.del_local.is_empty());
+    assert!(plan.del_remote.is_empty());
+    assert!(plan.push.is_empty());
+    assert!(plan.get.is_empty());
+}
+
+#[test]
+fn baseline_git_entries_yield_only_git_paths() {
+    let head = entry(".git/HEAD", EntryKind::File, 1, 1);
+    let src = entry("src/main.rs", EntryKind::File, 2, 1);
+    let baseline = Baseline::from_entries([head.clone(), src]);
+    let carried: Vec<&Entry> = baseline.git_entries().collect();
+    assert_eq!(carried, [&head]);
+}
+
+#[test]
 fn modify_vs_delete_keeps_changed_data() {
     let old = entry("file", EntryKind::File, 1, 1);
     let local_changed = entry("file", EntryKind::File, 2, 2);
@@ -249,9 +298,24 @@ async fn manifest_receiver_accepts_valid_stream_and_rejects_bad_sequences() {
     ] {
         write_frame(&mut wire, &message, false).await.unwrap();
     }
-    assert_eq!(
-        receive_manifest(&mut wire.as_slice()).await.unwrap(),
-        [first.clone(), second]
+    let (entries, git_skipped) = receive_manifest(&mut wire.as_slice()).await.unwrap();
+    assert_eq!(entries, [first.clone(), second]);
+    assert!(!git_skipped, "no skip flag in the stream");
+
+    let mut flagged = Vec::new();
+    for message in [
+        Message::ManifestBegin,
+        Message::ManifestGitSkipped,
+        Message::ManifestEntry(first.clone()),
+        Message::ManifestEnd,
+    ] {
+        write_frame(&mut flagged, &message, false).await.unwrap();
+    }
+    let (entries, git_skipped) = receive_manifest(&mut flagged.as_slice()).await.unwrap();
+    assert_eq!(entries, [first.clone()]);
+    assert!(
+        git_skipped,
+        "ManifestGitSkipped must surface to the planner"
     );
 
     let mut duplicate = Vec::new();

@@ -3,7 +3,7 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024; // 64 MiB per-message
 pub const COMPRESS_THRESHOLD: usize = 512;
 pub const COMPRESS_LEVEL: i32 = 3;
@@ -172,6 +172,14 @@ pub enum Message {
     Pong,
     Bye,
     Error(String),
+
+    /// The sender's walker excluded `.git/` from its manifest because a git
+    /// operation was in progress (see `peer::git_busy`). Sent between
+    /// `ManifestBegin` and `ManifestEnd`. The receiver must treat `.git/` as
+    /// invisible for this session's plan: the absence of `.git/` entries in
+    /// this manifest is NOT deletion evidence. Appended last so existing
+    /// variant indices stay wire-stable.
+    ManifestGitSkipped,
 }
 
 /// Protocol paths are always relative to the negotiated synchronization root.
@@ -233,6 +241,7 @@ impl Message {
             Message::Hello { .. }
             | Message::HelloAck { .. }
             | Message::ManifestBegin
+            | Message::ManifestGitSkipped
             | Message::ManifestEnd
             | Message::SyncDone
             | Message::Ping

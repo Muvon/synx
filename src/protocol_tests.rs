@@ -74,6 +74,18 @@ async fn write_message_produces_a_readable_frame() {
 }
 
 #[tokio::test]
+async fn manifest_git_skipped_round_trips() {
+    let mut wire = Vec::new();
+    write_message(&mut wire, &Message::ManifestGitSkipped, false)
+        .await
+        .unwrap();
+    assert!(matches!(
+        read_message(&mut wire.as_slice()).await.unwrap(),
+        Message::ManifestGitSkipped
+    ));
+}
+
+#[tokio::test]
 async fn rejects_oversized_unknown_and_invalid_frames() {
     let mut oversized = Vec::from(((MAX_MESSAGE_SIZE + 1) as u32).to_be_bytes());
     oversized.push(0);

@@ -81,6 +81,15 @@ impl Baseline {
         self.entries.keys().any(|p| crate::peer::is_under_git(p))
     }
 
+    /// Entries under `.git/` from the last converged state. Carried forward
+    /// into the reseeded baseline when a session paused `.git/` sync (see
+    /// `run_session`), so deletion evidence survives the pause.
+    pub fn git_entries(&self) -> impl Iterator<Item = &Entry> {
+        self.entries
+            .values()
+            .filter(|e| crate::peer::is_under_git(&e.path))
+    }
+
     pub fn matches(&self, entries: &HashMap<PathBuf, Entry>) -> bool {
         self.entries.len() == entries.len()
             && self.entries.iter().all(|(path, previous)| {
