@@ -48,11 +48,11 @@ fn normalize_event(
                 let to_ig = ignores.is_some_and(|i| i.is_ignored_abs(&paths[1], false));
                 match (from_ig, to_ig) {
                     (false, false) => {
-                        suppress.mark_deleted(from.clone());
+                        suppress.mark_observed_deleted(from.clone());
                         out.push(FsEvent::Renamed { from, to });
                     }
                     (false, true) => {
-                        suppress.mark_deleted(from.clone());
+                        suppress.mark_observed_deleted(from.clone());
                         out.push(FsEvent::Removed(from));
                     }
                     (true, false) => out.push(FsEvent::Created(to)),
@@ -91,7 +91,7 @@ fn normalize_event(
                 };
                 tracing::debug!("watcher: emit {:?}", fsev);
                 if let FsEvent::Removed(p) = &fsev {
-                    suppress.mark_deleted(p.clone());
+                    suppress.mark_observed_deleted(p.clone());
                 }
                 out.push(fsev);
             }

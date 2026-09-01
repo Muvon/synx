@@ -429,6 +429,59 @@ fn suppression_is_state_based_and_tracks_hashes_and_deletes() {
 }
 
 #[test]
+fn observed_delete_guards_stale_creates_but_is_never_an_echo() {
+    let root = TestDir::new("observed-del");
+    let path = PathBuf::from("file");
+    let suppression = Suppression::default();
+
+    // Watcher-observed delete: stale-create guard engages, but the event
+    // must NOT look like an echo — it still has to reach the peer.
+    suppression.mark_observed_deleted(path.clone());
+    assert!(suppression.is_recently_deleted(&path));
+    assert!(!suppression.is_echo(root.path(), &FsEvent::Removed(path.clone())));
+
+    // An applied delete stays echo-suppressible even when the watcher then
+    // observes the unlink we caused.
+    suppression.mark_deleted(path.clone());
+    suppression.mark_observed_deleted(path.clone());
+    assert!(suppression.is_echo(root.path(), &FsEvent::Removed(path)));
+}
+
+#[tokio::test]
+async fn watcher_observed_delete_is_forwarded_to_peer() {
+    // Regression: the watcher eagerly marks every Removed it emits (stale-
+    // create guard). With a plain `mark_deleted` that mark made the very
+    // same event pass `is_echo`, so real local deletes were silently
+    // swallowed — on the agent (no reconcile sweep) they never reached the
+    // client at all.
+    let root = TestDir::new("observed-fwd");
+    let suppress = Suppression::default();
+    suppress.mark_observed_deleted(PathBuf::from("gone"));
+    let writer = Arc::new(Mutex::new(Vec::new()));
+
+    forward_local_events(
+        root.path(),
+        vec![FsEvent::Removed(PathBuf::from("gone"))],
+        &writer,
+        false,
+        &suppress,
+        false,
+        &IgnoreStack::from_manifest(root.path(), &[]),
+        &GitGate::default(),
+        &LiveBaseline::disabled(),
+    )
+    .await
+    .unwrap();
+
+    let wire = writer.lock().await.clone();
+    let mut reader = wire.as_slice();
+    assert!(matches!(
+        read_message(&mut reader).await.unwrap(),
+        Message::Delete { path } if path == Path::new("gone")
+    ));
+}
+
+#[test]
 fn coalesces_event_storms_and_maps_sync_directions() {
     let dir = TestDir::new("coalesce");
     // Disk state is ground truth for the Created…Removed pattern:

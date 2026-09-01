@@ -880,6 +880,11 @@ enum ApplyState {
     Set { mtime: i64, hash: [u8; 32] },
     /// We just deleted the path and expect it to not exist.
     Deleted,
+    /// The watcher observed a local delete we did NOT apply ourselves.
+    /// Feeds the stale-create guard (`is_recently_deleted`) so in-flight
+    /// peer data can't resurrect the path, but is never an echo — the
+    /// delete still has to be forwarded to the peer.
+    ObservedDeleted,
 }
 
 const NO_HASH: [u8; 32] = [0u8; 32];
@@ -929,12 +934,32 @@ impl Suppression {
         }
     }
 
-    /// True if we recently deleted (or sent a delete for) this path.
+    /// Record a delete the watcher observed but we did not apply. Never
+    /// downgrades a live applied `Deleted` mark — the watcher echo of our
+    /// own apply must stay suppressible, or every applied delete would
+    /// bounce a redundant Delete back to the peer.
+    pub fn mark_observed_deleted(&self, path: PathBuf) {
+        if let Ok(mut g) = self.inner.lock() {
+            match g.map.get(&path) {
+                Some((ApplyState::Deleted, t)) if t.elapsed() < SUPPRESS_TTL => {}
+                _ => {
+                    g.map
+                        .insert(path, (ApplyState::ObservedDeleted, Instant::now()));
+                }
+            }
+        }
+    }
+
+    /// True if we recently deleted (or sent a delete for, or observed the
+    /// local deletion of) this path.
     pub fn is_recently_deleted(&self, path: &Path) -> bool {
         let Ok(g) = self.inner.lock() else {
             return false;
         };
-        matches!(g.map.get(path), Some((ApplyState::Deleted, _)))
+        matches!(
+            g.map.get(path),
+            Some((ApplyState::Deleted | ApplyState::ObservedDeleted, _))
+        )
     }
 
     /// Return the content hash we have on record for this file, if any.
