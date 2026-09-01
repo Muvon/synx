@@ -74,15 +74,34 @@ async fn write_message_produces_a_readable_frame() {
 }
 
 #[tokio::test]
-async fn manifest_git_skipped_round_trips() {
+async fn manifest_excluded_round_trips_and_rejects_traversal() {
     let mut wire = Vec::new();
-    write_message(&mut wire, &Message::ManifestGitSkipped, false)
-        .await
-        .unwrap();
-    assert!(matches!(
-        read_message(&mut wire.as_slice()).await.unwrap(),
-        Message::ManifestGitSkipped
-    ));
+    write_message(
+        &mut wire,
+        &Message::ManifestExcluded {
+            prefix: PathBuf::from(".git"),
+        },
+        false,
+    )
+    .await
+    .unwrap();
+    match read_message(&mut wire.as_slice()).await.unwrap() {
+        Message::ManifestExcluded { prefix } => assert_eq!(prefix, PathBuf::from(".git")),
+        other => panic!("unexpected message: {other:?}"),
+    }
+
+    // Prefixes are protocol paths: traversal must be rejected at decode.
+    let mut unsafe_wire = Vec::new();
+    write_frame(
+        &mut unsafe_wire,
+        &Message::ManifestExcluded {
+            prefix: PathBuf::from("../escape"),
+        },
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(read_message(&mut unsafe_wire.as_slice()).await.is_err());
 }
 
 #[tokio::test]

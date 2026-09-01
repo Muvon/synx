@@ -173,13 +173,17 @@ pub enum Message {
     Bye,
     Error(String),
 
-    /// The sender's walker excluded `.git/` from its manifest because a git
-    /// operation was in progress (see `peer::git_busy`). Sent between
-    /// `ManifestBegin` and `ManifestEnd`. The receiver must treat `.git/` as
-    /// invisible for this session's plan: the absence of `.git/` entries in
-    /// this manifest is NOT deletion evidence. Appended last so existing
-    /// variant indices stay wire-stable.
-    ManifestGitSkipped,
+    /// The sender's walker deliberately excluded this subtree from its
+    /// manifest (e.g. `.git/` while a git operation is in progress — see
+    /// `peer::git_busy`). Sent between `ManifestBegin` and `ManifestEnd`,
+    /// once per excluded subtree. The receiver must treat the subtree as
+    /// invisible for this session's plan: the absence of entries under it is
+    /// NOT deletion evidence. An exclusion can only make a session more
+    /// conservative — it never causes a write or delete. Appended last so
+    /// existing variant indices stay wire-stable.
+    ManifestExcluded {
+        prefix: PathBuf,
+    },
 }
 
 /// Protocol paths are always relative to the negotiated synchronization root.
@@ -233,7 +237,8 @@ impl Message {
             | Message::SignatureRequest { path, .. }
             | Message::Signature { path, .. }
             | Message::PullDelta { path, .. }
-            | Message::Delete { path } => validate_relative_path(path),
+            | Message::Delete { path }
+            | Message::ManifestExcluded { prefix: path } => validate_relative_path(path),
             Message::Rename { from, to } => {
                 validate_relative_path(from)?;
                 validate_relative_path(to)
@@ -241,7 +246,6 @@ impl Message {
             Message::Hello { .. }
             | Message::HelloAck { .. }
             | Message::ManifestBegin
-            | Message::ManifestGitSkipped
             | Message::ManifestEnd
             | Message::SyncDone
             | Message::Ping

@@ -164,13 +164,14 @@ fn paused_git_manifest_never_reads_as_deletions() {
         "baseline-matching .git/ files are exactly what an unguarded plan kills"
     );
 
-    // The fix: with the pause flag honored, .git/ is stripped from both
-    // sides before planning — nothing under .git/ moves or dies, the
-    // working tree keeps syncing.
+    // The fix: with the declared exclusion honored, the subtree is stripped
+    // from both sides before planning — nothing under .git/ moves or dies,
+    // the working tree keeps syncing.
+    let excluded = [PathBuf::from(".git")];
     let mut local = vec![head.clone(), config.clone(), src.clone()];
     let mut remote = vec![src.clone()];
-    strip_git_entries(&mut local);
-    strip_git_entries(&mut remote);
+    strip_excluded(&mut local, &excluded);
+    strip_excluded(&mut remote, &excluded);
     assert_eq!(paths(&local), ["src/main.rs"]);
     let plan = build_plan(&local, &remote, &baseline, SyncMode::Both);
     assert!(plan.del_local.is_empty());
@@ -180,12 +181,14 @@ fn paused_git_manifest_never_reads_as_deletions() {
 }
 
 #[test]
-fn baseline_git_entries_yield_only_git_paths() {
+fn baseline_entries_under_yield_only_excluded_prefixes() {
     let head = entry(".git/HEAD", EntryKind::File, 1, 1);
     let src = entry("src/main.rs", EntryKind::File, 2, 1);
     let baseline = Baseline::from_entries([head.clone(), src]);
-    let carried: Vec<&Entry> = baseline.git_entries().collect();
+    let excluded = [PathBuf::from(".git")];
+    let carried: Vec<&Entry> = baseline.entries_under(&excluded).collect();
     assert_eq!(carried, [&head]);
+    assert_eq!(baseline.entries_under(&[]).count(), 0);
 }
 
 #[test]
@@ -298,24 +301,31 @@ async fn manifest_receiver_accepts_valid_stream_and_rejects_bad_sequences() {
     ] {
         write_frame(&mut wire, &message, false).await.unwrap();
     }
-    let (entries, git_skipped) = receive_manifest(&mut wire.as_slice()).await.unwrap();
+    let (entries, excluded) = receive_manifest(&mut wire.as_slice()).await.unwrap();
     assert_eq!(entries, [first.clone(), second]);
-    assert!(!git_skipped, "no skip flag in the stream");
+    assert!(excluded.is_empty(), "no exclusions in the stream");
 
-    let mut flagged = Vec::new();
+    let mut with_exclusion = Vec::new();
     for message in [
         Message::ManifestBegin,
-        Message::ManifestGitSkipped,
+        Message::ManifestExcluded {
+            prefix: PathBuf::from(".git"),
+        },
         Message::ManifestEntry(first.clone()),
         Message::ManifestEnd,
     ] {
-        write_frame(&mut flagged, &message, false).await.unwrap();
+        write_frame(&mut with_exclusion, &message, false)
+            .await
+            .unwrap();
     }
-    let (entries, git_skipped) = receive_manifest(&mut flagged.as_slice()).await.unwrap();
+    let (entries, excluded) = receive_manifest(&mut with_exclusion.as_slice())
+        .await
+        .unwrap();
     assert_eq!(entries, [first.clone()]);
-    assert!(
-        git_skipped,
-        "ManifestGitSkipped must surface to the planner"
+    assert_eq!(
+        excluded,
+        [PathBuf::from(".git")],
+        "declared exclusions must surface to the planner"
     );
 
     let mut duplicate = Vec::new();

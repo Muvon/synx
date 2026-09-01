@@ -97,8 +97,8 @@ where
     let root_for_walk = root.clone();
     let walk_task = tokio::task::spawn_blocking(move || {
         let mut cache = cache;
-        let (manifest, git_skipped) = walk_manifest(&root_for_walk, &mut cache)?;
-        Ok::<_, anyhow::Error>((manifest, git_skipped, cache))
+        let (manifest, excluded) = walk_manifest(&root_for_walk, &mut cache)?;
+        Ok::<_, anyhow::Error>((manifest, excluded, cache))
     });
 
     // Drain client's manifest (we don't need to keep it; the client orchestrates).
@@ -111,9 +111,9 @@ where
     loop {
         match read_message(&mut reader).await? {
             Message::ManifestEntry(_) => client_count += 1,
-            // The client's walker paused .git/. Nothing to do here — the
+            // The client's walker paused a subtree. Nothing to do here — the
             // client plans; we only need to not reject the message.
-            Message::ManifestGitSkipped => {}
+            Message::ManifestExcluded { .. } => {}
             Message::ManifestEnd => break,
             Message::Error(e) => anyhow::bail!("client: {e}"),
             m => anyhow::bail!("during client manifest: {:?}", m),
@@ -121,7 +121,7 @@ where
     }
     tracing::debug!("client manifest: {client_count} entries");
 
-    let (local_manifest, git_skipped, mut cache) = walk_task.await??;
+    let (local_manifest, excluded, mut cache) = walk_task.await??;
     let ignores = Arc::new(IgnoreStack::from_manifest(&root, &local_manifest));
     let _ = ignore_state.set(ignores.clone());
     tracing::debug!("agent manifest: {} entries", local_manifest.len());
@@ -131,8 +131,8 @@ where
         // the BufWriter auto-flushes when full so this can't deadlock.
         let mut w = writer.lock().await;
         write_frame(&mut *w, &Message::ManifestBegin, compress).await?;
-        if git_skipped {
-            write_frame(&mut *w, &Message::ManifestGitSkipped, compress).await?;
+        for prefix in excluded {
+            write_frame(&mut *w, &Message::ManifestExcluded { prefix }, compress).await?;
         }
         for e in &local_manifest {
             write_frame(&mut *w, &Message::ManifestEntry(e.clone()), compress).await?;

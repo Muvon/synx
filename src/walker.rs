@@ -134,16 +134,17 @@ fn build_entry_from_metadata(
 }
 
 /// Walk `root` in parallel (multi-threaded via `ignore`), returning a
-/// fully-hashed manifest sorted by path plus whether `.git/` was excluded.
-/// The cache is updated in-place; the caller should call `HashCache::save`
-/// afterwards.
+/// fully-hashed manifest sorted by path plus the subtree prefixes the walk
+/// deliberately excluded. The cache is updated in-place; the caller should
+/// call `HashCache::save` afterwards.
 ///
 /// If git is mid-operation (rebase / merge / cherry-pick / pending ref
-/// lock — see `peer::git_busy`), `.git/` is excluded from the walk and the
-/// returned flag is true. The peer MUST be told (Message::ManifestGitSkipped)
-/// so it treats the missing `.git/` entries as "paused", never as deletions —
-/// otherwise the plan deletes the peer's live repo files.
-pub fn walk_manifest(root: &Path, cache: &mut HashCache) -> Result<(Vec<Entry>, bool)> {
+/// lock — see `peer::git_busy`), `.git/` is excluded from the walk and
+/// returned as an excluded prefix. The peer MUST be told
+/// (Message::ManifestExcluded) so it treats the missing entries as
+/// "paused", never as deletions — otherwise the plan deletes the peer's
+/// live repo files.
+pub fn walk_manifest(root: &Path, cache: &mut HashCache) -> Result<(Vec<Entry>, Vec<PathBuf>)> {
     // Each visitor accumulates locally and sends one batch when its worker
     // exits. This avoids both a cache mutex and one channel synchronization
     // per path in the hot parallel walk.
@@ -225,9 +226,14 @@ pub fn walk_manifest(root: &Path, cache: &mut HashCache) -> Result<(Vec<Entry>, 
             cache.record(&entry.path, entry.size, entry.mtime, entry.hash);
         }
     }
+    let excluded = if skip_git {
+        vec![PathBuf::from(".git")]
+    } else {
+        Vec::new()
+    };
     Ok((
         built.into_iter().map(|result| result.entry).collect(),
-        skip_git,
+        excluded,
     ))
 }
 

@@ -198,8 +198,8 @@ where
     // cloning the whole manifest; reclaimed to a plain Vec once the send
     // completes (its Arc clone is dropped by then, so try_unwrap succeeds).
     let cache_for_walk = Arc::clone(&cache);
-    let (local_manifest, local_git_skipped) =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<Entry>, bool)> {
+    let (local_manifest, local_excluded) =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<Entry>, Vec<PathBuf>)> {
             let mut cache = cache_for_walk
                 .lock()
                 .map_err(|_| anyhow::anyhow!("hash cache mutex poisoned"))?;
@@ -222,11 +222,12 @@ where
     // deadlock against the remote's concurrent send.
     let writer_for_send = writer.clone();
     let manifest_for_send = Arc::clone(&local_manifest);
+    let excluded_for_send = local_excluded.clone();
     let send_manifest_task = tokio::spawn(async move {
         let mut w = writer_for_send.lock().await;
         write_frame(&mut *w, &Message::ManifestBegin, compress).await?;
-        if local_git_skipped {
-            write_frame(&mut *w, &Message::ManifestGitSkipped, compress).await?;
+        for prefix in excluded_for_send {
+            write_frame(&mut *w, &Message::ManifestExcluded { prefix }, compress).await?;
         }
         for e in manifest_for_send.iter() {
             write_frame(&mut *w, &Message::ManifestEntry(e.clone()), compress).await?;
@@ -236,7 +237,7 @@ where
         Ok::<(), anyhow::Error>(())
     });
 
-    let (raw_remote, remote_git_skipped) = receive_manifest(&mut reader).await?;
+    let (raw_remote, remote_excluded) = receive_manifest(&mut reader).await?;
     send_manifest_task.await??;
     let mut local_manifest = Arc::try_unwrap(local_manifest).unwrap_or_else(|arc| (*arc).clone());
 
@@ -255,19 +256,29 @@ where
         tracing::debug!("filtered {} ignored remote entries", filtered);
     }
 
-    // ── .git/ pause (either side) ──
-    // A busy walker omits `.git/` from its manifest. Without this, the peer
-    // reads that omission as deletion evidence: every `.git/` file still
-    // byte-identical to the baseline (HEAD, config — the stable ones) gets
-    // planned as a deletion, gutting a live repository. When either side
-    // skipped, `.git/` is invisible this session: no pushes, pulls, or
-    // deletes touch it, and the baseline carries its last converged state
-    // forward (see the seeding below).
-    let git_paused = local_git_skipped || remote_git_skipped;
-    if git_paused {
-        strip_git_entries(&mut local_manifest);
-        strip_git_entries(&mut remote_manifest);
-        crate::ui::info("git operation in progress on one side — .git/ sync paused this session");
+    // ── Paused subtrees (either side) ──
+    // A walker that deliberately excluded a subtree (today: `.git/` while a
+    // git operation is in progress) omits it from its manifest. Without this,
+    // the peer reads that omission as deletion evidence: every file under it
+    // still byte-identical to the baseline (HEAD, config — the stable ones)
+    // gets planned as a deletion, gutting a live repository. Excluded
+    // subtrees are invisible this session on BOTH sides: no pushes, pulls,
+    // or deletes touch them, and the baseline carries their last converged
+    // state forward (see the seeding below).
+    let mut excluded = local_excluded;
+    for prefix in remote_excluded {
+        if !excluded.contains(&prefix) {
+            excluded.push(prefix);
+        }
+    }
+    if !excluded.is_empty() {
+        strip_excluded(&mut local_manifest, &excluded);
+        strip_excluded(&mut remote_manifest, &excluded);
+        let listed: Vec<String> = excluded.iter().map(|p| p.display().to_string()).collect();
+        crate::ui::info(&format!(
+            "operation in progress — sync paused this session for: {}",
+            listed.join(", ")
+        ));
     }
 
     // ── Baseline ──
@@ -292,9 +303,9 @@ where
     // after stale check).
     //
     // A busy-skip omission never reaches this branch: when either walker
-    // paused .git/ (ManifestGitSkipped), both manifests were stripped above,
+    // excluded .git/ (ManifestExcluded), both manifests were stripped above,
     // so `local_has_git` is false and only a deliberate remote wipe — a real
-    // manifest, no skip flag, no .git/ entries — can trigger the clean-up.
+    // manifest, no exclusion, no .git/ entries — can trigger the clean-up.
     let local_has_git = local_manifest.iter().any(|e| is_under_git(&e.path));
     let remote_has_git = remote_manifest.iter().any(|e| is_under_git(&e.path));
     if local_has_git && !remote_has_git && baseline.has_git() && !git_busy(&local_root) {
@@ -777,11 +788,11 @@ where
                 converged.insert(p.clone(), (*r).clone());
             }
         }
-        if git_paused {
-            // .git/ was invisible this session — carry its last converged
-            // state forward so genuine-deletion evidence survives the pause
-            // instead of being dropped from the baseline.
-            for e in baseline.git_entries() {
+        if !excluded.is_empty() {
+            // Excluded subtrees were invisible this session — carry their
+            // last converged state forward so genuine-deletion evidence
+            // survives the pause instead of being dropped from the baseline.
+            for e in baseline.entries_under(&excluded) {
                 converged.entry(e.path.clone()).or_insert_with(|| e.clone());
             }
         }
@@ -857,9 +868,10 @@ where
 // Manifest reception
 // ─────────────────────────────────────────────────────────────
 
-/// Returns the entries plus whether the sender flagged `.git/` as skipped
-/// (Message::ManifestGitSkipped — its walker paused `.git/` mid-git-op).
-async fn receive_manifest<R>(reader: &mut R) -> Result<(Vec<Entry>, bool)>
+/// Returns the entries plus the subtree prefixes the sender declared as
+/// deliberately excluded (Message::ManifestExcluded — its walker paused
+/// them, e.g. `.git/` mid-git-op).
+async fn receive_manifest<R>(reader: &mut R) -> Result<(Vec<Entry>, Vec<PathBuf>)>
 where
     R: tokio::io::AsyncReadExt + Unpin,
 {
@@ -872,7 +884,7 @@ where
     }
     let mut entries = Vec::new();
     let mut paths = HashSet::new();
-    let mut git_skipped = false;
+    let mut excluded = Vec::new();
     loop {
         match read_message(reader).await? {
             Message::ManifestEntry(e) => {
@@ -881,13 +893,17 @@ where
                 }
                 entries.push(e);
             }
-            Message::ManifestGitSkipped => git_skipped = true,
+            Message::ManifestExcluded { prefix } => {
+                if !excluded.contains(&prefix) {
+                    excluded.push(prefix);
+                }
+            }
             Message::ManifestEnd => break,
             Message::Error(e) => anyhow::bail!("remote: {e}"),
             m => anyhow::bail!("during manifest: {:?}", m),
         }
     }
-    Ok((entries, git_skipped))
+    Ok((entries, excluded))
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -972,13 +988,13 @@ impl Plan {
     }
 }
 
-/// Drop `.git/` entries from a manifest. Applied to BOTH manifests when
-/// either walker paused `.git/` (git op in progress): a one-sided omission
-/// must never be read as deletion evidence by the other side — that is
-/// exactly how a live repo's HEAD/config got deleted (they match the
-/// baseline while index/objects churn, so only the stable files died).
-fn strip_git_entries(entries: &mut Vec<Entry>) {
-    entries.retain(|e| !is_under_git(&e.path));
+/// Drop entries under any excluded prefix. Applied to BOTH manifests when
+/// either walker paused a subtree: a one-sided omission must never be read
+/// as deletion evidence by the other side — that is exactly how a live
+/// repo's HEAD/config got deleted (they match the baseline while
+/// index/objects churn, so only the stable files died).
+fn strip_excluded(entries: &mut Vec<Entry>, excluded: &[PathBuf]) {
+    entries.retain(|e| !excluded.iter().any(|prefix| e.path.starts_with(prefix)));
 }
 
 /// Three-way diff. `baseline` is the converged manifest from the last
