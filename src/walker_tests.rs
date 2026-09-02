@@ -127,6 +127,29 @@ fn walk_includes_git_when_idle_and_excludes_it_declared_when_busy() {
 }
 
 #[test]
+fn walk_never_honors_ignore_rules_outside_the_sync_root() {
+    // Machine-local ignore state — a parent repo's .gitignore, the user's
+    // global gitignore, .git/info/exclude — is invisible to the peer and to
+    // IgnoreStack. If the walker honors it, a file that exists on disk
+    // silently vanishes from the manifest with no ManifestExcluded marker,
+    // and the peer reads that omission as baseline-proven deletion evidence
+    // (see sync_tests::outside_ignore_rules_never_become_deletion_evidence).
+    let parent = TestDir::new("outside-rules");
+    fs::create_dir(parent.0.join(".git")).unwrap();
+    fs::write(parent.0.join(".gitignore"), "*.log\n").unwrap();
+    let root = parent.0.join("repo");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("app.log"), b"precious").unwrap();
+
+    let (manifest, excluded) = walk_manifest(&root, &mut HashCache::default()).unwrap();
+    assert!(excluded.is_empty(), "nothing deliberately paused");
+    assert!(
+        manifest.iter().any(|e| e.path == Path::new("app.log")),
+        "existing file dropped from the manifest by a rule outside the sync root"
+    );
+}
+
+#[test]
 fn ensure_root_creates_and_rejects_invalid_roots() {
     let parent = TestDir::new("ensure");
     let missing = parent.0.join("new/root");

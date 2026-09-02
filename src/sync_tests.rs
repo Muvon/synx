@@ -192,6 +192,38 @@ fn baseline_entries_under_yield_only_excluded_prefixes() {
 }
 
 #[test]
+fn outside_ignore_rules_never_become_deletion_evidence() {
+    // Remote has app.log; local has it byte-identical and in the baseline.
+    // The only anomaly: a parent repo's .gitignore (machine-local state the
+    // peer can't see) matches it, so the local walk omits the file with no
+    // ManifestExcluded marker. build_plan then reads "in baseline, gone
+    // locally, unchanged on remote" as a proven local deletion and tells
+    // the peer to destroy its copy — and the mirror-image asymmetry (a rule
+    // on the remote machine) deletes the file LOCALLY at session start.
+    let parent = TestDir::new("outside");
+    fs::create_dir(parent.0.join(".git")).unwrap();
+    fs::write(parent.0.join(".gitignore"), "*.log\n").unwrap();
+    let root = parent.0.join("repo");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("app.log"), b"precious").unwrap();
+
+    let on_disk = build_entry(&root, Path::new("app.log")).unwrap().unwrap();
+    let baseline = Baseline::from_entries([on_disk.clone()]);
+    let (local_manifest, excluded) = walk_manifest(&root, &mut HashCache::default()).unwrap();
+    assert!(excluded.is_empty(), "nothing deliberately paused");
+    let plan = build_plan(
+        &local_manifest,
+        std::slice::from_ref(&on_disk),
+        &baseline,
+        SyncMode::Both,
+    );
+    assert!(
+        plan.del_remote.is_empty(),
+        "byte-identical file on both disks planned for deletion on the peer"
+    );
+}
+
+#[test]
 fn modify_vs_delete_keeps_changed_data() {
     let old = entry("file", EntryKind::File, 1, 1);
     let local_changed = entry("file", EntryKind::File, 2, 2);

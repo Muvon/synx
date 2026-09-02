@@ -38,17 +38,20 @@ fn hash_file_with_len(path: &Path, len: u64) -> std::io::Result<[u8; 32]> {
     Ok(*hasher.finalize().as_bytes())
 }
 
-/// Build a configured walker. Respects .gitignore at all levels, plus .synxignore.
-/// `.git/` directories are always skipped.
+/// Build a configured walker. Respects in-tree .gitignore at all levels,
+/// plus .synxignore — and nothing else.
+///
+/// Machine-local rules (global gitignore, .git/info/exclude, `.ignore`
+/// files, ignore files in directories above the root) must NOT shape the
+/// manifest: the peer can't see them and `IgnoreStack` doesn't model them,
+/// so a file they match vanishes from this side's manifest with no
+/// ManifestExcluded marker — which the three-way diff reads as
+/// baseline-proven deletion evidence and destroys the peer's live copy.
 pub fn build_walker(root: &Path) -> ignore::WalkBuilder {
     let mut b = WalkBuilder::new(root);
-    b.standard_filters(true)
+    b.standard_filters(false)
         .hidden(false)
         .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .ignore(true)
-        .parents(true)
         .require_git(false)
         .follow_links(false);
     b.add_custom_ignore_filename(".synxignore");
