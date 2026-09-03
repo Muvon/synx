@@ -95,9 +95,10 @@ where
     // ── Walk + send manifest, concurrently receive client manifest ──
     let cache = HashCache::load(&root);
     let root_for_walk = root.clone();
+    let ids_for_walk = watcher_handle.ids.clone();
     let walk_task = tokio::task::spawn_blocking(move || {
         let mut cache = cache;
-        let (manifest, excluded) = walk_manifest(&root_for_walk, &mut cache)?;
+        let (manifest, excluded) = walk_manifest(&root_for_walk, &mut cache, Some(&ids_for_walk))?;
         Ok::<_, anyhow::Error>((manifest, excluded, cache))
     });
 

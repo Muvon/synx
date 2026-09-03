@@ -22,7 +22,7 @@ fn builds_nested_matchers_from_the_manifest_without_another_walk() {
     fs::write(root.join("nested/keep.txt"), "kept").unwrap();
     fs::write(root.join("other/cache.tmp"), "kept").unwrap();
 
-    let (manifest, _) = walk_manifest(&root, &mut HashCache::default()).unwrap();
+    let (manifest, _) = walk_manifest(&root, &mut HashCache::default(), None).unwrap();
     assert!(manifest
         .iter()
         .any(|entry| entry.path == Path::new("nested/.gitignore")));

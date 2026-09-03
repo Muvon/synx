@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use ignore::{WalkBuilder, WalkState};
+use notify_debouncer_full::file_id::FileId;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -8,6 +9,7 @@ use std::sync::mpsc;
 use crate::cache::HashCache;
 use crate::paths::{is_internal_temp, resolve_beneath};
 use crate::protocol::{Entry, EntryKind};
+use crate::watcher::IdCache;
 
 /// Files above this size are hashed via mmap + rayon (parallel across cores).
 /// Below it, the mmap setup cost outweighs the parallelism win.
@@ -36,6 +38,11 @@ fn hash_file_with_len(path: &Path, len: u64) -> std::io::Result<[u8; 32]> {
         std::io::copy(&mut file, &mut hasher)?;
     }
     Ok(*hasher.finalize().as_bytes())
+}
+
+/// Identity the watcher uses to pair the two halves of a rename.
+pub fn file_id(meta: &fs::Metadata) -> FileId {
+    FileId::new_inode(meta.dev(), meta.ino())
 }
 
 /// Build a configured walker. Respects in-tree .gitignore at all levels,
@@ -77,6 +84,9 @@ pub fn build_entry(root: &Path, rel: &Path) -> std::io::Result<Option<Entry>> {
 struct BuiltEntry {
     entry: Entry,
     cache_miss: bool,
+    /// For the watcher's rename pairing — free here, the walk already holds
+    /// the metadata.
+    id: FileId,
 }
 
 /// Build an entry from metadata already returned by the directory walker.
@@ -86,6 +96,7 @@ fn build_entry_from_metadata(
     meta: fs::Metadata,
     cache: Option<&HashCache>,
 ) -> std::io::Result<Option<BuiltEntry>> {
+    let id = file_id(&meta);
     let ft = meta.file_type();
     let kind = if ft.is_symlink() {
         EntryKind::Symlink
@@ -133,6 +144,7 @@ fn build_entry_from_metadata(
             link_target,
         },
         cache_miss,
+        id,
     }))
 }
 
@@ -147,7 +159,14 @@ fn build_entry_from_metadata(
 /// (Message::ManifestExcluded) so it treats the missing entries as
 /// "paused", never as deletions — otherwise the plan deletes the peer's
 /// live repo files.
-pub fn walk_manifest(root: &Path, cache: &mut HashCache) -> Result<(Vec<Entry>, Vec<PathBuf>)> {
+///
+/// `ids`, when given, is seeded with every walked path's file id so the
+/// watcher can pair renames without a walk of its own.
+pub fn walk_manifest(
+    root: &Path,
+    cache: &mut HashCache,
+    ids: Option<&IdCache>,
+) -> Result<(Vec<Entry>, Vec<PathBuf>)> {
     // Each visitor accumulates locally and sends one batch when its worker
     // exits. This avoids both a cache mutex and one channel synchronization
     // per path in the hot parallel walk.
@@ -228,6 +247,9 @@ pub fn walk_manifest(root: &Path, cache: &mut HashCache) -> Result<(Vec<Entry>, 
             let entry = &result.entry;
             cache.record(&entry.path, entry.size, entry.mtime, entry.hash);
         }
+    }
+    if let Some(ids) = ids {
+        ids.seed(built.iter().map(|b| (root.join(&b.entry.path), b.id)));
     }
     let excluded = if skip_git {
         vec![PathBuf::from(".git")]

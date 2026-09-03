@@ -209,7 +209,7 @@ fn outside_ignore_rules_never_become_deletion_evidence() {
 
     let on_disk = build_entry(&root, Path::new("app.log")).unwrap().unwrap();
     let baseline = Baseline::from_entries([on_disk.clone()]);
-    let (local_manifest, excluded) = walk_manifest(&root, &mut HashCache::default()).unwrap();
+    let (local_manifest, excluded) = walk_manifest(&root, &mut HashCache::default(), None).unwrap();
     assert!(excluded.is_empty(), "nothing deliberately paused");
     let plan = build_plan(
         &local_manifest,

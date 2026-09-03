@@ -198,12 +198,13 @@ where
     // cloning the whole manifest; reclaimed to a plain Vec once the send
     // completes (its Arc clone is dropped by then, so try_unwrap succeeds).
     let cache_for_walk = Arc::clone(&cache);
+    let ids_for_walk = watcher_handle.ids.clone();
     let (local_manifest, local_excluded) =
         tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<Entry>, Vec<PathBuf>)> {
             let mut cache = cache_for_walk
                 .lock()
                 .map_err(|_| anyhow::anyhow!("hash cache mutex poisoned"))?;
-            walk_manifest(&root_for_walk, &mut cache)
+            walk_manifest(&root_for_walk, &mut cache, Some(&ids_for_walk))
         })
         .await??;
     let local_manifest = Arc::new(local_manifest);

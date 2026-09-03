@@ -1205,3 +1205,147 @@ fn conflicts_only_when_both_sides_have_disjoint_remotes() {
     assert!(!git_remotes_conflict(&[], &b));
     assert!(!git_remotes_conflict(&[], &[]));
 }
+
+#[tokio::test]
+async fn rename_forwarding_touches_unchanged_files_and_rekeys_the_baseline() {
+    let root = TestDir::new("rename-fwd");
+    fs::create_dir(root.path().join("dir")).unwrap();
+    fs::write(root.path().join("dir/child"), b"kept").unwrap();
+    fs::write(root.path().join("same"), b"same").unwrap();
+    fs::write(root.path().join("edited"), b"v1").unwrap();
+    let mut converged = HashMap::new();
+    for rel in ["dir", "dir/child", "same", "edited"] {
+        let e = build_entry(root.path(), Path::new(rel)).unwrap().unwrap();
+        converged.insert(e.path.clone(), e);
+    }
+    let baseline = LiveBaseline::seed(
+        root.path().to_path_buf(),
+        converged,
+        &crate::baseline::Baseline::default(),
+    );
+
+    fs::rename(root.path().join("dir"), root.path().join("moved")).unwrap();
+    fs::rename(root.path().join("same"), root.path().join("same2")).unwrap();
+    fs::rename(root.path().join("edited"), root.path().join("edited2")).unwrap();
+    fs::write(root.path().join("edited2"), b"v2").unwrap();
+
+    let writer = Arc::new(Mutex::new(Vec::new()));
+    let renamed = |from: &str, to: &str| FsEvent::Renamed {
+        from: PathBuf::from(from),
+        to: PathBuf::from(to),
+    };
+    forward_local_events(
+        root.path(),
+        vec![
+            renamed("dir", "moved"),
+            renamed("same", "same2"),
+            renamed("edited", "edited2"),
+        ],
+        &writer,
+        false,
+        &Suppression::default(),
+        false,
+        &IgnoreStack::from_manifest(root.path(), &[]),
+        &GitGate::default(),
+        &baseline,
+    )
+    .await
+    .unwrap();
+
+    let wire = writer.lock().await.clone();
+    let mut reader = wire.as_slice();
+    // A moved directory is one rename; its children never cross the wire.
+    assert!(matches!(
+        read_message(&mut reader).await.unwrap(),
+        Message::Rename { from, to } if from == Path::new("dir") && to == Path::new("moved")
+    ));
+    assert!(matches!(
+        read_message(&mut reader).await.unwrap(),
+        Message::MkDir { entry } if entry.path == Path::new("moved")
+    ));
+    // Unchanged content: metadata only, no body.
+    assert!(matches!(
+        read_message(&mut reader).await.unwrap(),
+        Message::Rename { from, to } if from == Path::new("same") && to == Path::new("same2")
+    ));
+    assert!(matches!(
+        read_message(&mut reader).await.unwrap(),
+        Message::Touch { path, .. } if path == Path::new("same2")
+    ));
+    // Moved and edited: the new body follows the rename.
+    assert!(matches!(
+        read_message(&mut reader).await.unwrap(),
+        Message::Rename { from, to } if from == Path::new("edited") && to == Path::new("edited2")
+    ));
+    assert!(matches!(
+        read_message(&mut reader).await.unwrap(),
+        Message::FileData { entry, content }
+            if entry.path == Path::new("edited2") && content == b"v2"
+    ));
+    assert!(reader.is_empty());
+
+    // The baseline followed the moves, child included, so a sweep has
+    // nothing left to re-send or delete.
+    let keys = baseline.with_entries(|e| {
+        let mut keys: Vec<PathBuf> = e.keys().cloned().collect();
+        keys.sort();
+        keys
+    });
+    assert_eq!(
+        keys,
+        ["edited2", "moved", "moved/child", "same2"].map(PathBuf::from)
+    );
+    assert_eq!(
+        baseline.with_entries(|e| e[Path::new("moved/child")].hash),
+        *blake3::hash(b"kept").as_bytes()
+    );
+    let cache = Arc::new(StdMutex::new(HashCache::default()));
+    let events = reconcile_sweep(root.path(), &baseline, &cache, &GitGate::default())
+        .await
+        .unwrap();
+    assert!(events.is_empty(), "{events:?}");
+}
+
+#[tokio::test]
+async fn incoming_rename_rekeys_the_baseline_subtree() {
+    let root = TestDir::new("rename-in");
+    fs::create_dir(root.path().join("dir")).unwrap();
+    fs::write(root.path().join("dir/child"), b"kept").unwrap();
+    let mut converged = HashMap::new();
+    for rel in ["dir", "dir/child"] {
+        let e = build_entry(root.path(), Path::new(rel)).unwrap().unwrap();
+        converged.insert(e.path.clone(), e);
+    }
+    let ctx = SessionCtx {
+        baseline: LiveBaseline::seed(
+            root.path().to_path_buf(),
+            converged,
+            &crate::baseline::Baseline::default(),
+        ),
+        ..session_ctx(root.path())
+    };
+    let writer = Arc::new(Mutex::new(Vec::new()));
+
+    handle_incoming(
+        &ctx,
+        Message::Rename {
+            from: PathBuf::from("dir"),
+            to: PathBuf::from("moved"),
+        },
+        &Suppression::default(),
+        &Pending::default(),
+        &writer,
+        true,
+    )
+    .await
+    .unwrap();
+
+    assert!(root.path().join("moved/child").is_file());
+    let keys = ctx.baseline.with_entries(|e| {
+        let mut keys: Vec<PathBuf> = e.keys().cloned().collect();
+        keys.sort();
+        keys
+    });
+    assert_eq!(keys, ["moved", "moved/child"].map(PathBuf::from));
+    assert!(writer.lock().await.is_empty());
+}

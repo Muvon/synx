@@ -52,7 +52,7 @@ synx/
 │   ├── cache.rs            persistent (size,mtime)→hash cache
 │   ├── baseline.rs         persisted converged manifest (three-way diff ancestor)
 │   ├── ignores.rs          per-directory .gitignore / .synxignore stack
-│   ├── watcher.rs          notify (FSEvents/inotify), 200ms debounce, tolerant subtree watch
+│   ├── watcher.rs          notify (FSEvents/inotify), 200ms debounce, tolerant subtree watch, IdCache rename pairing
 │   ├── paths.rs            resolve_beneath confinement; .synx-tmp- prefix
 │   ├── ui.rs               terminal output
 │   └── <module>_tests.rs   unit tests, one file per module (see Hard rules)
@@ -78,7 +78,7 @@ synx/
 | Walk / hashing performance | `walker.rs` + `cache.rs` |
 | Baseline / deletion evidence | `baseline.rs`; loaded in `sync.rs` (also stale-.git/ recovery there) |
 | SSH invocation, remote parsing | `transport.rs` |
-| Watcher backends, debounce, unreadable dirs | `watcher.rs` (`spawn`, `watch_subtree_tolerant`) |
+| Watcher backends, debounce, unreadable dirs, rename pairing | `watcher.rs` (`spawn`, `watch_subtree_tolerant`, `IdCache::resolve_rename`) |
 | Terminal output | `ui.rs` |
 | CI behavior | `.github/workflows/ci.yml` — reusable `muvon/ci-workflow` rust-ci (stable, ubuntu+macos, beta on ubuntu) + musl build matrix (x86_64, aarch64) |
 | Cut a release | `Cargo.toml` version + bare-semver tag (no `v`) → `release.yml` builds/publishes; `CHANGELOG.md` is auto-generated — don't edit it |

@@ -1102,7 +1102,7 @@ async fn reconcile_sweep(
             let mut cache = cache
                 .lock()
                 .map_err(|_| anyhow::anyhow!("hash cache mutex poisoned"))?;
-            walk_manifest(&walk_root, &mut cache)
+            walk_manifest(&walk_root, &mut cache, None)
         })
         .await??;
 
@@ -1215,6 +1215,7 @@ where
     let watcher::WatcherHandle {
         events: mut event_rx,
         activity,
+        ids: _,
         keepalive: _watcher,
     } = watcher_handle;
 
@@ -1616,7 +1617,7 @@ where
                 return Ok(());
             }
             apply_rename(root, &from, &to)?;
-            ctx.baseline.remove(&from);
+            ctx.baseline.rename(&from, &to);
             if let Some(e) = build_entry(root, &to)? {
                 ctx.baseline.set(e);
             }
@@ -1973,10 +1974,32 @@ where
                     )
                     .await?;
                 }
-                if let Some(entry) = build_entry(root, &to)? {
+                let entry = build_entry(root, &to)?;
+                // The peer now holds our last converged content under `to`;
+                // when that is still what's on disk, only metadata is owed.
+                let unchanged = entry.as_ref().is_some_and(|e| {
+                    baseline.with_entries(|b| b.get(&from).is_some_and(|old| old.same_content(e)))
+                });
+                // Re-key the converged subtree: the move deleted and created
+                // nothing, and the sweep must not conclude otherwise.
+                baseline.rename(&from, &to);
+                if let Some(entry) = entry {
                     let to_mtime = entry.mtime;
                     let baseline_entry = entry.clone();
                     match entry.kind {
+                        EntryKind::File if unchanged => {
+                            let mut w = writer.lock().await;
+                            write_message(
+                                &mut *w,
+                                &Message::Touch {
+                                    path: to.clone(),
+                                    mtime: entry.mtime,
+                                    mode: entry.mode,
+                                },
+                                compress,
+                            )
+                            .await?;
+                        }
                         EntryKind::File => {
                             send_file(writer, root, &entry, compress).await?;
                         }
@@ -1992,7 +2015,6 @@ where
                     suppress.mark_mtime(to.clone(), to_mtime);
                     baseline.set(baseline_entry);
                 }
-                baseline.remove(&from);
                 suppress.mark_deleted(from.clone());
                 if log_event {
                     eprintln!(

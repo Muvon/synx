@@ -80,7 +80,7 @@ fn walks_once_with_ignores_internal_temps_and_reusable_cache() {
     .unwrap();
 
     let mut cache = HashCache::default();
-    let (first, first_excluded) = walk_manifest(&root.0, &mut cache).unwrap();
+    let (first, first_excluded) = walk_manifest(&root.0, &mut cache, None).unwrap();
     assert!(
         first_excluded.is_empty(),
         "no git activity — nothing excluded"
@@ -93,7 +93,7 @@ fn walks_once_with_ignores_internal_temps_and_reusable_cache() {
 
     let encoded = postcard::to_allocvec(&cache).unwrap();
     let mut loaded: HashCache = postcard::from_bytes(&encoded).unwrap();
-    let (second, _) = walk_manifest(&root.0, &mut loaded).unwrap();
+    let (second, _) = walk_manifest(&root.0, &mut loaded, None).unwrap();
     assert_eq!(first, second);
 }
 
@@ -104,13 +104,13 @@ fn walk_includes_git_when_idle_and_excludes_it_declared_when_busy() {
     fs::write(root.0.join(".git/HEAD"), b"ref: refs/heads/master\n").unwrap();
     fs::write(root.0.join("src.rs"), b"code").unwrap();
 
-    let (idle, idle_excluded) = walk_manifest(&root.0, &mut HashCache::default()).unwrap();
+    let (idle, idle_excluded) = walk_manifest(&root.0, &mut HashCache::default(), None).unwrap();
     assert!(idle_excluded.is_empty(), "no busy markers — .git/ syncs");
     assert!(idle.iter().any(|e| e.path == Path::new(".git/HEAD")));
 
     // A fresh index.lock marks git as mid-operation (see peer::git_busy).
     fs::write(root.0.join(".git/index.lock"), b"").unwrap();
-    let (busy, busy_excluded) = walk_manifest(&root.0, &mut HashCache::default()).unwrap();
+    let (busy, busy_excluded) = walk_manifest(&root.0, &mut HashCache::default(), None).unwrap();
     assert_eq!(
         busy_excluded,
         [PathBuf::from(".git")],
@@ -141,7 +141,7 @@ fn walk_never_honors_ignore_rules_outside_the_sync_root() {
     fs::create_dir(&root).unwrap();
     fs::write(root.join("app.log"), b"precious").unwrap();
 
-    let (manifest, excluded) = walk_manifest(&root, &mut HashCache::default()).unwrap();
+    let (manifest, excluded) = walk_manifest(&root, &mut HashCache::default(), None).unwrap();
     assert!(excluded.is_empty(), "nothing deliberately paused");
     assert!(
         manifest.iter().any(|e| e.path == Path::new("app.log")),
@@ -160,4 +160,35 @@ fn ensure_root_creates_and_rejects_invalid_roots() {
     let file = parent.0.join("file");
     fs::write(&file, b"x").unwrap();
     assert!(ensure_root(&file).is_err());
+}
+
+#[test]
+fn walk_seeds_the_id_cache_with_walked_paths_only() {
+    use notify_debouncer_full::FileIdCache;
+
+    let root = TestDir::new("ids");
+    fs::write(root.0.join(".gitignore"), "/skipped\n").unwrap();
+    fs::write(root.0.join("kept"), b"k").unwrap();
+    fs::write(root.0.join("skipped"), b"s").unwrap();
+    fs::create_dir(root.0.join("dir")).unwrap();
+    fs::write(root.0.join("dir/inner"), b"i").unwrap();
+    let id_of = |rel: &str| file_id(&fs::symlink_metadata(root.0.join(rel)).unwrap());
+
+    let ids = IdCache::default();
+    walk_manifest(&root.0, &mut HashCache::default(), Some(&ids)).unwrap();
+
+    for rel in ["kept", "dir", "dir/inner"] {
+        assert_eq!(
+            ids.cached_file_id(&root.0.join(rel)).map(|id| *id.as_ref()),
+            Some(id_of(rel)),
+            "{rel}"
+        );
+    }
+    assert!(ids.cached_file_id(&root.0.join("skipped")).is_none());
+    assert!(ids.cached_file_id(&root.0.join("missing")).is_none());
+
+    // No sink, no seeding.
+    let none = IdCache::default();
+    walk_manifest(&root.0, &mut HashCache::default(), None).unwrap();
+    assert!(none.cached_file_id(&root.0.join("kept")).is_none());
 }

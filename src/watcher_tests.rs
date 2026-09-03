@@ -277,3 +277,182 @@ fn does_not_hide_fatal_watcher_errors() {
         watch_subtree_tolerant(&root.0, true, &mut fake_watch, &mut HashSet::new()).unwrap_err();
     assert!(matches!(error.kind, notify::ErrorKind::MaxFilesWatch));
 }
+
+fn id_of(path: &Path) -> FileId {
+    file_id(&fs::symlink_metadata(path).unwrap())
+}
+
+fn cached(cache: &IdCache, path: &Path) -> Option<FileId> {
+    cache.cached_file_id(path).map(|id| *id.as_ref())
+}
+
+#[test]
+fn id_cache_records_walks_after_seed_and_honors_ignores() {
+    let root = TestDir::new();
+    fs::write(root.0.join(".gitignore"), "/ignored\n/build/\n*.log\n").unwrap();
+    let ignores = Arc::new(OnceLock::new());
+    assert!(ignores
+        .set(Arc::new(IgnoreStack::from_manifest(&root.0, &[])))
+        .is_ok());
+    let mut cache = IdCache::new(ignores);
+
+    fs::create_dir_all(root.0.join("dir/sub")).unwrap();
+    fs::write(root.0.join("dir/file"), b"x").unwrap();
+    fs::write(root.0.join("dir/sub/deep"), b"x").unwrap();
+    fs::write(root.0.join("dir/noise.log"), b"x").unwrap();
+    fs::write(root.0.join("dir.txt"), b"x").unwrap();
+    fs::write(root.0.join("ignored"), b"x").unwrap();
+    fs::create_dir(root.0.join("build")).unwrap();
+    fs::write(root.0.join(".synx-tmp-1"), b"x").unwrap();
+
+    // Before the seed a recursive add records only the directory itself —
+    // the root registration must not trigger a walk of its own.
+    cache.add_path(&root.0.join("dir"), RecursiveMode::Recursive);
+    assert_eq!(
+        cached(&cache, &root.0.join("dir")),
+        Some(id_of(&root.0.join("dir")))
+    );
+    assert!(cached(&cache, &root.0.join("dir/file")).is_none());
+
+    cache.seed([(root.0.join("dir.txt"), id_of(&root.0.join("dir.txt")))]);
+    assert_eq!(
+        cached(&cache, &root.0.join("dir.txt")),
+        Some(id_of(&root.0.join("dir.txt")))
+    );
+
+    // After the seed a new directory is walked, minus ignored entries that
+    // only the root ignore file knows about.
+    cache.add_path(&root.0.join("dir"), RecursiveMode::Recursive);
+    assert_eq!(
+        cached(&cache, &root.0.join("dir/sub/deep")),
+        Some(id_of(&root.0.join("dir/sub/deep")))
+    );
+    assert!(cached(&cache, &root.0.join("dir/file")).is_some());
+    assert!(cached(&cache, &root.0.join("dir/noise.log")).is_none());
+
+    // Ignored files, dir-only ignored directories, our own tmp files and
+    // missing paths are never recorded.
+    for rel in ["ignored", "build", ".synx-tmp-1", "missing"] {
+        cache.add_path(&root.0.join(rel), RecursiveMode::Recursive);
+        assert!(cached(&cache, &root.0.join(rel)).is_none(), "{rel}");
+    }
+
+    // A non-recursive add of a plain file records it.
+    fs::write(root.0.join("late"), b"x").unwrap();
+    cache.add_path(&root.0.join("late"), RecursiveMode::NonRecursive);
+    assert_eq!(
+        cached(&cache, &root.0.join("late")),
+        Some(id_of(&root.0.join("late")))
+    );
+
+    // Removing a directory forgets its descendants but not a sibling that
+    // merely shares the name as a prefix.
+    cache.remove_path(&root.0.join("dir"));
+    for rel in ["dir", "dir/file", "dir/sub", "dir/sub/deep"] {
+        assert!(cached(&cache, &root.0.join(rel)).is_none(), "{rel}");
+    }
+    assert!(cached(&cache, &root.0.join("dir.txt")).is_some());
+    assert!(cached(&cache, &root.0.join("late")).is_some());
+
+    // A backend rescan (queue overflow) re-walks the root, ignore-aware.
+    cache.rescan(&[(root.0.clone(), RecursiveMode::Recursive)]);
+    assert!(cached(&cache, &root.0.join("dir/sub/deep")).is_some());
+    assert!(cached(&cache, &root.0.join("ignored")).is_none());
+    assert!(cached(&cache, &root.0.join("build")).is_none());
+}
+
+#[test]
+fn live_watcher_pairs_a_rename_via_the_seeded_id_cache() {
+    let dir = TestDir::new();
+    let root = dir.0.canonicalize().unwrap();
+    fs::write(root.join("old"), b"v1").unwrap();
+    fs::create_dir(root.join("olddir")).unwrap();
+    fs::write(root.join("olddir/child"), b"c").unwrap();
+    let ignores = Arc::new(OnceLock::new());
+    assert!(ignores
+        .set(Arc::new(IgnoreStack::from_manifest(&root, &[])))
+        .is_ok());
+    let mut handle = spawn(root.clone(), Suppression::default(), ignores).unwrap();
+    handle.ids.seed(
+        ["old", "olddir", "olddir/child"].map(|rel| (root.join(rel), id_of(&root.join(rel)))),
+    );
+    // Let any startup noise drain, then start the activity clock fresh.
+    let _ = recv_events(&mut handle.events, 0.5);
+    handle.activity.store(false, Ordering::Relaxed);
+
+    let wait_for_rename = |events: &mut mpsc::UnboundedReceiver<Vec<FsEvent>>, from, to| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut got = Vec::new();
+        while std::time::Instant::now() < deadline {
+            got.extend(recv_events(events, 0.2));
+            if got.iter().any(|e| matches!(e, FsEvent::Renamed { .. })) {
+                break;
+            }
+        }
+        assert!(
+            got.iter().any(|e| matches!(
+                e,
+                FsEvent::Renamed { from: f, to: t } if f == Path::new(from) && t == Path::new(to)
+            )),
+            "expected {from} → {to}, got {got:?}"
+        );
+    };
+
+    fs::rename(root.join("old"), root.join("new")).unwrap();
+    wait_for_rename(&mut handle.events, "old", "new");
+    assert!(handle.activity.load(Ordering::Relaxed));
+    assert!(cached(&handle.ids, &root.join("old")).is_none());
+    assert_eq!(
+        cached(&handle.ids, &root.join("new")),
+        Some(id_of(&root.join("new")))
+    );
+
+    // A directory move: FSEvents reports only the directory, so pairing is
+    // the only way the peer learns it's a move and keeps the children.
+    fs::rename(root.join("olddir"), root.join("newdir")).unwrap();
+    wait_for_rename(&mut handle.events, "olddir", "newdir");
+    assert!(cached(&handle.ids, &root.join("olddir")).is_none());
+    assert_eq!(
+        cached(&handle.ids, &root.join("newdir/child")),
+        Some(id_of(&root.join("newdir/child")))
+    );
+    drop(handle);
+}
+
+#[test]
+fn id_cache_resolves_a_collapsed_rename_by_id() {
+    let root = TestDir::new();
+    fs::write(root.0.join("old"), b"x").unwrap();
+    fs::write(root.0.join("other"), b"y").unwrap();
+    let mut cache = IdCache::default();
+    cache.seed(["old", "other"].map(|rel| (root.0.join(rel), id_of(&root.0.join(rel)))));
+    let create = |name: &str| event(EventKind::Create(CreateKind::File), &[root.0.join(name)]);
+
+    // The backend removes the old path (rename-from) and then reports the
+    // new path as a plain create.
+    fs::rename(root.0.join("old"), root.0.join("new")).unwrap();
+    cache.remove_path(&root.0.join("old"));
+    let paired = cache.resolve_rename(&create("new")).expect("paired");
+    assert!(matches!(
+        paired.kind,
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both))
+    ));
+    assert_eq!(paired.paths, vec![root.0.join("old"), root.0.join("new")]);
+    // Consumed: the same create again is just a create.
+    assert!(cache.resolve_rename(&create("new")).is_none());
+
+    // Unrelated creates, other kinds and missing paths never pair.
+    fs::write(root.0.join("fresh"), b"z").unwrap();
+    assert!(cache.resolve_rename(&create("fresh")).is_none());
+    assert!(cache.resolve_rename(&create("missing")).is_none());
+    cache.remove_path(&root.0.join("other"));
+    assert!(cache
+        .resolve_rename(&event(
+            EventKind::Modify(ModifyKind::Any),
+            &[root.0.join("other")]
+        ))
+        .is_none());
+    // A hard link shares the id, but the source still exists: not a move.
+    fs::hard_link(root.0.join("other"), root.0.join("link")).unwrap();
+    assert!(cache.resolve_rename(&create("link")).is_none());
+}

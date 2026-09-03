@@ -171,6 +171,42 @@ impl LiveBaseline {
         self.persist_due();
     }
 
+    /// Re-key `from` and everything under it to `to`. A rename moved the
+    /// converged content; without this the next sweep would read the move
+    /// as delete-everything plus create-everything and re-send the subtree.
+    pub fn rename(&self, from: &Path, to: &Path) {
+        if !self.enabled {
+            return;
+        }
+        if let Ok(mut g) = self.inner.lock() {
+            let moved: Vec<PathBuf> = g
+                .entries
+                .keys()
+                .filter(|p| p.starts_with(from))
+                .cloned()
+                .collect();
+            if !moved.is_empty() {
+                g.dirty = true;
+                g.generation = g.generation.wrapping_add(1);
+            }
+            for old in moved {
+                let Some(mut entry) = g.entries.remove(&old) else {
+                    continue;
+                };
+                let Ok(rest) = old.strip_prefix(from) else {
+                    continue;
+                };
+                entry.path = if rest.as_os_str().is_empty() {
+                    to.to_path_buf()
+                } else {
+                    to.join(rest)
+                };
+                g.entries.insert(entry.path.clone(), entry);
+            }
+        }
+        self.persist_due();
+    }
+
     /// Record that `path` is now gone on both sides.
     pub fn remove(&self, path: &Path) {
         if !self.enabled {

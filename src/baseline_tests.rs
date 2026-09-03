@@ -1,7 +1,7 @@
 use super::{Baseline, LiveBaseline};
 use crate::protocol::{Entry, EntryKind};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_path(label: &str) -> PathBuf {
@@ -119,4 +119,54 @@ fn disabled_unchanged_corrupt_and_failed_storage_are_safe() {
     );
     assert!(live.inner.lock().unwrap().dirty);
     std::fs::remove_dir(failure).unwrap();
+}
+
+#[test]
+fn rename_rekeys_the_subtree_and_leaves_siblings() {
+    let path = temp_path("rename");
+    let mut dir = entry(1, [0; 32]);
+    dir.path = PathBuf::from("dir");
+    dir.kind = EntryKind::Dir;
+    let mut child = entry(1, [2; 32]);
+    child.path = PathBuf::from("dir/child");
+    let mut sibling = entry(1, [3; 32]);
+    sibling.path = PathBuf::from("dir.txt");
+    let entries = HashMap::from([
+        (dir.path.clone(), dir),
+        (child.path.clone(), child),
+        (sibling.path.clone(), sibling),
+    ]);
+    let live = LiveBaseline::seed_to_path(Some(path.clone()), entries, &Baseline::default());
+    let keys = |live: &LiveBaseline| {
+        live.with_entries(|e| {
+            let mut keys: Vec<PathBuf> = e.keys().cloned().collect();
+            keys.sort();
+            keys
+        })
+    };
+
+    live.rename(Path::new("dir"), Path::new("moved"));
+    assert_eq!(
+        keys(&live),
+        ["dir.txt", "moved", "moved/child"].map(PathBuf::from)
+    );
+    let child = live
+        .with_entries(|e| e.get(Path::new("moved/child")).cloned())
+        .unwrap();
+    assert_eq!(child.path, Path::new("moved/child"));
+    assert_eq!(child.hash, [2; 32]);
+
+    // Unknown source: no-op. Then the re-keyed state is what persists.
+    live.rename(Path::new("nope"), Path::new("x"));
+    assert_eq!(keys(&live).len(), 3);
+    live.persist_now();
+    let reloaded = Baseline::load_from_path(&path);
+    assert!(reloaded.get(Path::new("moved/child")).is_some());
+    assert!(reloaded.get(Path::new("dir/child")).is_none());
+    let _ = std::fs::remove_file(&path);
+
+    let off = LiveBaseline::disabled();
+    off.rename(Path::new("dir"), Path::new("moved"));
+    assert!(off.is_empty());
+    assert!(!live.is_empty());
 }

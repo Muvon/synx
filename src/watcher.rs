@@ -1,17 +1,21 @@
 use anyhow::Result;
+use notify::event::{ModifyKind, RenameMode};
 use notify::{EventKind, RecursiveMode};
-use notify_debouncer_full::{new_debouncer_opt, DebounceEventResult, Debouncer, NoCache};
-use std::collections::HashSet;
+use notify_debouncer_full::file_id::FileId;
+use notify_debouncer_full::{new_debouncer_opt, DebounceEventResult, Debouncer, FileIdCache};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::ignores::IgnoreStack;
 use crate::paths::is_internal_temp;
 use crate::peer::Suppression;
+use crate::walker::{build_walker, file_id};
 
 /// Editor save storms coalesce inside this window.
 const DEBOUNCE: Duration = Duration::from_millis(200);
@@ -39,7 +43,6 @@ fn normalize_event(
     let paths = &event.paths;
     let to_rel =
         |p: &PathBuf| -> Option<PathBuf> { p.strip_prefix(root).ok().map(|r| r.to_path_buf()) };
-    use notify::event::{ModifyKind, RenameMode};
     match &event.kind {
         EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
             if paths.len() < 2 {
@@ -107,6 +110,156 @@ fn normalize_event(
     }
 }
 
+/// Rename pairing for backends without rename cookies (macOS FSEvents): the
+/// two halves of a rename arrive as separate events and the old path is
+/// already gone, so they can only be matched by a (device, inode) remembered
+/// from before.
+///
+/// The crate's own cache does this by walking the whole tree at watch time —
+/// following symlinks, ignoring `.gitignore` — and holding every path under
+/// `target/` or `node_modules/` for the session. This one honors the ignore
+/// stack, never follows links, and is seeded from the manifest walk, which
+/// already has the metadata, instead of a second walk.
+#[derive(Clone, Default)]
+pub struct IdCache {
+    inner: Arc<Mutex<IdCacheInner>>,
+    ignores: Arc<OnceLock<Arc<IgnoreStack>>>,
+}
+
+#[derive(Default)]
+struct IdCacheInner {
+    ids: BTreeMap<PathBuf, FileId>,
+    /// Ids of paths the backend just removed, waiting for the create that
+    /// the other half of a rename arrives as (see `resolve_rename`).
+    /// Consumed on match; cleared once a mass delete grows it past
+    /// `MOVED_CAP`.
+    moved: HashMap<FileId, PathBuf>,
+    /// Until the manifest walk has seeded us, a recursive `add_path` (the
+    /// root registration, or a directory created mid-walk) records only the
+    /// directory itself; the seed covers the contents.
+    seeded: bool,
+}
+
+/// Bound on remembered removed ids; only a mass delete gets near it.
+const MOVED_CAP: usize = 10_000;
+
+impl IdCache {
+    fn new(ignores: Arc<OnceLock<Arc<IgnoreStack>>>) -> Self {
+        Self {
+            inner: Arc::default(),
+            ignores,
+        }
+    }
+
+    /// Bulk-load ids the manifest walk already has; recursive `add_path`
+    /// calls walk from now on.
+    pub fn seed(&self, ids: impl IntoIterator<Item = (PathBuf, FileId)>) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.ids.extend(ids);
+            g.seeded = true;
+        }
+    }
+
+    fn ignored(&self, abs: &Path, is_dir: bool) -> bool {
+        is_internal_temp(abs)
+            || self
+                .ignores
+                .get()
+                .is_some_and(|i| i.is_ignored_abs(abs, is_dir))
+    }
+
+    /// Pair a rename the debouncer could not. On macOS the two halves arrive
+    /// as separate events, and even a pair it matched by id is collapsed
+    /// into a plain create when FSEvents replays the old path's `Created`
+    /// flag alongside the rename — which it does for any path it has a
+    /// record of. A created path whose id belonged to a path that just
+    /// vanished is that path, moved.
+    pub fn resolve_rename(&self, event: &notify::Event) -> Option<notify::Event> {
+        if !matches!(event.kind, EventKind::Create(_)) {
+            return None;
+        }
+        let to = event.paths.first()?;
+        let id = file_id(&fs::symlink_metadata(to).ok()?);
+        let mut g = self.inner.lock().ok()?;
+        // A source still on disk is a hard link, not a move.
+        let from = g
+            .moved
+            .get(&id)
+            .filter(|from| *from != to && fs::symlink_metadata(from).is_err())
+            .cloned()?;
+        g.moved.remove(&id);
+        Some(
+            notify::Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+                .add_path(from)
+                .add_path(to.clone()),
+        )
+    }
+}
+
+impl FileIdCache for IdCache {
+    fn cached_file_id(&self, path: &Path) -> Option<impl AsRef<FileId>> {
+        self.inner.lock().ok()?.ids.get(path).copied()
+    }
+
+    fn add_path(&mut self, path: &Path, recursive_mode: RecursiveMode) {
+        if self.ignored(path, false) {
+            return;
+        }
+        let Ok(meta) = fs::symlink_metadata(path) else {
+            return;
+        };
+        if meta.is_dir() && self.ignored(path, true) {
+            return;
+        }
+        let Ok(mut g) = self.inner.lock() else {
+            return;
+        };
+        g.ids.insert(path.to_path_buf(), file_id(&meta));
+        if !(meta.is_dir() && recursive_mode == RecursiveMode::Recursive && g.seeded) {
+            return;
+        }
+        // A walker rooted below the sync root misses the ignore files above
+        // it, so every entry is also checked against the full stack.
+        for dent in build_walker(path).build().flatten() {
+            if dent.depth() == 0 {
+                continue;
+            }
+            let Ok(meta) = dent.metadata() else {
+                continue;
+            };
+            if self.ignored(dent.path(), meta.is_dir()) {
+                continue;
+            }
+            g.ids.insert(dent.path().to_path_buf(), file_id(&meta));
+        }
+    }
+
+    fn remove_path(&mut self, path: &Path) {
+        let Ok(mut g) = self.inner.lock() else {
+            return;
+        };
+        if let Some(id) = g.ids.remove(path) {
+            if g.moved.len() >= MOVED_CAP {
+                g.moved.clear();
+            }
+            g.moved.insert(id, path.to_path_buf());
+        }
+        // Descendants sort directly after their parent, so a removed
+        // directory costs one range scan rather than a pass over the map.
+        // They get no tombstones: no event ever arrives for them.
+        let under: Vec<PathBuf> = g
+            .ids
+            .range::<Path, _>((Bound::Excluded(path), Bound::Unbounded))
+            .map(|(p, _)| p)
+            .take_while(|p| p.starts_with(path))
+            .cloned()
+            .collect();
+        for p in under {
+            g.ids.remove(&p);
+        }
+    }
+}
+
 pub struct WatcherHandle {
     pub events: mpsc::UnboundedReceiver<Vec<FsEvent>>,
     /// Set whenever the backend reported anything at all — including events
@@ -114,9 +267,11 @@ pub struct WatcherHandle {
     /// reconciliation sweep runs only after activity, so an idle tree is
     /// never re-walked.
     pub activity: Arc<AtomicBool>,
+    /// Rename-pairing ids; the caller seeds it from the manifest walk.
+    pub ids: IdCache,
     /// Held to keep the debouncer + watcher threads alive for the
     /// duration of the live session. Dropped on shutdown.
-    pub keepalive: Debouncer<notify::RecommendedWatcher, NoCache>,
+    pub keepalive: Debouncer<notify::RecommendedWatcher, IdCache>,
 }
 
 fn recoverable_watch_error(error: &notify::Error) -> bool {
@@ -238,14 +393,10 @@ pub fn spawn(
     let root_cb = root.clone();
     let activity = Arc::new(AtomicBool::new(false));
     let activity_cb = Arc::clone(&activity);
+    let ids = IdCache::new(Arc::clone(&ignores));
+    let ids_cb = ids.clone();
 
-    // `NoCache` on every platform (Linux already defaults to it). The macOS
-    // default keeps a file-id map that walks the whole tree at startup —
-    // following symlinks, ignoring .gitignore — and holds an entry per path
-    // for the session, only to pair the two halves of a rename. Without it
-    // a rename reaches us as two events that `forward_local_events` grounds
-    // in disk state: a delete plus a send, which still converges.
-    let mut debouncer = new_debouncer_opt::<_, notify::RecommendedWatcher, NoCache>(
+    let mut debouncer = new_debouncer_opt::<_, notify::RecommendedWatcher, IdCache>(
         DEBOUNCE,
         Some(DEBOUNCE_TICK),
         move |result: DebounceEventResult| {
@@ -254,11 +405,15 @@ pub fn spawn(
                 Ok(events) => {
                     let mut out: Vec<FsEvent> = Vec::with_capacity(events.len());
                     for ev in events {
+                        let raw = match ids_cb.resolve_rename(&ev.event) {
+                            Some(paired) => paired,
+                            None => ev.event,
+                        };
                         normalize_event(
                             &root_cb,
                             &suppress,
                             ignores.get().map(Arc::as_ref),
-                            &ev.event,
+                            &raw,
                             &mut out,
                         );
                     }
@@ -273,7 +428,7 @@ pub fn spawn(
                 }
             }
         },
-        NoCache,
+        ids.clone(),
         notify::Config::default(),
     )?;
 
@@ -290,6 +445,7 @@ pub fn spawn(
     Ok(WatcherHandle {
         events: rx,
         activity,
+        ids,
         keepalive: debouncer,
     })
 }
