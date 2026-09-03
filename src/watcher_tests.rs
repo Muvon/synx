@@ -456,3 +456,132 @@ fn id_cache_resolves_a_collapsed_rename_by_id() {
     fs::hard_link(root.0.join("other"), root.0.join("link")).unwrap();
     assert!(cache.resolve_rename(&create("link")).is_none());
 }
+
+#[test]
+fn id_cache_pairs_only_paths_synx_has_reported() {
+    let root = TestDir::new();
+    fs::write(root.0.join("index"), b"v1").unwrap();
+    fs::create_dir(root.0.join("dir")).unwrap();
+    fs::write(root.0.join("dir/child"), b"c").unwrap();
+    let mut cache = IdCache::default();
+    cache.seed(
+        ["index", "dir", "dir/child"].map(|rel| (root.0.join(rel), id_of(&root.0.join(rel)))),
+    );
+    let create = |name: &str| event(EventKind::Create(CreateKind::File), &[root.0.join(name)]);
+
+    // git's index write, or an editor's atomic save: the lock file is
+    // created and renamed over the target inside one debounce window, so
+    // the backend adds and removes it before its create was ever delivered.
+    // The peer never had it — the create at the target is the whole story.
+    fs::write(root.0.join("index.lock"), b"v2").unwrap();
+    cache.add_path(&root.0.join("index.lock"), RecursiveMode::NonRecursive);
+    fs::rename(root.0.join("index.lock"), root.0.join("index")).unwrap();
+    cache.remove_path(&root.0.join("index.lock"));
+    cache.add_path(&root.0.join("index"), RecursiveMode::NonRecursive);
+    assert!(cache.resolve_rename(&create("index")).is_none());
+    assert_eq!(
+        cached(&cache, &root.0.join("index")),
+        Some(id_of(&root.0.join("index")))
+    );
+    assert!(cached(&cache, &root.0.join("index.lock")).is_none());
+
+    // Same for a brand-new target.
+    fs::write(root.0.join("fresh.tmp"), b"f").unwrap();
+    cache.add_path(&root.0.join("fresh.tmp"), RecursiveMode::NonRecursive);
+    fs::rename(root.0.join("fresh.tmp"), root.0.join("fresh")).unwrap();
+    cache.remove_path(&root.0.join("fresh.tmp"));
+    cache.add_path(&root.0.join("fresh"), RecursiveMode::NonRecursive);
+    assert!(cache.resolve_rename(&create("fresh")).is_none());
+
+    // Once its create has been delivered the path is on the peer, and a
+    // later rename pairs.
+    cache.mark_reported(&create("fresh"));
+    fs::rename(root.0.join("fresh"), root.0.join("moved")).unwrap();
+    cache.remove_path(&root.0.join("fresh"));
+    cache.add_path(&root.0.join("moved"), RecursiveMode::NonRecursive);
+    let paired = cache.resolve_rename(&create("moved")).expect("paired");
+    assert_eq!(
+        paired.paths,
+        vec![root.0.join("fresh"), root.0.join("moved")]
+    );
+
+    // A delivered directory rename covers the children the backend re-walks
+    // under the new name: the peer moved them too.
+    fs::rename(root.0.join("dir"), root.0.join("dir2")).unwrap();
+    cache.remove_path(&root.0.join("dir"));
+    cache.add_path(&root.0.join("dir2"), RecursiveMode::Recursive);
+    let paired = cache.resolve_rename(&create("dir2")).expect("paired");
+    cache.mark_reported(&paired);
+    fs::rename(root.0.join("dir2/child"), root.0.join("dir2/child2")).unwrap();
+    cache.remove_path(&root.0.join("dir2/child"));
+    cache.add_path(&root.0.join("dir2/child2"), RecursiveMode::NonRecursive);
+    let paired = cache
+        .resolve_rename(&create("dir2/child2"))
+        .expect("paired");
+    assert_eq!(
+        paired.paths,
+        vec![root.0.join("dir2/child"), root.0.join("dir2/child2")]
+    );
+
+    // A directory created (not moved) and delivered as a create leaves its
+    // children unreported: the peer only received the directory.
+    fs::create_dir(root.0.join("new")).unwrap();
+    fs::write(root.0.join("new/inner"), b"i").unwrap();
+    cache.add_path(&root.0.join("new"), RecursiveMode::Recursive);
+    cache.mark_reported(&create("new"));
+    fs::rename(root.0.join("new/inner"), root.0.join("new/inner2")).unwrap();
+    cache.remove_path(&root.0.join("new/inner"));
+    assert!(cache.resolve_rename(&create("new/inner2")).is_none());
+}
+
+#[test]
+fn live_watcher_reports_a_lock_file_rename_as_a_plain_write() {
+    let dir = TestDir::new();
+    let root = dir.0.canonicalize().unwrap();
+    fs::write(root.join("index"), b"v1").unwrap();
+    let ignores = Arc::new(OnceLock::new());
+    assert!(ignores
+        .set(Arc::new(IgnoreStack::from_manifest(&root, &[])))
+        .is_ok());
+    let mut handle = spawn(root.clone(), Suppression::default(), ignores).unwrap();
+    handle
+        .ids
+        .seed([(root.join("index"), id_of(&root.join("index")))]);
+    let _ = recv_events(&mut handle.events, 0.5);
+
+    // git's index write and an editor's atomic save, both inside one
+    // debounce window: the peer must see a write, never a rename from a
+    // path it was never told about.
+    fs::write(root.join("index.lock"), b"v2").unwrap();
+    fs::rename(root.join("index.lock"), root.join("index")).unwrap();
+    fs::write(root.join("fresh.tmp"), b"f").unwrap();
+    fs::rename(root.join("fresh.tmp"), root.join("fresh")).unwrap();
+
+    let written = |got: &[FsEvent], name: &str| {
+        got.iter().any(
+            |e| matches!(e, FsEvent::Created(p) | FsEvent::Modified(p) if p == Path::new(name)),
+        )
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut got = Vec::new();
+    while std::time::Instant::now() < deadline {
+        got.extend(recv_events(&mut handle.events, 0.2));
+        if written(&got, "index") && written(&got, "fresh") {
+            break;
+        }
+    }
+    // Let stragglers land before checking that nothing was taken for a move.
+    got.extend(recv_events(&mut handle.events, 0.5));
+    assert!(written(&got, "index"), "{got:?}");
+    assert!(written(&got, "fresh"), "{got:?}");
+    assert!(
+        !got.iter().any(|e| matches!(e, FsEvent::Renamed { .. })),
+        "{got:?}"
+    );
+    assert_eq!(
+        cached(&handle.ids, &root.join("index")),
+        Some(id_of(&root.join("index")))
+    );
+    assert!(cached(&handle.ids, &root.join("index.lock")).is_none());
+    drop(handle);
+}

@@ -128,16 +128,30 @@ pub struct IdCache {
 
 #[derive(Default)]
 struct IdCacheInner {
-    ids: BTreeMap<PathBuf, FileId>,
-    /// Ids of paths the backend just removed, waiting for the create that
-    /// the other half of a rename arrives as (see `resolve_rename`).
-    /// Consumed on match; cleared once a mass delete grows it past
-    /// `MOVED_CAP`.
+    ids: BTreeMap<PathBuf, Known>,
+    /// Ids of reported paths the backend just removed, waiting for the
+    /// create that the other half of a rename arrives as (see
+    /// `resolve_rename`). Consumed on match; cleared once a mass delete
+    /// grows it past `MOVED_CAP`.
     moved: HashMap<FileId, PathBuf>,
     /// Until the manifest walk has seeded us, a recursive `add_path` (the
     /// root registration, or a directory created mid-walk) records only the
     /// directory itself; the seed covers the contents.
     seeded: bool,
+}
+
+/// A watched path's identity, and whether synx has ever reported the path.
+#[derive(Clone, Copy)]
+struct Known {
+    id: FileId,
+    /// Seeded from the manifest, or delivered by the debouncer since. Only
+    /// such a path can exist on the peer, so only its disappearance can be
+    /// one half of a move. A path created and renamed inside one debounce
+    /// window never left the queue under its own name: the debouncer
+    /// collapses it into a create at the new path, which is also all the
+    /// peer must see — pairing it would ask the peer to rename a path it
+    /// never had (git's `index.lock`, every editor's atomic save).
+    reported: bool,
 }
 
 /// Bound on remembered removed ids; only a mass delete gets near it.
@@ -155,8 +169,36 @@ impl IdCache {
     /// calls walk from now on.
     pub fn seed(&self, ids: impl IntoIterator<Item = (PathBuf, FileId)>) {
         if let Ok(mut g) = self.inner.lock() {
-            g.ids.extend(ids);
+            g.ids.extend(
+                ids.into_iter()
+                    .map(|(path, id)| (path, Known { id, reported: true })),
+            );
             g.seeded = true;
+        }
+    }
+
+    /// Record that the debouncer delivered `event`, so its paths are now
+    /// candidates for pairing. A rename covers the moved subtree: the peer
+    /// moves it as a whole.
+    fn mark_reported(&self, event: &notify::Event) {
+        let Ok(mut g) = self.inner.lock() else {
+            return;
+        };
+        let is_move = matches!(
+            event.kind,
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both))
+        );
+        // For a move only the destination is still in `ids`.
+        for path in event.paths.iter().skip(usize::from(is_move)) {
+            if let Some(known) = g.ids.get_mut(path) {
+                known.reported = true;
+            }
+            if is_move {
+                g.ids
+                    .range_mut::<Path, _>((Bound::Excluded(path.as_path()), Bound::Unbounded))
+                    .take_while(|(p, _)| p.starts_with(path))
+                    .for_each(|(_, known)| known.reported = true);
+            }
         }
     }
 
@@ -172,8 +214,8 @@ impl IdCache {
     /// as separate events, and even a pair it matched by id is collapsed
     /// into a plain create when FSEvents replays the old path's `Created`
     /// flag alongside the rename — which it does for any path it has a
-    /// record of. A created path whose id belonged to a path that just
-    /// vanished is that path, moved.
+    /// record of. A created path whose id belonged to a reported path that
+    /// just vanished is that path, moved.
     pub fn resolve_rename(&self, event: &notify::Event) -> Option<notify::Event> {
         if !matches!(event.kind, EventKind::Create(_)) {
             return None;
@@ -198,7 +240,7 @@ impl IdCache {
 
 impl FileIdCache for IdCache {
     fn cached_file_id(&self, path: &Path) -> Option<impl AsRef<FileId>> {
-        self.inner.lock().ok()?.ids.get(path).copied()
+        self.inner.lock().ok()?.ids.get(path).map(|known| known.id)
     }
 
     fn add_path(&mut self, path: &Path, recursive_mode: RecursiveMode) {
@@ -214,7 +256,7 @@ impl FileIdCache for IdCache {
         let Ok(mut g) = self.inner.lock() else {
             return;
         };
-        g.ids.insert(path.to_path_buf(), file_id(&meta));
+        record(&mut g.ids, path, file_id(&meta));
         if !(meta.is_dir() && recursive_mode == RecursiveMode::Recursive && g.seeded) {
             return;
         }
@@ -230,7 +272,7 @@ impl FileIdCache for IdCache {
             if self.ignored(dent.path(), meta.is_dir()) {
                 continue;
             }
-            g.ids.insert(dent.path().to_path_buf(), file_id(&meta));
+            record(&mut g.ids, dent.path(), file_id(&meta));
         }
     }
 
@@ -238,11 +280,13 @@ impl FileIdCache for IdCache {
         let Ok(mut g) = self.inner.lock() else {
             return;
         };
-        if let Some(id) = g.ids.remove(path) {
-            if g.moved.len() >= MOVED_CAP {
-                g.moved.clear();
+        if let Some(known) = g.ids.remove(path) {
+            if known.reported {
+                if g.moved.len() >= MOVED_CAP {
+                    g.moved.clear();
+                }
+                g.moved.insert(known.id, path.to_path_buf());
             }
-            g.moved.insert(id, path.to_path_buf());
         }
         // Descendants sort directly after their parent, so a removed
         // directory costs one range scan rather than a pass over the map.
@@ -258,6 +302,17 @@ impl FileIdCache for IdCache {
             g.ids.remove(&p);
         }
     }
+}
+
+/// Refresh a path's id, keeping what we know about its delivery: a backend
+/// re-add (FSEvents replaying a create, a rescan) is not a new path.
+fn record(ids: &mut BTreeMap<PathBuf, Known>, path: &Path, id: FileId) {
+    ids.entry(path.to_path_buf())
+        .and_modify(|known| known.id = id)
+        .or_insert(Known {
+            id,
+            reported: false,
+        });
 }
 
 pub struct WatcherHandle {
@@ -409,6 +464,7 @@ pub fn spawn(
                             Some(paired) => paired,
                             None => ev.event,
                         };
+                        ids_cb.mark_reported(&raw);
                         normalize_event(
                             &root_cb,
                             &suppress,

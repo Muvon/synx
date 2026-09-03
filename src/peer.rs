@@ -1080,19 +1080,21 @@ const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 /// desynced until a restart re-ran the manifest diff. This sweep is that
 /// diff, run periodically against the live baseline.
 ///
-/// No-op while git is mid-operation (the walk would exclude `.git/` and
-/// misreport those paths as deleted) and when there is no baseline yet.
+/// `None` while git is mid-operation (the walk would exclude `.git/` and
+/// misreport those paths as deleted): nothing was checked, and the caller
+/// keeps the activity that asked for the sweep. No baseline yet means
+/// nothing to diff against.
 async fn reconcile_sweep(
     root: &Path,
     baseline: &LiveBaseline,
     cache: &Arc<StdMutex<HashCache>>,
     gate: &GitGate,
-) -> Result<Vec<FsEvent>> {
+) -> Result<Option<Vec<FsEvent>>> {
     if baseline.is_empty() {
-        return Ok(Vec::new());
+        return Ok(Some(Vec::new()));
     }
     if gate.busy(root) {
-        return Ok(Vec::new());
+        return Ok(None);
     }
 
     let walk_root = root.to_path_buf();
@@ -1131,24 +1133,27 @@ async fn reconcile_sweep(
         }
         events
     });
-    Ok(events)
+    Ok(Some(events))
 }
 
 /// Run one sweep and forward whatever it found through the normal event
 /// path (echo suppression, ignore rules, and disk-state grounding all
 /// apply). Also persists the hash cache if the walk hashed new content.
+/// Returns whether the tree was actually checked.
 async fn run_reconcile_sweep<W>(
     ctx: &SessionCtx,
     writer: &Arc<Mutex<W>>,
     suppress: &Suppression,
     cache: &Arc<StdMutex<HashCache>>,
-) -> Result<()>
+) -> Result<bool>
 where
     W: AsyncWriteExt + Unpin,
 {
-    let events = reconcile_sweep(&ctx.root, &ctx.baseline, cache, &ctx.gate).await?;
+    let Some(events) = reconcile_sweep(&ctx.root, &ctx.baseline, cache, &ctx.gate).await? else {
+        return Ok(false);
+    };
     if events.is_empty() {
-        return Ok(());
+        return Ok(true);
     }
     tracing::debug!("reconcile: {} divergent path(s)", events.len());
     forward_local_events(
@@ -1166,7 +1171,7 @@ where
     if let Ok(mut cache) = cache.lock() {
         cache.save(&ctx.root);
     }
-    Ok(())
+    Ok(true)
 }
 
 pub async fn live_loop<R, W>(
@@ -1311,8 +1316,15 @@ where
                 // catch, so skip the walk entirely.
                 if send_local && activity.swap(false, Ordering::Relaxed) {
                     if let Some(cache) = &reconcile {
-                        if let Err(e) = run_reconcile_sweep(&ctx, &writer, &suppress, cache).await {
+                        let swept = run_reconcile_sweep(&ctx, &writer, &suppress, cache).await;
+                        if let Err(e) = &swept {
                             tracing::warn!("reconcile sweep failed: {}", e);
+                        }
+                        // Git was mid-operation (or the walk failed): nothing
+                        // was checked, so the activity stays owed to the
+                        // next tick.
+                        if !matches!(swept, Ok(true)) {
+                            activity.store(true, Ordering::Relaxed);
                         }
                     }
                 }

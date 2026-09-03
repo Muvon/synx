@@ -989,7 +989,8 @@ async fn reconcile_sweep_catches_watcher_misses() {
     let cache = Arc::new(StdMutex::new(HashCache::load(root.path())));
     let events = reconcile_sweep(root.path(), &baseline, &cache, &GitGate::default())
         .await
-        .unwrap();
+        .unwrap()
+        .expect("swept");
 
     let mut paths: Vec<&Path> = events
         .iter()
@@ -1018,16 +1019,47 @@ async fn reconcile_sweep_catches_watcher_misses() {
         .find(|e| matches!(e, FsEvent::Removed(p) if p == Path::new("deleted")))
         .is_some());
 
-    // No-op while git is mid-operation: the walk excludes `.git/` and
-    // would misreport those paths as deleted.
+    // Not swept while git is mid-operation: the walk excludes `.git/` and
+    // would misreport those paths as deleted. The caller must learn that
+    // nothing was checked, or the activity that asked for the sweep is
+    // consumed and the divergence waits for the next unrelated change.
     fs::create_dir(root.path().join(".git")).unwrap();
     fs::write(root.path().join(".git/MERGE_HEAD"), b"busy").unwrap();
-    let busy = reconcile_sweep(root.path(), &baseline, &cache, &GitGate::default())
+    assert!(
+        reconcile_sweep(root.path(), &baseline, &cache, &GitGate::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let ctx = SessionCtx {
+        root: root.path().to_path_buf(),
+        mode: SyncMode::Both,
+        compress: false,
+        is_client: true,
+        ignores: Arc::new(IgnoreStack::from_manifest(root.path(), &[])),
+        gate: GitGate::default(),
+        baseline: baseline.clone(),
+    };
+    let writer = Arc::new(Mutex::new(Vec::new()));
+    let suppress = Suppression::default();
+    assert!(!run_reconcile_sweep(&ctx, &writer, &suppress, &cache)
         .await
-        .unwrap();
-    assert!(busy.is_empty());
+        .unwrap());
+    assert!(writer.lock().await.is_empty());
 
-    // No-op without a baseline (first run — nothing to diff against).
+    // Once git settles the same divergence is swept and forwarded. (A fresh
+    // gate: the one above holds its `GIT_SETTLE` hysteresis.)
+    fs::remove_file(root.path().join(".git/MERGE_HEAD")).unwrap();
+    let ctx = SessionCtx {
+        gate: GitGate::default(),
+        ..ctx
+    };
+    assert!(run_reconcile_sweep(&ctx, &writer, &suppress, &cache)
+        .await
+        .unwrap());
+    assert!(!writer.lock().await.is_empty());
+
+    // Nothing to diff against without a baseline (first run): swept, empty.
     let empty = reconcile_sweep(
         root.path(),
         &LiveBaseline::disabled(),
@@ -1036,7 +1068,7 @@ async fn reconcile_sweep_catches_watcher_misses() {
     )
     .await
     .unwrap();
-    assert!(empty.is_empty());
+    assert_eq!(empty, Some(Vec::new()));
 }
 #[tokio::test]
 async fn defers_only_git_events_while_repository_is_busy() {
@@ -1303,7 +1335,7 @@ async fn rename_forwarding_touches_unchanged_files_and_rekeys_the_baseline() {
     let events = reconcile_sweep(root.path(), &baseline, &cache, &GitGate::default())
         .await
         .unwrap();
-    assert!(events.is_empty(), "{events:?}");
+    assert_eq!(events, Some(Vec::new()));
 }
 
 #[tokio::test]
