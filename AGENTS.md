@@ -94,7 +94,7 @@ synx/
 - `compute_signature` / `compute_delta` / `apply_delta_to_file` — fast_rsync deltas; result blake3-verified (fast_rsync uses MD4 internally, so blake3 is the only honest integrity check).
 - `Pending` — chunked transfer state machine (`start`/`chunk`/`end`).
 - `send_file` — push path: delta vs chunked vs whole-file; `is_precompressed` bypasses zstd for media/archives.
-- `Suppression` — state-based echo suppression (`mark_set`/`mark_deleted`/`is_echo`).
+- `Suppression` — state-based echo suppression (`mark_set`/`mark_deleted`/`mark_applied_delete`/`is_echo`).
 - `SessionCtx` / `live_loop` / `handle_incoming` / `forward_local_events` / `coalesce` — the bidirectional live loop.
 - `git_remotes` / `normalize_git_url` / `git_remotes_conflict` — wrong-repo protection.
 
@@ -124,6 +124,7 @@ synx/
 - Type mismatch (file vs dir vs symlink) → conflict surfaced, skipped, never blind-applied.
 - The remote manifest is filtered through the **local** ignore stack before planning (agent doesn't know our rules).
 - Echo suppression is state-based (recorded mtime/hash vs current on-disk state), not a time window — user edits during apply still flow.
+- The stale-create guard fires only for deletes made **here** (`mark_deleted` / `mark_observed_deleted`, TTL-bounded). A delete applied on the peer's instruction uses `mark_applied_delete`: one connection delivers that peer's messages in order, so its later content for the path is newer, never stale. Dropping it (checkout/rebase removing a file and restoring it) loses the file here while the sender records it converged, and the next session reads that baseline as deletion evidence and removes the sender's copy too.
 - Stale-`.git/` recovery (`sync.rs`): local `.git/` wiped to match remote only when the baseline proves `.git/` was previously converged; otherwise kept and pushed.
 
 ### Errors
