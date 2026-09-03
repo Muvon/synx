@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -12,11 +13,13 @@ pub const COMPRESS_LEVEL: i32 = 3;
 /// 64 KiB amortizes syscalls without a meaningful memory cost (one link).
 pub const IO_BUF_SIZE: usize = 64 * 1024;
 
-/// Files smaller than this are sent as a single `FileData` message;
-/// anything larger is streamed via `FileStart` / `FileChunk` / `FileEnd`.
-pub const CHUNK_THRESHOLD: usize = 16 * 1024 * 1024; // 16 MiB
 /// Size of each `FileChunk` payload during chunked transfer.
 pub const CHUNK_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
+/// Files smaller than this are sent as a single `FileData` message; anything
+/// that doesn't fit one chunk is streamed via `FileStart` / `FileChunk` /
+/// `FileEnd`. A whole-file send holds the content, its encoding and the
+/// compressed frame at once on both ends; streaming caps that at one chunk.
+pub const CHUNK_THRESHOLD: usize = CHUNK_SIZE;
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SyncMode {
@@ -62,6 +65,9 @@ impl Entry {
     }
 }
 
+/// Byte payloads carry `serde_bytes` so postcard copies them as one slice
+/// instead of one `u8` at a time. The encoding (varint length + raw bytes)
+/// is identical to plain `Vec<u8>`, so this is not a wire change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     /// First message from client.
@@ -94,6 +100,7 @@ pub enum Message {
     /// Whole-file payload (small/medium files).
     FileData {
         entry: Entry,
+        #[serde(with = "serde_bytes")]
         content: Vec<u8>,
     },
     /// Begin a chunked file transfer; receiver opens a tmp file.
@@ -104,6 +111,7 @@ pub enum Message {
     /// One chunk of a large file (multiple per file).
     FileChunk {
         path: PathBuf,
+        #[serde(with = "serde_bytes")]
         data: Vec<u8>,
     },
     /// Finish a chunked file transfer; receiver renames tmp into place.
@@ -129,6 +137,7 @@ pub enum Message {
     /// full transfer.
     Signature {
         path: PathBuf,
+        #[serde(with = "serde_bytes")]
         sig: Option<Vec<u8>>,
     },
     /// Patch the peer's existing file using the given delta.
@@ -137,6 +146,7 @@ pub enum Message {
     Delta {
         entry: Entry,
         base_hash: [u8; 32],
+        #[serde(with = "serde_bytes")]
         delta: Vec<u8>,
     },
     /// Client-initiated pull with a signature of the version we already
@@ -145,6 +155,7 @@ pub enum Message {
     PullDelta {
         path: PathBuf,
         base_hash: [u8; 32],
+        #[serde(with = "serde_bytes")]
         sig: Vec<u8>,
     },
     /// Create or update a directory's metadata.
@@ -277,6 +288,20 @@ fn validate_entry_kind(entry: &Entry, expected: EntryKind) -> io::Result<()> {
 
 const FLAG_COMPRESSED: u8 = 0x01;
 
+thread_local! {
+    // One zstd context per thread rather than per message: building one
+    // allocates and faults in a multi-megabyte workspace, which dominated
+    // the cost of framing small files.
+    static COMPRESSOR: RefCell<zstd::bulk::Compressor<'static>> =
+        RefCell::new(zstd::bulk::Compressor::new(COMPRESS_LEVEL).expect("zstd compressor"));
+    static DECOMPRESSOR: RefCell<zstd::bulk::Decompressor<'static>> =
+        RefCell::new(zstd::bulk::Decompressor::new().expect("zstd decompressor"));
+}
+
+fn compress_payload(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    COMPRESSOR.with(|c| c.borrow_mut().compress(bytes))
+}
+
 pub async fn read_message<R>(reader: &mut R) -> io::Result<Message>
 where
     R: AsyncReadExt + Unpin,
@@ -312,21 +337,42 @@ where
 
 /// Decode without allowing a small compressed frame to expand beyond the
 /// protocol's memory bound. The on-wire limit alone does not stop a zstd bomb.
+///
+/// Frames from `compress_payload` declare their content size: bound it, allocate
+/// exactly that and decode in one shot. Frames without one fall back to the
+/// streaming decoder behind a hard read limit.
 fn decode_compressed_limited(compressed: &[u8], max_size: usize) -> io::Result<Vec<u8>> {
-    let decoder = zstd::stream::read::Decoder::new(compressed)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    let mut decoded = Vec::new();
-    decoder
-        .take(max_size.saturating_add(1) as u64)
-        .read_to_end(&mut decoded)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let invalid = |e: io::Error| io::Error::new(io::ErrorKind::InvalidData, e);
+    let declared = zstd::zstd_safe::get_frame_content_size(compressed)
+        .ok()
+        .flatten()
+        .map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+    let decoded = match declared {
+        Some(n) if n <= max_size => DECOMPRESSOR
+            .with(|d| d.borrow_mut().decompress(compressed, n))
+            .map_err(invalid)?,
+        Some(n) => return Err(too_large(n)),
+        None => {
+            let decoder = zstd::stream::read::Decoder::new(compressed).map_err(invalid)?;
+            let mut decoded = Vec::new();
+            decoder
+                .take(max_size.saturating_add(1) as u64)
+                .read_to_end(&mut decoded)
+                .map_err(invalid)?;
+            decoded
+        }
+    };
     if decoded.len() > max_size {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("decompressed message too large: {} bytes", decoded.len()),
-        ));
+        return Err(too_large(decoded.len()));
     }
     Ok(decoded)
+}
+
+fn too_large(len: usize) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("decompressed message too large: {len} bytes"),
+    )
 }
 
 /// Encode + frame a message into `writer` WITHOUT flushing. Use for bulk
@@ -339,7 +385,7 @@ where
     let bytes =
         postcard::to_allocvec(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let (payload, flags) = if compress && bytes.len() > COMPRESS_THRESHOLD {
-        let c = zstd::encode_all(&bytes[..], COMPRESS_LEVEL).map_err(io::Error::other)?;
+        let c = compress_payload(&bytes).map_err(io::Error::other)?;
         // Only use the compressed form if it actually saves space.
         if c.len() + 5 < bytes.len() {
             (c, FLAG_COMPRESSED)

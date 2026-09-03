@@ -363,11 +363,19 @@ where
         return Ok(());
     }
 
+    let Plan {
+        push,
+        get,
+        del_remote,
+        del_local,
+        conflicts: _,
+    } = plan;
+
     // Apply remote-originated deletions locally. These are paths the peer
     // removed whose local copy is still byte-identical to the last baseline,
     // so it's a propagated deletion (not an unsynced local edit). Destructive,
     // hence gated on the baseline match computed in build_plan.
-    for path in &plan.del_local {
+    for path in &del_local {
         match apply_delete(&local_root, path) {
             Ok(()) => {
                 suppress.mark_deleted(path.clone());
@@ -386,9 +394,11 @@ where
     //                          slightly). Sequential because each item is
     //                          a request → response → delta round-trip.
     // Phase 2b (parallel):     full push for everything else, Semaphore-
-    //                          bounded so we don't blow up RAM.
+    //                          bounded so we don't blow up RAM: each push
+    //                          holds up to three copies of one chunk, and
+    //                          the writer lock serializes the wire anyway.
     // Phase 3 (sequential):    FileGet pulls + SyncDone marker.
-    const MAX_CONCURRENT_PUSHES: usize = 8;
+    const MAX_CONCURRENT_PUSHES: usize = 4;
     /// Below this size, the round-trip + signature overhead exceeds the
     /// bytes saved by sending a delta — just push the whole thing.
     const DELTA_MIN_SIZE: u64 = 256 * 1024;
@@ -400,22 +410,20 @@ where
     // task (which fired the matching `SignatureRequest`) can await them.
     let (sig_tx, mut sig_rx) = tokio::sync::mpsc::unbounded_channel::<(PathBuf, Option<Vec<u8>>)>();
 
-    let push_plan = plan.push.clone();
-    let get_plan = plan.get.clone();
-    let del_remote_plan = plan.del_remote.clone();
+    let get_plan = get.clone();
     let writer_for_send = writer.clone();
     let local_root_for_send = local_root.clone();
     let send_task = tokio::spawn(async move {
         use std::sync::atomic::{AtomicU64, Ordering};
         use tokio::sync::Semaphore;
 
-        let (non_files, all_files): (Vec<Entry>, Vec<Entry>) = push_plan
+        let (non_files, all_files): (Vec<Entry>, Vec<Entry>) = push
             .into_iter()
             .partition(|e| !matches!(e.kind, EntryKind::File));
 
         // Phase 0: propagate local deletions to the remote. The agent's
         // init-sync loop applies these (apply_delete + mark_deleted).
-        for path in del_remote_plan {
+        for path in del_remote {
             let mut w = writer_for_send.lock().await;
             write_message(&mut *w, &Message::Delete { path }, compress).await?;
         }
@@ -776,14 +784,13 @@ where
     let live_baseline = {
         let remote_by_path: HashMap<&PathBuf, &Entry> =
             remote_manifest.iter().map(|e| (&e.path, e)).collect();
-        let deleted_local: std::collections::HashSet<PathBuf> =
-            plan.del_local.iter().cloned().collect();
+        let deleted_local: std::collections::HashSet<PathBuf> = del_local.iter().cloned().collect();
         let mut converged: HashMap<PathBuf, Entry> = local_manifest
             .iter()
             .filter(|e| !deleted_local.contains(&e.path))
             .map(|e| (e.path.clone(), e.clone()))
             .collect();
-        for p in &plan.get {
+        for p in &get {
             if let Some(r) = remote_by_path.get(p) {
                 converged.insert(p.clone(), (*r).clone());
             }
@@ -798,6 +805,10 @@ where
         }
         LiveBaseline::seed(local_root.clone(), converged, &baseline)
     };
+    // From here on only the live baseline and ignore stack matter; without
+    // this the manifests, plan and previous baseline would sit in memory —
+    // three more copies of every path — for the whole session.
+    drop((local_manifest, remote_manifest, baseline, get, del_local));
 
     let _ = received_files;
 
@@ -875,24 +886,16 @@ async fn receive_manifest<R>(reader: &mut R) -> Result<(Vec<Entry>, Vec<PathBuf>
 where
     R: tokio::io::AsyncReadExt + Unpin,
 {
-    use std::collections::HashSet;
-
     match read_message(reader).await? {
         Message::ManifestBegin => {}
         Message::Error(e) => anyhow::bail!("remote: {e}"),
         m => anyhow::bail!("expected ManifestBegin, got {:?}", m),
     }
-    let mut entries = Vec::new();
-    let mut paths = HashSet::new();
+    let mut entries: Vec<Entry> = Vec::new();
     let mut excluded = Vec::new();
     loop {
         match read_message(reader).await? {
-            Message::ManifestEntry(e) => {
-                if !paths.insert(e.path.clone()) {
-                    anyhow::bail!("duplicate manifest path: {}", e.path.display());
-                }
-                entries.push(e);
-            }
+            Message::ManifestEntry(e) => entries.push(e),
             Message::ManifestExcluded { prefix } => {
                 if !excluded.contains(&prefix) {
                     excluded.push(prefix);
@@ -902,6 +905,13 @@ where
             Message::Error(e) => anyhow::bail!("remote: {e}"),
             m => anyhow::bail!("during manifest: {:?}", m),
         }
+    }
+    // The walker streams entries sorted, so this sort is a linear pass and
+    // one adjacent compare finds duplicates without copying every path into
+    // a set.
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    if let Some(dup) = entries.windows(2).find(|w| w[0].path == w[1].path) {
+        anyhow::bail!("duplicate manifest path: {}", dup[0].path.display());
     }
     Ok((entries, excluded))
 }

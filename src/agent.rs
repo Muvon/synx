@@ -134,8 +134,9 @@ where
         for prefix in excluded {
             write_frame(&mut *w, &Message::ManifestExcluded { prefix }, compress).await?;
         }
-        for e in &local_manifest {
-            write_frame(&mut *w, &Message::ManifestEntry(e.clone()), compress).await?;
+        // Moved, not cloned: each entry is freed once framed.
+        for e in local_manifest {
+            write_frame(&mut *w, &Message::ManifestEntry(e), compress).await?;
         }
         write_frame(&mut *w, &Message::ManifestEnd, compress).await?;
         w.flush().await?;
@@ -375,8 +376,9 @@ where
         write_message(&mut *w, &Message::SyncDone, compress).await?;
     }
 
-    // Persist our cache.
+    // Persist our cache; the agent never re-walks, so free it too.
     cache.save(&root);
+    drop(cache);
 
     // Drain watcher events buffered during the walk + manifest exchange +
     // ops loop. Echoes of our own writes filter through `suppress`; real

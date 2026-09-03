@@ -184,17 +184,21 @@ impl LiveBaseline {
         }
         self.persist_due();
     }
-    /// Copy of the converged entries, for the reconciliation sweep to diff
-    /// the live tree against (see `peer::reconcile_sweep`). Empty when
-    /// disabled (agent side) — callers treat that as "nothing to diff".
-    pub fn snapshot(&self) -> HashMap<PathBuf, Entry> {
+    /// True when there is nothing to diff against: disabled (agent side) or
+    /// no converged entries yet.
+    pub fn is_empty(&self) -> bool {
+        !self.enabled || self.inner.lock().map_or(true, |g| g.entries.is_empty())
+    }
+
+    /// Run `f` over the converged entries under the lock, so the
+    /// reconciliation sweep can diff against them without cloning the map
+    /// (see `peer::reconcile_sweep`). `f` must not call back into this
+    /// baseline. Yields `T::default()` when disabled.
+    pub fn with_entries<T: Default>(&self, f: impl FnOnce(&HashMap<PathBuf, Entry>) -> T) -> T {
         if !self.enabled {
-            return HashMap::new();
+            return T::default();
         }
-        self.inner
-            .lock()
-            .map(|g| g.entries.clone())
-            .unwrap_or_default()
+        self.inner.lock().map(|g| f(&g.entries)).unwrap_or_default()
     }
 
     /// Persist if dirty and the debounce interval has elapsed.

@@ -10,6 +10,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -110,6 +111,12 @@ pub fn apply_file_data(root: &Path, entry: &Entry, content: &[u8]) -> Result<()>
     if content.len() as u64 != entry.size || blake3::hash(content).as_bytes() != &entry.hash {
         anyhow::bail!("FileData content mismatch for {}", entry.path.display());
     }
+    write_file_atomic(root, entry, content)
+}
+
+/// Place already-verified `content` at `entry.path` via tmp + rename and
+/// stamp mode + mtime.
+fn write_file_atomic(root: &Path, entry: &Entry, content: &[u8]) -> Result<()> {
     let full = resolve_beneath(root, &entry.path)?;
     if let Some(parent) = full.parent() {
         fs::create_dir_all(parent)
@@ -598,8 +605,7 @@ pub fn apply_delta_to_file(
     if result_hash.as_bytes() != &entry.hash {
         anyhow::bail!("delta result hash mismatch for {}", entry.path.display());
     }
-    apply_file_data(root, entry, &new_content)?;
-    Ok(())
+    write_file_atomic(root, entry, &new_content)
 }
 
 /// Move `tmp` into place at `final_path` and stamp mode + mtime.
@@ -1057,8 +1063,9 @@ fn directions(mode: SyncMode, is_client: bool) -> (bool, bool) {
 }
 
 /// How often the client re-walks the tree to catch changes the watcher
-/// never reported. Unchanged files cost one stat (hash cache), so a sweep
-/// is cheap even on large trees.
+/// never reported. Unchanged files cost one stat (hash cache), and a tick
+/// with no watcher activity since the last one is skipped outright, so an
+/// idle session never re-walks.
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Diff the live tree against the converged baseline and return synthetic
@@ -1081,8 +1088,7 @@ async fn reconcile_sweep(
     cache: &Arc<StdMutex<HashCache>>,
     gate: &GitGate,
 ) -> Result<Vec<FsEvent>> {
-    let base = baseline.snapshot();
-    if base.is_empty() {
+    if baseline.is_empty() {
         return Ok(Vec::new());
     }
     if gate.busy(root) {
@@ -1100,25 +1106,31 @@ async fn reconcile_sweep(
         })
         .await??;
 
-    let on_disk: HashSet<&PathBuf> = manifest.iter().map(|e| &e.path).collect();
-    let mut events = Vec::new();
-    for entry in &manifest {
-        match base.get(&entry.path) {
-            Some(converged) if converged.same_content(entry) => {}
-            _ => events.push(FsEvent::Modified(entry.path.clone())),
-        }
-    }
-    for path in base.keys() {
-        if !on_disk.contains(path) {
-            // Git went busy between the gate check above and the walk: the
-            // walker paused the subtree, so its absence from the manifest is
-            // not deletion evidence (same contract as the manifest exchange).
-            if excluded.iter().any(|prefix| path.starts_with(prefix)) {
-                continue;
+    let on_disk: HashSet<&Path> = manifest.iter().map(|e| e.path.as_path()).collect();
+    // Diff under the baseline lock rather than cloning the whole map first;
+    // nothing else mutates it while the live loop task is in here.
+    let events = baseline.with_entries(|base| {
+        let mut events = Vec::new();
+        for entry in &manifest {
+            match base.get(&entry.path) {
+                Some(converged) if converged.same_content(entry) => {}
+                _ => events.push(FsEvent::Modified(entry.path.clone())),
             }
-            events.push(FsEvent::Removed(path.clone()));
         }
-    }
+        for path in base.keys() {
+            if !on_disk.contains(path.as_path()) {
+                // Git went busy between the gate check above and the walk:
+                // the walker paused the subtree, so its absence from the
+                // manifest is not deletion evidence (same contract as the
+                // manifest exchange).
+                if excluded.iter().any(|prefix| path.starts_with(prefix)) {
+                    continue;
+                }
+                events.push(FsEvent::Removed(path.clone()));
+            }
+        }
+        events
+    });
     Ok(events)
 }
 
@@ -1202,6 +1214,7 @@ where
 
     let watcher::WatcherHandle {
         events: mut event_rx,
+        activity,
         keepalive: _watcher,
     } = watcher_handle;
 
@@ -1292,7 +1305,10 @@ where
             }
 
             _ = reconcile_tick.tick() => {
-                if send_local {
+                // The sweep exists to catch events the watcher dropped under
+                // churn; a tree it reported nothing about has nothing to
+                // catch, so skip the walk entirely.
+                if send_local && activity.swap(false, Ordering::Relaxed) {
                     if let Some(cache) = &reconcile {
                         if let Err(e) = run_reconcile_sweep(&ctx, &writer, &suppress, cache).await {
                             tracing::warn!("reconcile sweep failed: {}", e);

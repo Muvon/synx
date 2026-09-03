@@ -1,9 +1,10 @@
 use anyhow::Result;
 use notify::{EventKind, RecursiveMode};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
+use notify_debouncer_full::{new_debouncer_opt, DebounceEventResult, Debouncer, NoCache};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -11,6 +12,13 @@ use tokio::sync::mpsc;
 use crate::ignores::IgnoreStack;
 use crate::paths::is_internal_temp;
 use crate::peer::Suppression;
+
+/// Editor save storms coalesce inside this window.
+const DEBOUNCE: Duration = Duration::from_millis(200);
+/// How often the debouncer thread wakes to flush. The default is a quarter
+/// of the window — 20 wakeups a second forever; this halves that at the
+/// cost of at most 100 ms extra delivery latency.
+const DEBOUNCE_TICK: Duration = Duration::from_millis(100);
 
 /// What our higher layers care about, regardless of platform quirks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,9 +109,14 @@ fn normalize_event(
 
 pub struct WatcherHandle {
     pub events: mpsc::UnboundedReceiver<Vec<FsEvent>>,
+    /// Set whenever the backend reported anything at all — including events
+    /// the ignore filter dropped or a queue-overflow rescan. The live loop's
+    /// reconciliation sweep runs only after activity, so an idle tree is
+    /// never re-walked.
+    pub activity: Arc<AtomicBool>,
     /// Held to keep the debouncer + watcher threads alive for the
     /// duration of the live session. Dropped on shutdown.
-    pub keepalive: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
+    pub keepalive: Debouncer<notify::RecommendedWatcher, NoCache>,
 }
 
 fn recoverable_watch_error(error: &notify::Error) -> bool {
@@ -223,32 +236,45 @@ pub fn spawn(
 ) -> Result<WatcherHandle> {
     let (tx, rx) = mpsc::unbounded_channel::<Vec<FsEvent>>();
     let root_cb = root.clone();
+    let activity = Arc::new(AtomicBool::new(false));
+    let activity_cb = Arc::clone(&activity);
 
-    let mut debouncer = new_debouncer(
-        Duration::from_millis(200),
-        None,
-        move |result: DebounceEventResult| match result {
-            Ok(events) => {
-                let mut out: Vec<FsEvent> = Vec::with_capacity(events.len());
-                for ev in events {
-                    normalize_event(
-                        &root_cb,
-                        &suppress,
-                        ignores.get().map(Arc::as_ref),
-                        &ev.event,
-                        &mut out,
-                    );
+    // `NoCache` on every platform (Linux already defaults to it). The macOS
+    // default keeps a file-id map that walks the whole tree at startup —
+    // following symlinks, ignoring .gitignore — and holds an entry per path
+    // for the session, only to pair the two halves of a rename. Without it
+    // a rename reaches us as two events that `forward_local_events` grounds
+    // in disk state: a delete plus a send, which still converges.
+    let mut debouncer = new_debouncer_opt::<_, notify::RecommendedWatcher, NoCache>(
+        DEBOUNCE,
+        Some(DEBOUNCE_TICK),
+        move |result: DebounceEventResult| {
+            activity_cb.store(true, Ordering::Relaxed);
+            match result {
+                Ok(events) => {
+                    let mut out: Vec<FsEvent> = Vec::with_capacity(events.len());
+                    for ev in events {
+                        normalize_event(
+                            &root_cb,
+                            &suppress,
+                            ignores.get().map(Arc::as_ref),
+                            &ev.event,
+                            &mut out,
+                        );
+                    }
+                    if !out.is_empty() {
+                        let _ = tx.send(out);
+                    }
                 }
-                if !out.is_empty() {
-                    let _ = tx.send(out);
-                }
-            }
-            Err(errs) => {
-                for e in errs {
-                    tracing::warn!("watcher: {e}");
+                Err(errs) => {
+                    for e in errs {
+                        tracing::warn!("watcher: {e}");
+                    }
                 }
             }
         },
+        NoCache,
+        notify::Config::default(),
     )?;
 
     // 0.7: direct .watch() on the Debouncer instead of .watcher().watch().
@@ -263,6 +289,7 @@ pub fn spawn(
 
     Ok(WatcherHandle {
         events: rx,
+        activity,
         keepalive: debouncer,
     })
 }

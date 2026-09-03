@@ -16,7 +16,10 @@ use anyhow::Result;
 use clap::Parser;
 use cli::Cli;
 
-#[tokio::main(flavor = "multi_thread")]
+// Two workers are plenty: the runtime only shuffles frames and events, while
+// walking and hashing run on blocking threads. Idle workers per core would
+// only add thread stacks.
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     ui::init(cli.verbose, cli.agent);

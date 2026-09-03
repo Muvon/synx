@@ -106,15 +106,15 @@ synx/
 | `MAX_MESSAGE_SIZE` | 64 MiB | protocol.rs | per-message cap |
 | `COMPRESS_THRESHOLD` / `COMPRESS_LEVEL` | 512 B / 3 | protocol.rs | zstd above threshold |
 | `IO_BUF_SIZE` | 64 KiB | protocol.rs | ssh stdio buffering |
-| `CHUNK_THRESHOLD` / `CHUNK_SIZE` | 16 MiB / 4 MiB | protocol.rs | streamed transfer band |
-| `MAX_CONCURRENT_PUSHES` | 8 | sync.rs | semaphore-bounded pushes |
+| `CHUNK_THRESHOLD` / `CHUNK_SIZE` | 4 MiB / 4 MiB | protocol.rs | whole-file below one chunk, streamed above |
+| `MAX_CONCURRENT_PUSHES` | 4 | sync.rs | semaphore-bounded pushes |
 | `DELTA_MIN_SIZE` / `DELTA_MAX_SIZE` | 256 KiB / 256 MiB | sync.rs | delta-sync band; outside → full transfer |
 | `RSYNC_BLOCK_SIZE` / `RSYNC_STRONG_LEN` | 4096 / 8 | peer.rs | fast_rsync signature params |
 | `SUPPRESS_TTL` / `SUPPRESS_SWEEP` | 60 s / 5 s | peer.rs | echo-suppression entry lifetime |
-| `RECONCILE_INTERVAL` | 30 s | peer.rs | missed-events sweep |
+| `RECONCILE_INTERVAL` | 30 s | peer.rs | missed-events sweep; skipped when the watcher was silent |
 | `STALE_AFTER` | 600 s | peer.rs | git markers older → ignored (crashed git self-heals) |
 | `GIT_SETTLE` | 5 s | peer.rs | quiet period after git finishes |
-| debounce | 200 ms | watcher.rs | editor save-storm coalescing |
+| `DEBOUNCE` / `DEBOUNCE_TICK` | 200 ms / 100 ms | watcher.rs | editor save-storm coalescing / flush wakeup |
 
 ### Sync semantics
 

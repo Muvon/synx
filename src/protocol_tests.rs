@@ -212,4 +212,40 @@ fn compressed_decode_is_bounded() {
     let decoded = decode_compressed_limited(&compressed, 4096).unwrap();
     assert_eq!(decoded, vec![b'x'; 4096]);
     assert!(decode_compressed_limited(b"not zstd", 4096).is_err());
+
+    // Our own frames declare their size: the bound must apply before any
+    // allocation, and the one-shot path must decode correctly.
+    let declared = compress_payload(&vec![b'x'; 4096]).unwrap();
+    let error = decode_compressed_limited(&declared, 1024).unwrap_err();
+    assert!(error.to_string().contains("decompressed message too large"));
+    assert_eq!(
+        decode_compressed_limited(&declared, 4096).unwrap(),
+        vec![b'x'; 4096]
+    );
+}
+
+#[test]
+fn byte_payloads_keep_the_plain_vec_encoding() {
+    // `serde_bytes` must encode exactly like `Vec<u8>` did (varint length +
+    // raw bytes); a difference here is a silent wire change.
+    let chunk = Message::FileChunk {
+        path: PathBuf::from("a"),
+        data: vec![1, 2, 3],
+    };
+    assert_eq!(
+        postcard::to_allocvec(&chunk).unwrap(),
+        [8, 1, b'a', 3, 1, 2, 3]
+    );
+    let sig = Message::Signature {
+        path: PathBuf::from("a"),
+        sig: Some(vec![9]),
+    };
+    assert_eq!(postcard::to_allocvec(&sig).unwrap(), [12, 1, b'a', 1, 1, 9]);
+    let none = Message::Signature {
+        path: PathBuf::from("a"),
+        sig: None,
+    };
+    assert_eq!(postcard::to_allocvec(&none).unwrap(), [12, 1, b'a', 0]);
+    let back: Message = postcard::from_bytes(&[8, 1, b'a', 3, 1, 2, 3]).unwrap();
+    assert!(matches!(back, Message::FileChunk { data, .. } if data == [1, 2, 3]));
 }
