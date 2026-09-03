@@ -884,8 +884,19 @@ enum ApplyState {
     /// their "content"). Used for echo suppression (mtime match) AND
     /// sender-side dedup (hash match → send `Touch` instead of full file).
     Set { mtime: i64, hash: [u8; 32] },
-    /// We just deleted the path and expect it to not exist.
+    /// The local user deleted the path and we told the peer. Feeds the
+    /// stale-create guard: content the peer had already put on the wire
+    /// must not resurrect what the user just removed.
     Deleted,
+    /// We deleted the path because the peer told us to. Its own watcher
+    /// echo still has to be suppressed, but the guard must NOT fire for it:
+    /// one connection delivers a peer's messages in order, so anything that
+    /// peer sends about this path *after* its own delete is newer, not
+    /// stale. Dropping it (a `git checkout` or rebase that removes a file
+    /// and brings it back) loses the file on this side while the sender
+    /// records it converged, and the next session reads that as deletion
+    /// evidence and removes the sender's copy too.
+    AppliedDelete,
     /// The watcher observed a local delete we did NOT apply ourselves.
     /// Feeds the stale-create guard (`is_recently_deleted`) so in-flight
     /// peer data can't resurrect the path, but is never an echo — the
@@ -934,9 +945,35 @@ impl Suppression {
         self.mark_set(path, mtime_ns, NO_HASH);
     }
 
+    /// Record a delete that originated here: the local user removed the
+    /// path and we sent the peer a `Delete`.
     pub fn mark_deleted(&self, path: PathBuf) {
+        self.mark(path, ApplyState::Deleted);
+    }
+
+    /// Record a delete we performed on the peer's instruction. Suppresses
+    /// our watcher's echo without arming the stale-create guard against
+    /// that peer's later messages for the path.
+    pub fn mark_applied_delete(&self, path: PathBuf) {
+        self.mark(path, ApplyState::AppliedDelete);
+    }
+
+    fn mark(&self, path: PathBuf, state: ApplyState) {
         if let Ok(mut g) = self.inner.lock() {
-            g.map.insert(path, (ApplyState::Deleted, Instant::now()));
+            g.map.insert(path, (state, Instant::now()));
+        }
+    }
+
+    /// Age an existing mark, so the TTL-bounded behaviour is testable
+    /// without sleeping out the whole window.
+    #[cfg(test)]
+    pub(crate) fn backdate(&self, path: &Path, age: Duration) {
+        if let Ok(mut g) = self.inner.lock() {
+            if let Some((_, t)) = g.map.get_mut(path) {
+                if let Some(earlier) = t.checked_sub(age) {
+                    *t = earlier;
+                }
+            }
         }
     }
 
@@ -947,7 +984,8 @@ impl Suppression {
     pub fn mark_observed_deleted(&self, path: PathBuf) {
         if let Ok(mut g) = self.inner.lock() {
             match g.map.get(&path) {
-                Some((ApplyState::Deleted, t)) if t.elapsed() < SUPPRESS_TTL => {}
+                Some((ApplyState::Deleted | ApplyState::AppliedDelete, t))
+                    if t.elapsed() < SUPPRESS_TTL => {}
                 _ => {
                     g.map
                         .insert(path, (ApplyState::ObservedDeleted, Instant::now()));
@@ -956,15 +994,22 @@ impl Suppression {
         }
     }
 
-    /// True if we recently deleted (or sent a delete for, or observed the
-    /// local deletion of) this path.
+    /// True if the *local* side removed this path within the suppression
+    /// window, so peer content for it may be a stale in-flight write.
+    ///
+    /// A delete we applied for the peer is deliberately excluded (see
+    /// `ApplyState::AppliedDelete`). The window is enforced here rather
+    /// than left to the pruning sweep in `is_echo`: that sweep only runs
+    /// when an event happens to arrive, so a quiet tree kept marks alive
+    /// indefinitely and the guard never released the path.
     pub fn is_recently_deleted(&self, path: &Path) -> bool {
         let Ok(g) = self.inner.lock() else {
             return false;
         };
         matches!(
             g.map.get(path),
-            Some((ApplyState::Deleted | ApplyState::ObservedDeleted, _))
+            Some((ApplyState::Deleted | ApplyState::ObservedDeleted, t))
+                if t.elapsed() < SUPPRESS_TTL
         )
     }
 
@@ -1026,7 +1071,9 @@ impl Suppression {
                 let cur = lstat_mtime_ns(&root.join(key));
                 cur != 0 && cur == *expected
             }
-            (ApplyState::Deleted, FsEvent::Removed(_)) => !root.join(key).exists(),
+            (ApplyState::Deleted | ApplyState::AppliedDelete, FsEvent::Removed(_)) => {
+                !root.join(key).exists()
+            }
             _ => false,
         }
     }
@@ -1600,7 +1647,7 @@ where
                 .is_some_and(|full| fs::symlink_metadata(full).is_ok());
             apply_delete(root, &path)?;
             ctx.baseline.remove(&path);
-            suppress.mark_deleted(path.clone());
+            suppress.mark_applied_delete(path.clone());
             if existed_before && log_event {
                 eprintln!("  {} × {}", "←".bright_cyan(), path.display());
             }
@@ -1633,7 +1680,7 @@ where
             if let Some(e) = build_entry(root, &to)? {
                 ctx.baseline.set(e);
             }
-            suppress.mark_deleted(from);
+            suppress.mark_applied_delete(from);
             let mt = lstat_mtime_ns(&root.join(&to));
             suppress.mark_mtime(to, mt);
         }

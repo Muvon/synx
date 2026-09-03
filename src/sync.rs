@@ -379,7 +379,7 @@ where
     for path in &del_local {
         match apply_delete(&local_root, path) {
             Ok(()) => {
-                suppress.mark_deleted(path.clone());
+                suppress.mark_applied_delete(path.clone());
                 eprintln!("  {} × {}", "←".bright_cyan(), path.display());
             }
             Err(e) => tracing::warn!("local delete {}: {}", path.display(), e),
@@ -689,14 +689,14 @@ where
                 if let Err(e) = apply_delete(&local_root, &path) {
                     warn_apply(&path, &e);
                 } else {
-                    suppress.mark_deleted(path);
+                    suppress.mark_applied_delete(path);
                 }
             }
             Message::Rename { from, to } => {
                 if let Err(e) = apply_rename(&local_root, &from, &to) {
                     warn_apply(&to, &e);
                 } else {
-                    suppress.mark_deleted(from);
+                    suppress.mark_applied_delete(from);
                     let mt = resolve_beneath(&local_root, &to)
                         .ok()
                         .and_then(|full| std::fs::symlink_metadata(full).ok())

@@ -1381,3 +1381,134 @@ async fn incoming_rename_rekeys_the_baseline_subtree() {
     assert_eq!(keys, ["moved", "moved/child"].map(PathBuf::from));
     assert!(writer.lock().await.is_empty());
 }
+
+#[test]
+fn applied_delete_suppresses_the_echo_without_guarding_the_peers_recreate() {
+    let root = TestDir::new("applied-del");
+    let path = PathBuf::from("file");
+    let suppression = Suppression::default();
+
+    // Deleted on the peer's instruction: our own watcher echo is still
+    // suppressed, but that peer's later content for the path came after
+    // its delete on one ordered stream, so it is newer and never stale.
+    suppression.mark_applied_delete(path.clone());
+    assert!(suppression.is_echo(root.path(), &FsEvent::Removed(path.clone())));
+    assert!(!suppression.is_recently_deleted(&path));
+
+    // The watcher echo of that unlink must not downgrade it to a local
+    // delete, which would re-arm the guard against the same peer.
+    suppression.mark_observed_deleted(path.clone());
+    assert!(!suppression.is_recently_deleted(&path));
+    assert!(suppression.is_echo(root.path(), &FsEvent::Removed(path.clone())));
+
+    // A delete made here still guards in-flight peer content, and now
+    // releases the path once the window passes. Previously the mark was
+    // only dropped by the pruning sweep in `is_echo`, which runs only when
+    // an event happens to arrive, so on a quiet tree the guard held the
+    // path for the rest of the session.
+    for mark in [
+        Suppression::mark_deleted,
+        Suppression::mark_observed_deleted,
+    ] {
+        mark(&suppression, path.clone());
+        assert!(suppression.is_recently_deleted(&path));
+        suppression.backdate(&path, SUPPRESS_TTL + Duration::from_secs(1));
+        assert!(!suppression.is_recently_deleted(&path));
+    }
+}
+
+#[tokio::test]
+async fn a_peers_delete_never_blocks_that_peers_recreate() {
+    // A `git checkout` or rebase that removes paths and brings them back
+    // sends Delete then content for the same path down one ordered stream.
+    // Dropping the second as a stale create lost the path on this side
+    // while the sender recorded it converged, and the next session read
+    // that baseline as proof we had deleted it and removed the sender's
+    // copy too.
+    let root = TestDir::new("recreate");
+    let ctx = session_ctx(root.path());
+    let suppress = Suppression::default();
+    let pending = Pending::default();
+    let writer = Arc::new(Mutex::new(Vec::new()));
+
+    fs::write(root.path().join("file"), b"v1").unwrap();
+    fs::create_dir(root.path().join("dir")).unwrap();
+    std::os::unix::fs::symlink("file", root.path().join("link")).unwrap();
+
+    for path in ["file", "dir", "link"] {
+        handle_incoming(
+            &ctx,
+            Message::Delete {
+                path: PathBuf::from(path),
+            },
+            &suppress,
+            &pending,
+            &writer,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(!root.path().join(path).exists(), "{path}");
+    }
+
+    let mut link = kind_entry("link", EntryKind::Symlink);
+    link.link_target = Some(PathBuf::from("file"));
+    for message in [
+        Message::FileData {
+            entry: file_entry("file", b"v2"),
+            content: b"v2".to_vec(),
+        },
+        Message::MkDir {
+            entry: kind_entry("dir", EntryKind::Dir),
+        },
+        Message::MkSymlink { entry: link },
+    ] {
+        handle_incoming(&ctx, message, &suppress, &pending, &writer, true)
+            .await
+            .unwrap();
+    }
+    assert_eq!(fs::read(root.path().join("file")).unwrap(), b"v2");
+    assert!(root.path().join("dir").is_dir());
+    assert_eq!(
+        fs::read_link(root.path().join("link")).unwrap(),
+        Path::new("file")
+    );
+
+    // A rename the peer sends after its own delete of the source is newer
+    // too: the source is back, so the move must land.
+    handle_incoming(
+        &ctx,
+        Message::Rename {
+            from: PathBuf::from("file"),
+            to: PathBuf::from("moved"),
+        },
+        &suppress,
+        &pending,
+        &writer,
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(fs::read(root.path().join("moved")).unwrap(), b"v2");
+    assert!(!root.path().join("file").exists());
+
+    // Unchanged: content the peer had already put on the wire when the
+    // local user deleted the path must still not resurrect it.
+    fs::write(root.path().join("gone"), b"x").unwrap();
+    fs::remove_file(root.path().join("gone")).unwrap();
+    suppress.mark_deleted(PathBuf::from("gone"));
+    handle_incoming(
+        &ctx,
+        Message::FileData {
+            entry: file_entry("gone", b"stale"),
+            content: b"stale".to_vec(),
+        },
+        &suppress,
+        &pending,
+        &writer,
+        true,
+    )
+    .await
+    .unwrap();
+    assert!(!root.path().join("gone").exists());
+}
