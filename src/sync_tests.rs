@@ -353,7 +353,7 @@ async fn manifest_receiver_accepts_valid_stream_and_rejects_bad_sequences() {
     let (entries, excluded) = receive_manifest(&mut with_exclusion.as_slice())
         .await
         .unwrap();
-    assert_eq!(entries, [first.clone()]);
+    assert_eq!(entries, std::slice::from_ref(&first));
     assert_eq!(
         excluded,
         [PathBuf::from(".git")],
