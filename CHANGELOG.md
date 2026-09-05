@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.1.4] - 2026-09-05
+
+### 📋 Release Summary
+
+This release introduces a breaking change to sync behavior: excluded manifest subtrees are preserved, and mismatched Git repositories are prevented (0c857c29, 08dc49ed). Sync reliability is improved by preserving files, deletes, renames, and file identities—including during Git operations—while correctly handling ignore rules and forwarding observed deletes (2b540cec, 9f4e99f2, 2ec638a1, 1b277799, 8f7c4a7b, 84b54211). Sync also reduces memory and I/O overhead (22a89c22).
+
+
+### ✨ New Features & Enhancements
+
+- **sync**: preserve excluded manifest subtrees `0c857c29`
+- **sync**: prevent git repository mismatches `08dc49ed`
+
+### 🔧 Improvements & Optimizations
+
+- **workflows**: cancel superseded CI runs `d2a7edab`
+- **sync**: avoid cloning manifest entry in assertion `06a013df`
+- **sync**: reduce sync memory and I/O overhead `22a89c22`
+- **release**: update macOS runner versions `3bc23809`
+- **rust**: pin toolchains to 1.98.0 `ddd85ecf`
+- **coverage**: enable coverage reporting `f464e438`
+- **tests**: extract module tests `87c8a8b6`
+- **sync**: return manifest walk directly `bd0f1ebe`
+
+### 🐛 Bug Fixes & Stability
+
+- **peer**: preserve files after deletes `2b540cec`
+- **sync**: preserve activity and rename state `9f4e99f2`
+- **sync**: preserve renames and file identities `2ec638a1`
+- **walker**: exclude external ignore rules from manifests `1b277799`
+- **watcher**: forward observed deletes to peers `8f7c4a7b`
+- **sync**: preserve .git during git operations `84b54211`
+
+### 📚 Documentation & Examples
+
+- **agents**: document applied delete suppression `cb5d62df`
+- clarify sync, testing, and release flow `82d74946`
+
+### 🔄 Other Changes
+
+2 maintenance, dependency, and tooling updates not listed individually.
+
 ## [0.1.3] - 2026-08-29
 
 ### 📋 Release Summary
