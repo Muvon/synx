@@ -615,8 +615,17 @@ where
     // same error forever.
     let mut bytes_recv: u64 = 0;
     let mut received_files: u64 = 0;
-    let warn_apply = |path: &std::path::Path, e: &anyhow::Error| {
+    // Paths this sync did NOT converge: we failed to apply the remote's
+    // version, or the remote reported failing to apply ours. Either way the
+    // two sides differ, so they must stay out of the seeded baseline —
+    // recorded as converged, the next session would read the gap as a
+    // deletion and remove the surviving copy.
+    let mut unconverged: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let warn_apply = |unconverged: &mut std::collections::HashSet<PathBuf>,
+                      path: &std::path::Path,
+                      e: &anyhow::Error| {
         tracing::warn!("apply {} failed: {}", path.display(), e);
+        unconverged.insert(path.to_path_buf());
     };
     loop {
         let msg = read_message(&mut reader).await?;
@@ -627,7 +636,7 @@ where
                 let hash = entry.hash;
                 let path = entry.path.clone();
                 if let Err(e) = apply_file_data(&local_root, &entry, &content) {
-                    warn_apply(&path, &e);
+                    warn_apply(&mut unconverged, &path, &e);
                 } else {
                     received_files += 1;
                     suppress.mark_set(path, mt, hash);
@@ -636,13 +645,13 @@ where
             Message::FileStart { entry, .. } => {
                 let path = entry.path.clone();
                 if let Err(e) = pending.start(&local_root, entry).await {
-                    warn_apply(&path, &e);
+                    warn_apply(&mut unconverged, &path, &e);
                 }
             }
             Message::FileChunk { path, data } => {
                 bytes_recv += data.len() as u64;
                 if let Err(e) = pending.chunk(&path, &data).await {
-                    warn_apply(&path, &e);
+                    warn_apply(&mut unconverged, &path, &e);
                 }
             }
             Message::FileEnd { path } => match pending.end(&local_root, &path).await {
@@ -651,12 +660,12 @@ where
                     suppress.mark_set(entry.path, entry.mtime, entry.hash);
                 }
                 Ok(None) => {}
-                Err(e) => warn_apply(&path, &e),
+                Err(e) => warn_apply(&mut unconverged, &path, &e),
             },
             Message::MkDir { entry } => {
                 let path = entry.path.clone();
                 if let Err(e) = apply_mkdir(&local_root, &entry) {
-                    warn_apply(&path, &e);
+                    warn_apply(&mut unconverged, &path, &e);
                 } else {
                     let mt = resolve_beneath(&local_root, &path)
                         .ok()
@@ -672,7 +681,7 @@ where
             Message::MkSymlink { entry } => {
                 let path = entry.path.clone();
                 if let Err(e) = apply_symlink(&local_root, &entry) {
-                    warn_apply(&path, &e);
+                    warn_apply(&mut unconverged, &path, &e);
                 } else {
                     let mt = resolve_beneath(&local_root, &path)
                         .ok()
@@ -687,14 +696,14 @@ where
             }
             Message::Delete { path } => {
                 if let Err(e) = apply_delete(&local_root, &path) {
-                    warn_apply(&path, &e);
+                    warn_apply(&mut unconverged, &path, &e);
                 } else {
                     suppress.mark_applied_delete(path);
                 }
             }
             Message::Rename { from, to } => {
                 if let Err(e) = apply_rename(&local_root, &from, &to) {
-                    warn_apply(&to, &e);
+                    warn_apply(&mut unconverged, &to, &e);
                 } else {
                     suppress.mark_applied_delete(from);
                     let mt = resolve_beneath(&local_root, &to)
@@ -728,7 +737,7 @@ where
                 let mt = entry.mtime;
                 let hash = entry.hash;
                 if let Err(e) = apply_delta_to_file(&local_root, &entry, base_hash, &delta) {
-                    warn_apply(&path, &e);
+                    warn_apply(&mut unconverged, &path, &e);
                 } else {
                     received_files += 1;
                     suppress.mark_set(path, mt, hash);
@@ -752,6 +761,13 @@ where
                 }
             }
             Message::SyncDone => break,
+            // Remote could not apply one of our pushes. It doesn't hold that
+            // path, so keep it out of the baseline and let the next session
+            // push it again.
+            Message::ApplyFailed { path, reason } => {
+                tracing::warn!("remote failed to apply {}: {}", path.display(), reason);
+                unconverged.insert(path);
+            }
             // Remote reported a per-op failure (type conflict, perm denied,
             // git busy on its side). Log and continue — bailing here would
             // tear down the session and retry forever.
@@ -777,21 +793,26 @@ where
 
     // Seed the next session's baseline from the converged manifest. After init
     // sync the local tree equals the merged result: start from the local
-    // manifest, drop what we just deleted locally, and overwrite pulled paths
-    // with the remote's version (we now hold its content). This live baseline
-    // is then kept current by the live loop and persisted on exit — it's what
-    // lets the next run tell a genuine deletion from a peer creation, even for
-    // a file created and removed within a single session.
+    // manifest, drop what we just deleted locally and anything that failed to
+    // apply on either side, and overwrite pulled paths with the remote's
+    // version (we now hold its content). Sound only here, at the one point
+    // both sides have confirmed their work: the remote's `SyncDone` follows
+    // every apply it did, and any it failed arrived as `ApplyFailed` before
+    // it. The live loop confirms its own updates per barrier (see
+    // `LiveBaseline::begin_barrier`).
     let live_baseline = {
         let remote_by_path: HashMap<&PathBuf, &Entry> =
             remote_manifest.iter().map(|e| (&e.path, e)).collect();
         let deleted_local: std::collections::HashSet<PathBuf> = del_local.iter().cloned().collect();
         let mut converged: HashMap<PathBuf, Entry> = local_manifest
             .iter()
-            .filter(|e| !deleted_local.contains(&e.path))
+            .filter(|e| !deleted_local.contains(&e.path) && !unconverged.contains(&e.path))
             .map(|e| (e.path.clone(), e.clone()))
             .collect();
         for p in &get {
+            if unconverged.contains(p) {
+                continue;
+            }
             if let Some(r) = remote_by_path.get(p) {
                 converged.insert(p.clone(), (*r).clone());
             }

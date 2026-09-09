@@ -4,7 +4,7 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024; // 64 MiB per-message
 pub const COMPRESS_THRESHOLD: usize = 512;
 pub const COMPRESS_LEVEL: i32 = 3;
@@ -195,6 +195,18 @@ pub enum Message {
     ManifestExcluded {
         prefix: PathBuf,
     },
+
+    /// The receiver could not apply the op for `path` (permission denied,
+    /// type conflict, disk full). Carries the path — unlike the free-form
+    /// `Error` — because the sender must drop it from its converged state:
+    /// a path recorded as converged while the peer doesn't hold it is read
+    /// as "the peer deleted this" by the next session's three-way diff,
+    /// which then deletes the sender's copy. Appended last so existing
+    /// variant indices stay wire-stable.
+    ApplyFailed {
+        path: PathBuf,
+        reason: String,
+    },
 }
 
 /// Protocol paths are always relative to the negotiated synchronization root.
@@ -249,6 +261,7 @@ impl Message {
             | Message::Signature { path, .. }
             | Message::PullDelta { path, .. }
             | Message::Delete { path }
+            | Message::ApplyFailed { path, .. }
             | Message::ManifestExcluded { prefix: path } => validate_relative_path(path),
             Message::Rename { from, to } => {
                 validate_relative_path(from)?;

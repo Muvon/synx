@@ -102,7 +102,7 @@ synx/
 
 | Constant | Value | Where | Meaning |
 |----------|-------|-------|---------|
-| `PROTOCOL_VERSION` | 2 | protocol.rs | bump on ANY wire change |
+| `PROTOCOL_VERSION` | 4 | protocol.rs | bump on ANY wire change |
 | `MAX_MESSAGE_SIZE` | 64 MiB | protocol.rs | per-message cap |
 | `COMPRESS_THRESHOLD` / `COMPRESS_LEVEL` | 512 B / 3 | protocol.rs | zstd above threshold |
 | `IO_BUF_SIZE` | 64 KiB | protocol.rs | ssh stdio buffering |
@@ -112,6 +112,7 @@ synx/
 | `RSYNC_BLOCK_SIZE` / `RSYNC_STRONG_LEN` | 4096 / 8 | peer.rs | fast_rsync signature params |
 | `SUPPRESS_TTL` / `SUPPRESS_SWEEP` | 60 s / 5 s | peer.rs | echo-suppression entry lifetime |
 | `RECONCILE_INTERVAL` | 30 s | peer.rs | missed-events sweep; skipped when the watcher was silent |
+| `BARRIER_INTERVAL` | 3 s | peer.rs | `Ping`/`Pong` that confirms the baseline; silent when nothing is pending |
 | `STALE_AFTER` | 600 s | peer.rs | git markers older → ignored (crashed git self-heals) |
 | `GIT_SETTLE` | 5 s | peer.rs | quiet period after git finishes |
 | `DEBOUNCE` / `DEBOUNCE_TICK` | 200 ms / 100 ms | watcher.rs | editor save-storm coalescing / flush wakeup |
@@ -121,6 +122,9 @@ synx/
 - `.git/` **is synced by design**; the gate only pauses it during active git operations.
 - At handshake both sides report normalized git remotes; both roots identifiable repos sharing zero remotes → client refuses (`--allow-repo-mismatch` overrides).
 - Deletions propagate only with baseline evidence: the surviving copy must be byte-identical to the last converged state. First run has no baseline → nothing is deleted (stale-path safety).
+- **The baseline may only record what the peer confirmed applying.** A path written there while the peer doesn't hold it is read as a deletion by the next session, which then deletes the last copy — that is how a live repo lost a commit. Two confirmation points, and no others: init sync (the peer's `SyncDone` follows every apply, and anything it failed arrives as `ApplyFailed` first — `sync.rs` keeps those paths out of the seed) and the live barrier (`LiveBaseline::begin_barrier` snapshots at `Ping`, `commit_barrier` writes it when `Pong` returns). Session teardown persists nothing: unconfirmed claims are dropped, and the next session re-derives them from the manifest exchange.
+- `ApplyFailed { path, reason }` — not a bare `Error` — is what an apply failure owes the sender, so it can `LiveBaseline::forget` the path and void any snapshot claiming it.
+- A `Ping` arriving while `.git/` ops sit in the gate's defer queue is queued behind them: answering early would confirm work that hasn't been applied. Teardown drains that queue (`GitGate::close`) rather than dropping it.
 - Type mismatch (file vs dir vs symlink) → conflict surfaced, skipped, never blind-applied.
 - The remote manifest is filtered through the **local** ignore stack before planning (agent doesn't know our rules).
 - Echo suppression is state-based (recorded mtime/hash vs current on-disk state), not a time window — user edits during apply still flow.

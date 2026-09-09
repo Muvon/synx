@@ -591,6 +591,42 @@ async fn dry_run_stops_after_manifest_and_plan() {
     assert!(saw_bye);
 }
 
+#[tokio::test]
+async fn a_push_the_remote_rejected_stays_out_of_the_seeded_baseline() {
+    let root = TestDir::new("apply-failed");
+    fs::write(root.0.join("landed"), b"applied there").unwrap();
+    fs::write(root.0.join("rejected"), b"never written there").unwrap();
+
+    // Empty remote manifest: both files are pushed, and the remote reports
+    // that one of them could not be written.
+    let input = encode([
+        Message::ManifestBegin,
+        Message::ManifestEnd,
+        Message::ApplyFailed {
+            path: PathBuf::from("rejected"),
+            reason: "permission denied".into(),
+        },
+        Message::SyncDone,
+    ])
+    .await;
+    run_inner(
+        root.0.clone(),
+        once_args(&root.0),
+        false,
+        std::io::Cursor::new(input),
+        Arc::new(Mutex::new(Vec::new())),
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Seeded as converged, the file's absence on the remote would read as a
+    // deletion next session — and delete the only copy we have.
+    let seeded = Baseline::load(&root.0);
+    assert!(seeded.get(Path::new("landed")).is_some());
+    assert!(seeded.get(Path::new("rejected")).is_none());
+}
+
 #[test]
 fn classifies_fatal_errors_and_shortens_multiline_messages() {
     assert!(is_fatal(&anyhow::anyhow!("protocol mismatch")));

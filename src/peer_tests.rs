@@ -1,4 +1,5 @@
 use super::*;
+use crate::baseline::Baseline;
 use crate::ignores::IgnoreStack;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -64,6 +65,75 @@ fn session_ctx(root: &Path) -> SessionCtx {
         gate: GitGate::default(),
         baseline: LiveBaseline::disabled(),
     }
+}
+
+#[tokio::test]
+async fn barrier_replies_wait_for_deferred_git_work_and_confirm_the_baseline() {
+    let root = TestDir::new("barrier");
+    fs::create_dir(root.path().join(".git")).unwrap();
+    let mut ctx = session_ctx(root.path());
+    ctx.baseline = LiveBaseline::seed(
+        root.path().to_path_buf(),
+        HashMap::from([(PathBuf::from("seeded"), file_entry("seeded", b"seed"))]),
+        &Baseline::default(),
+    );
+    let suppress = Suppression::default();
+    let pending = Pending::default();
+    let writer = Arc::new(Mutex::new(Vec::new()));
+
+    // A `.git/` op is queued behind a live git operation. Answering a barrier
+    // now would tell the peer it is applied while it sits in the queue.
+    fs::write(root.path().join(".git/index.lock"), b"lock").unwrap();
+    let queued = file_entry(".git/objects/ee/769543", b"commit");
+    handle_incoming(
+        &ctx,
+        Message::FileData {
+            entry: queued.clone(),
+            content: b"commit".to_vec(),
+        },
+        &suppress,
+        &pending,
+        &writer,
+        true,
+    )
+    .await
+    .unwrap();
+    handle_incoming(&ctx, Message::Ping, &suppress, &pending, &writer, true)
+        .await
+        .unwrap();
+    assert!(writer.lock().await.is_empty());
+    let (_, queued_msgs) = ctx.gate.take_deferred();
+    assert_eq!(queued_msgs.len(), 2);
+    assert!(matches!(queued_msgs.last(), Some(Message::Ping)));
+
+    // With the queue clear, a barrier is answered and its reply is what
+    // authorizes the baseline write.
+    let recorded = file_entry("pushed", b"body");
+    ctx.baseline.set(recorded.clone());
+    assert!(ctx.baseline.begin_barrier());
+    assert!(Baseline::load(root.path()).get(&recorded.path).is_none());
+    handle_incoming(&ctx, Message::Pong, &suppress, &pending, &writer, true)
+        .await
+        .unwrap();
+    assert!(Baseline::load(root.path()).get(&recorded.path).is_some());
+
+    // A rejected apply drops the path again, so it is never claimed.
+    handle_incoming(
+        &ctx,
+        Message::ApplyFailed {
+            path: recorded.path.clone(),
+            reason: "permission denied".into(),
+        },
+        &suppress,
+        &pending,
+        &writer,
+        true,
+    )
+    .await
+    .unwrap();
+    assert!(ctx.baseline.begin_barrier());
+    ctx.baseline.commit_barrier();
+    assert!(Baseline::load(root.path()).get(&recorded.path).is_none());
 }
 
 #[test]
@@ -551,6 +621,19 @@ fn git_gate_detects_live_stale_and_deferred_work() {
         matches!(incoming.as_slice(), [Message::Delete { path }] if path == Path::new(".git/lock"))
     );
     assert!(!gate.has_deferred());
+
+    // Teardown drains, never drops: a discarded `.git/` write is content the
+    // peer already counts as delivered, so its next sync reads our missing
+    // copy as a deletion and removes its own.
+    fs::write(&marker, b"merge").unwrap();
+    let closing = GitGate::default();
+    assert!(closing.busy(root.path()));
+    closing.defer_in(Message::Delete {
+        path: PathBuf::from(".git/objects/ee/769543"),
+    });
+    closing.close();
+    assert!(!closing.busy(root.path()));
+    assert_eq!(closing.take_deferred().1.len(), 1);
 
     fs::write(&marker, b"stale").unwrap();
     filetime::set_file_mtime(
@@ -1161,9 +1244,10 @@ async fn live_loop_replies_and_keeps_running_after_per_operation_errors() {
         read_message(&mut reader).await.unwrap(),
         Message::Pong
     ));
+    // The failure names the path so the sender can un-record it.
     assert!(matches!(
         read_message(&mut reader).await.unwrap(),
-        Message::Error(error) if error.contains("content mismatch")
+        Message::ApplyFailed { path, reason } if path == Path::new("bad") && reason.contains("content mismatch")
     ));
     assert!(reader.is_empty());
     assert!(!root.path().join("bad").exists());

@@ -153,10 +153,15 @@ where
     // Message::Error and we CONTINUE — losing the session over one bad
     // file would just trigger the outer reconnect loop and repeat the
     // exact same failure indefinitely.
-    let report_err = |path: &std::path::Path, e: &anyhow::Error| -> String {
-        let msg = format!("apply {}: {}", path.display(), e);
-        tracing::warn!("agent: {}", msg);
-        msg
+    // Reported with the path attached: the client has to know *which* file
+    // it may not record as converged, or its baseline claims content we
+    // never wrote and the next session deletes the client's copy.
+    let report_err = |path: &std::path::Path, e: &anyhow::Error| -> Message {
+        tracing::warn!("agent: apply {}: {}", path.display(), e);
+        Message::ApplyFailed {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        }
     };
     loop {
         let msg = read_message(&mut reader).await?;
@@ -166,9 +171,9 @@ where
                 let mtime = entry.mtime;
                 let hash = entry.hash;
                 if let Err(e) = apply_file_data(&root, &entry, &content) {
-                    let s = report_err(&path, &e);
+                    let failed = report_err(&path, &e);
                     let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                    let _ = write_message(&mut *w, &failed, compress).await;
                 } else {
                     suppress.mark_set(path, mtime, hash);
                 }
@@ -176,16 +181,16 @@ where
             Message::FileStart { entry, .. } => {
                 let path = entry.path.clone();
                 if let Err(e) = pending.start(&root, entry).await {
-                    let s = report_err(&path, &e);
+                    let failed = report_err(&path, &e);
                     let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                    let _ = write_message(&mut *w, &failed, compress).await;
                 }
             }
             Message::FileChunk { path, data } => {
                 if let Err(e) = pending.chunk(&path, &data).await {
-                    let s = report_err(&path, &e);
+                    let failed = report_err(&path, &e);
                     let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                    let _ = write_message(&mut *w, &failed, compress).await;
                 }
             }
             Message::FileEnd { path } => match pending.end(&root, &path).await {
@@ -194,18 +199,18 @@ where
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    let s = report_err(&path, &e);
+                    let failed = report_err(&path, &e);
                     let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                    let _ = write_message(&mut *w, &failed, compress).await;
                 }
             },
             Message::MkDir { entry } => {
                 let path = entry.path.clone();
                 let mtime = entry.mtime;
                 if let Err(e) = apply_mkdir(&root, &entry) {
-                    let s = report_err(&path, &e);
+                    let failed = report_err(&path, &e);
                     let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                    let _ = write_message(&mut *w, &failed, compress).await;
                 } else {
                     suppress.mark_mtime(path, mtime);
                 }
@@ -214,27 +219,27 @@ where
                 let path = entry.path.clone();
                 let mtime = entry.mtime;
                 if let Err(e) = apply_symlink(&root, &entry) {
-                    let s = report_err(&path, &e);
+                    let failed = report_err(&path, &e);
                     let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                    let _ = write_message(&mut *w, &failed, compress).await;
                 } else {
                     suppress.mark_mtime(path, mtime);
                 }
             }
             Message::Delete { path } => {
                 if let Err(e) = apply_delete(&root, &path) {
-                    let s = report_err(&path, &e);
+                    let failed = report_err(&path, &e);
                     let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                    let _ = write_message(&mut *w, &failed, compress).await;
                 } else {
                     suppress.mark_deleted(path);
                 }
             }
             Message::Rename { from, to } => {
                 if let Err(e) = apply_rename(&root, &from, &to) {
-                    let s = report_err(&to, &e);
+                    let failed = report_err(&to, &e);
                     let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                    let _ = write_message(&mut *w, &failed, compress).await;
                 } else {
                     suppress.mark_deleted(from);
                     let mt = resolve_beneath(&root, &to)
@@ -286,9 +291,9 @@ where
                 let mtime = entry.mtime;
                 let hash = entry.hash;
                 if let Err(e) = apply_delta_to_file(&root, &entry, base_hash, &delta) {
-                    let s = report_err(&path, &e);
+                    let failed = report_err(&path, &e);
                     let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &Message::Error(s), compress).await;
+                    let _ = write_message(&mut *w, &failed, compress).await;
                 } else {
                     suppress.mark_set(path, mtime, hash);
                 }

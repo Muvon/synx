@@ -257,9 +257,10 @@ async fn runs_handshake_initial_operations_and_live_shutdown_end_to_end() {
     assert!(messages.iter().any(
         |message| matches!(message, Message::FileData { entry, content } if entry.path == Path::new("base") && content == &updated)
     ));
-    assert!(messages
-        .iter()
-        .any(|message| matches!(message, Message::Error(error) if error.contains("corrupt"))));
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Message::ApplyFailed { path, reason } if path == Path::new("corrupt") && reason.contains("corrupt")
+    )));
     assert!(messages
         .iter()
         .any(|message| matches!(message, Message::SyncDone)));

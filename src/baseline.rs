@@ -15,20 +15,21 @@
 //! even a file created and deleted within one session is recorded correctly
 //! and never resurrects. Both share one on-disk file (a bare path → Entry
 //! map), keyed by root, living next to the hash cache in the user-cache dir.
+//!
+//! What reaches that file is confirmed state and nothing else. "We sent it"
+//! is not evidence the peer holds it — a link that drops mid-push, or an
+//! apply that fails there, leaves a claim behind that the next session reads
+//! as a deletion, and it deletes the last copy. Live updates are therefore
+//! held in memory until a barrier (`begin_barrier` at `Ping`,
+//! `commit_barrier` at `Pong`) proves the peer applied them, and a peer that
+//! reports `ApplyFailed` gets its path dropped via `forget`.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use crate::protocol::Entry;
-
-/// At most one disk write per this interval while the live loop is churning.
-/// A slightly stale baseline is safe — it only makes the next diff fall back
-/// to the conservative pull-back for the un-persisted paths, never a wrong
-/// delete — so debouncing trades a tiny resurrection window for far less IO.
-const PERSIST_DEBOUNCE: Duration = Duration::from_secs(3);
 
 /// Read side: the baseline as it was at the last sync. Empty on first run.
 #[derive(Default)]
@@ -102,7 +103,8 @@ impl Baseline {
 }
 
 /// Write side: a shared, mutable baseline kept current during a live session
-/// and persisted (debounced) to the same file `Baseline::load` reads.
+/// and persisted — at confirmation points only, see `persist_now` — to the
+/// same file `Baseline::load` reads.
 #[derive(Clone, Default)]
 pub struct LiveBaseline {
     inner: Arc<Mutex<Inner>>,
@@ -116,8 +118,16 @@ pub struct LiveBaseline {
 struct Inner {
     entries: HashMap<PathBuf, Entry>,
     dirty: bool,
-    last_save: Option<Instant>,
     generation: u64,
+    /// Serialized state awaiting the peer's barrier reply, with the
+    /// generation it was taken at. `None` when nothing is claimed — either no
+    /// barrier is in flight, or one is and a failed apply voided its claim.
+    snapshot: Option<(u64, Vec<u8>)>,
+    /// A barrier is still awaiting its reply. Separate from `snapshot` so a
+    /// voided claim still consumes that reply: otherwise the next barrier
+    /// would start early and the older `Pong` would commit its newer, and
+    /// therefore unconfirmed, snapshot.
+    barrier_in_flight: bool,
 }
 
 impl LiveBaseline {
@@ -137,8 +147,9 @@ impl LiveBaseline {
             inner: Arc::new(Mutex::new(Inner {
                 entries,
                 dirty: changed,
-                last_save: None,
                 generation: u64::from(changed),
+                snapshot: None,
+                barrier_in_flight: false,
             })),
             storage_path,
             enabled: true,
@@ -168,7 +179,6 @@ impl LiveBaseline {
                 g.generation = g.generation.wrapping_add(1);
             }
         }
-        self.persist_due();
     }
 
     /// Re-key `from` and everything under it to `to`. A rename moved the
@@ -204,7 +214,6 @@ impl LiveBaseline {
                 g.entries.insert(entry.path.clone(), entry);
             }
         }
-        self.persist_due();
     }
 
     /// Record that `path` is now gone on both sides.
@@ -218,7 +227,6 @@ impl LiveBaseline {
                 g.generation = g.generation.wrapping_add(1);
             }
         }
-        self.persist_due();
     }
     /// True when there is nothing to diff against: disabled (agent side) or
     /// no converged entries yet.
@@ -237,17 +245,70 @@ impl LiveBaseline {
         self.inner.lock().map(|g| f(&g.entries)).unwrap_or_default()
     }
 
-    /// Persist if dirty and the debounce interval has elapsed.
-    fn persist_due(&self) {
-        self.write(false);
+    /// Drop `path` from the converged state: the peer told us it failed to
+    /// apply our op (`Message::ApplyFailed`), so it does not hold our version.
+    /// Also voids any in-flight barrier snapshot, which still claims it.
+    pub fn forget(&self, path: &Path) {
+        if !self.enabled {
+            return;
+        }
+        if let Ok(mut g) = self.inner.lock() {
+            g.entries.remove(path);
+            g.snapshot = None;
+            g.dirty = true;
+            g.generation = g.generation.wrapping_add(1);
+        }
     }
 
-    /// Persist unconditionally if dirty (called on clean live-loop exit).
+    /// Snapshot the state we are about to ask the peer to confirm, and report
+    /// whether a barrier is worth sending. False when disabled, unchanged
+    /// since the last confirmation, or a barrier is already in flight.
+    ///
+    /// Serializing here (not at commit time) is what makes the barrier exact:
+    /// the bytes describe the session as of the `Ping`, so ops sent after it —
+    /// which the `Pong` says nothing about — cannot leak into the file.
+    pub fn begin_barrier(&self) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let Ok(mut g) = self.inner.lock() else {
+            return false;
+        };
+        if !g.dirty || g.barrier_in_flight {
+            return false;
+        }
+        let Ok(bytes) = postcard::to_allocvec(&g.entries) else {
+            return false;
+        };
+        g.snapshot = Some((g.generation, bytes));
+        g.barrier_in_flight = true;
+        true
+    }
+
+    /// The peer answered our barrier: it processes ops in arrival order, so
+    /// everything sent before the `Ping` is applied on its side. That, and
+    /// only that, is what may be written to disk.
+    pub fn commit_barrier(&self) {
+        let snapshot = match self.inner.lock() {
+            Ok(mut g) => {
+                g.barrier_in_flight = false;
+                g.snapshot.take()
+            }
+            Err(_) => None,
+        };
+        let Some((generation, bytes)) = snapshot else {
+            return;
+        };
+        self.write(&bytes, generation);
+    }
+
+    /// Persist the seeded state. Sound at exactly one call site: the end of
+    /// init sync, where the agent's `SyncDone` reply proves every pushed op
+    /// was applied (minus the paths it reported as failed, which the caller
+    /// leaves out of the seed). Everything a live session records goes
+    /// through `begin_barrier` / `commit_barrier` instead — writing a send
+    /// the peer never applied is what turns a dropped link into a deletion.
     pub fn persist_now(&self) {
-        self.write(true);
-    }
-
-    fn write(&self, force: bool) {
         if !self.enabled {
             return;
         }
@@ -260,30 +321,28 @@ impl LiveBaseline {
             if !g.dirty {
                 return;
             }
-            let due = force
-                || g.last_save
-                    .map(|t| t.elapsed() >= PERSIST_DEBOUNCE)
-                    .unwrap_or(true);
-            if !due {
-                return;
-            }
             let Ok(bytes) = postcard::to_allocvec(&g.entries) else {
                 return;
             };
             (bytes, g.generation)
         };
+        self.write(&bytes, generation);
+    }
+
+    /// Write confirmed bytes; clear `dirty` only if nothing changed since
+    /// they were serialized, so later mutations still reach the next barrier.
+    fn write(&self, bytes: &[u8], generation: u64) {
         let Some(path) = &self.storage_path else {
             return;
         };
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        if fs::write(path, &bytes).is_ok() {
+        if fs::write(path, bytes).is_ok() {
             if let Ok(mut g) = self.inner.lock() {
                 if g.generation == generation {
                     g.dirty = false;
                 }
-                g.last_save = Some(Instant::now());
             }
         }
     }

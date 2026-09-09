@@ -75,7 +75,8 @@ fn persists_mutations_and_skips_semantically_unchanged_state() {
     let changed = entry(3, [4; 32]);
     live.set(changed.clone());
     assert!(live.inner.lock().unwrap().dirty);
-    live.persist_now();
+    assert!(live.begin_barrier());
+    live.commit_barrier();
     assert!(!live.inner.lock().unwrap().dirty);
     assert!(Baseline::load_from_path(&path)
         .get(&changed.path)
@@ -83,8 +84,89 @@ fn persists_mutations_and_skips_semantically_unchanged_state() {
         .same_content(&changed));
 
     live.remove(&changed.path);
-    live.persist_now();
+    assert!(live.begin_barrier());
+    live.commit_barrier();
     assert!(Baseline::load_from_path(&path).is_empty());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn live_updates_reach_disk_only_once_the_peer_confirms_them() {
+    // A send reaches disk only after the peer confirms it. Recorded earlier,
+    // a dropped link turns it into deletion evidence: the file is here,
+    // absent there, and matches the baseline — which the next session reads
+    // as a peer delete and applies to our only copy.
+    let path = temp_path("barrier");
+    let seeded = entry(1, [1; 32]);
+    let live = LiveBaseline::seed_to_path(
+        Some(path.clone()),
+        HashMap::from([(seeded.path.clone(), seeded)]),
+        &Baseline::default(),
+    );
+
+    let mut sent = entry(2, [7; 32]);
+    sent.path = PathBuf::from(".git/objects/ee/769543");
+    live.set(sent.clone());
+    assert!(Baseline::load_from_path(&path).get(&sent.path).is_none());
+
+    assert!(live.begin_barrier());
+    // One barrier in flight at a time, and nothing on disk until it returns.
+    assert!(!live.begin_barrier());
+    assert!(Baseline::load_from_path(&path).get(&sent.path).is_none());
+
+    // Sent after the Ping, so the Pong says nothing about it: it must not
+    // ride along into the file the barrier authorizes.
+    let mut later = entry(3, [9; 32]);
+    later.path = PathBuf::from(".git/objects/c2/518b51");
+    live.set(later.clone());
+
+    live.commit_barrier();
+    let stored = Baseline::load_from_path(&path);
+    assert!(stored.get(&sent.path).is_some());
+    assert!(stored.get(&later.path).is_none());
+
+    // The next barrier picks up what the last one left behind.
+    assert!(live.begin_barrier());
+    live.commit_barrier();
+    assert!(Baseline::load_from_path(&path).get(&later.path).is_some());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn a_failed_peer_apply_voids_the_claim_it_appears_in() {
+    // The peer reported it could not write this path. It doesn't hold our
+    // version, so neither the entry nor the in-flight snapshot claiming it
+    // may survive — that claim is exactly what deletes our copy later.
+    let path = temp_path("forget");
+    let converged = entry(1, [1; 32]);
+    let live = LiveBaseline::seed_to_path(
+        Some(path.clone()),
+        HashMap::from([(converged.path.clone(), converged.clone())]),
+        &Baseline::default(),
+    );
+
+    let mut rejected = entry(2, [5; 32]);
+    rejected.path = PathBuf::from("read-only.txt");
+    live.set(rejected.clone());
+    assert!(live.begin_barrier());
+    live.forget(&rejected.path);
+    // The outstanding reply still belongs to the voided claim: starting a new
+    // barrier here would let that older reply commit a newer snapshot.
+    assert!(!live.begin_barrier());
+    live.commit_barrier();
+
+    // The voided snapshot wrote nothing, so the file still holds the seed.
+    let stored = Baseline::load_from_path(&path);
+    assert!(stored
+        .get(&converged.path)
+        .is_some_and(|e| e.same_content(&converged)));
+
+    // And the next barrier ships the corrected state, not the rejected one.
+    assert!(live.begin_barrier());
+    live.commit_barrier();
+    assert!(Baseline::load_from_path(&path)
+        .get(&rejected.path)
+        .is_none());
     std::fs::remove_file(path).unwrap();
 }
 

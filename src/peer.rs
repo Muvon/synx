@@ -342,6 +342,9 @@ pub struct GitGate {
 #[derive(Default)]
 struct GitGateInner {
     last_busy: Option<Instant>,
+    /// Set at session teardown: stop gating so the queue can be drained
+    /// instead of discarded.
+    closing: bool,
     /// Local `.git/` paths touched while paused — replayed by current state.
     deferred_out: HashSet<PathBuf>,
     /// Incoming `.git/` ops received while paused — replayed in order.
@@ -353,6 +356,9 @@ impl GitGate {
     /// after its markers clear. Refreshes the hysteresis timer when actually
     /// busy.
     pub fn busy(&self, root: &Path) -> bool {
+        if self.inner.lock().is_ok_and(|g| g.closing) {
+            return false;
+        }
         let raw = git_busy(root);
         let Ok(mut g) = self.inner.lock() else {
             return raw;
@@ -362,6 +368,14 @@ impl GitGate {
             return true;
         }
         matches!(g.last_busy, Some(t) if t.elapsed() < GIT_SETTLE)
+    }
+
+    /// Open the gate permanently for this session's teardown, so a final
+    /// `take_deferred` replay isn't re-deferred by a still-busy git.
+    pub fn close(&self) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.closing = true;
+        }
     }
 
     pub fn defer_out(&self, path: PathBuf) {
@@ -1115,6 +1129,12 @@ fn directions(mode: SyncMode, is_client: bool) -> (bool, bool) {
 /// idle session never re-walks.
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How often the client asks the peer to confirm what it has applied, which
+/// is the only thing that authorizes a baseline write. One `Ping`/`Pong` per
+/// interval, and only while there is something new to confirm — an idle or
+/// converged session sends nothing.
+const BARRIER_INTERVAL: Duration = Duration::from_secs(3);
+
 /// Diff the live tree against the converged baseline and return synthetic
 /// events for every divergence — the safety net for watcher misses.
 ///
@@ -1288,6 +1308,12 @@ where
     let mut reconcile_tick = tokio::time::interval(RECONCILE_INTERVAL);
     reconcile_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    // Drives baseline confirmation: snapshot what we've recorded, ask the
+    // peer to confirm it (`Ping`), and write it only when the `Pong` comes
+    // back. The agent's baseline is disabled, so this never fires there.
+    let mut barrier_tick = tokio::time::interval(BARRIER_INTERVAL);
+    barrier_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         tokio::select! {
             biased;
@@ -1306,10 +1332,18 @@ where
                         // Per-op apply errors are non-fatal — log and
                         // continue. Connection-level failures appear as
                         // Err from the reader task (the next arm).
+                        // The path goes back with the failure: the sender
+                        // has to un-record it, or its baseline claims we
+                        // hold content we just failed to write.
+                        let failed = message_path(&m);
                         if let Err(e) = handle_incoming(&ctx, m, &suppress, &pending, &writer, apply_remote).await {
                             tracing::warn!("apply failed: {}", e);
+                            let report = match failed {
+                                Some(path) => Message::ApplyFailed { path, reason: format!("{e}") },
+                                None => Message::Error(format!("{e}")),
+                            };
                             let mut w = writer.lock().await;
-                            let _ = write_message(&mut *w, &Message::Error(format!("{e}")), ctx.compress).await;
+                            let _ = write_message(&mut *w, &report, ctx.compress).await;
                         }
                     }
                     Some(Err(e)) => {
@@ -1340,8 +1374,13 @@ where
                         forward_local_events(&ctx.root, events, &writer, ctx.compress, &suppress, ctx.is_client, &ctx.ignores, &ctx.gate, &ctx.baseline).await?;
                     }
                     for m in msgs {
+                        let failed = message_path(&m);
                         if let Err(e) = handle_incoming(&ctx, m, &suppress, &pending, &writer, apply_remote).await {
                             tracing::warn!("deferred apply failed: {}", e);
+                            if let Some(path) = failed {
+                                let mut w = writer.lock().await;
+                                let _ = write_message(&mut *w, &Message::ApplyFailed { path, reason: format!("{e}") }, ctx.compress).await;
+                            }
                         }
                     }
                     // A git mass rewrite is the highest-risk window for
@@ -1376,13 +1415,73 @@ where
                     }
                 }
             }
+
+            _ = barrier_tick.tick() => {
+                // Offer the recorded state for confirmation. The peer applies
+                // in arrival order, so its `Pong` proves every op we sent
+                // before this `Ping` landed — see `handle_incoming`, which
+                // queues the `Ping` behind any deferred `.git/` work so the
+                // barrier can never overtake it.
+                if ctx.baseline.begin_barrier() {
+                    let mut w = writer.lock().await;
+                    write_message(&mut *w, &Message::Ping, ctx.compress).await?;
+                }
+            }
         }
     }
 
-    // Flush the latest converged state before we tear down / reconnect.
-    ctx.baseline.persist_now();
+    // Apply what the gate is still holding instead of dropping it on the
+    // floor. The peer counts those ops as delivered, so a `.git/` write
+    // discarded here comes back next session as "this file is gone on their
+    // side" — and the three-way diff deletes the sender's only copy.
+    ctx.gate.close();
+    let (_, deferred) = ctx.gate.take_deferred();
+    for msg in deferred {
+        let failed = message_path(&msg);
+        if let Err(e) = handle_incoming(&ctx, msg, &suppress, &pending, &writer, apply_remote).await
+        {
+            tracing::warn!("deferred apply at exit failed: {}", e);
+            if let Some(path) = failed {
+                let mut w = writer.lock().await;
+                let _ = write_message(
+                    &mut *w,
+                    &Message::ApplyFailed {
+                        path,
+                        reason: format!("{e}"),
+                    },
+                    ctx.compress,
+                )
+                .await;
+            }
+        }
+    }
+
+    // Nothing is written here on purpose: whatever this session recorded
+    // after its last confirmed barrier is a claim the peer never
+    // acknowledged, and the next session re-derives it from the manifest
+    // exchange anyway. Persisting it would be the same lie that deletes a
+    // repository when the link drops mid-push.
     reader_task.abort();
     Ok(())
+}
+
+/// The path an op applies to, or `None` for messages that carry none.
+/// Drives both the `.git/` defer decision and the `ApplyFailed` report a
+/// failed apply owes the sender.
+pub fn message_path(msg: &Message) -> Option<PathBuf> {
+    match msg {
+        Message::FileData { entry, .. }
+        | Message::FileStart { entry, .. }
+        | Message::MkDir { entry }
+        | Message::MkSymlink { entry }
+        | Message::Delta { entry, .. } => Some(entry.path.clone()),
+        Message::FileChunk { path, .. }
+        | Message::FileEnd { path }
+        | Message::Delete { path }
+        | Message::Touch { path, .. } => Some(path.clone()),
+        Message::Rename { to, .. } => Some(to.clone()),
+        _ => None,
+    }
 }
 
 pub async fn handle_incoming<W>(
@@ -1410,23 +1509,8 @@ where
     // state and break ref locking. Sticky (hysteresis) so brief gaps between
     // git's sub-steps don't open the gate.
     let busy = ctx.gate.busy(root);
-    let path_of = |m: &Message| -> Option<PathBuf> {
-        match m {
-            Message::FileData { entry, .. } => Some(entry.path.clone()),
-            Message::FileStart { entry, .. } => Some(entry.path.clone()),
-            Message::FileChunk { path, .. } => Some(path.clone()),
-            Message::FileEnd { path } => Some(path.clone()),
-            Message::MkDir { entry } => Some(entry.path.clone()),
-            Message::MkSymlink { entry } => Some(entry.path.clone()),
-            Message::Delete { path } => Some(path.clone()),
-            Message::Rename { from: _, to } => Some(to.clone()),
-            Message::Delta { entry, .. } => Some(entry.path.clone()),
-            Message::Touch { path, .. } => Some(path.clone()),
-            _ => None,
-        }
-    };
     if busy {
-        if let Some(p) = path_of(&msg) {
+        if let Some(p) = message_path(&msg) {
             if is_under_git(&p) {
                 // Defer, don't drop: replayed once git settles (see live_loop).
                 tracing::debug!("git busy: defer incoming for {}", p.display());
@@ -1434,6 +1518,15 @@ where
                 return Ok(());
             }
         }
+    }
+    // A barrier must not overtake the work it is meant to confirm: answering
+    // a `Ping` while `.git/` ops sit in the defer queue would tell the peer
+    // they are applied, and its baseline would record content we have not
+    // written yet. Queue it behind them; the replay answers it in order.
+    if matches!(msg, Message::Ping) && ctx.gate.has_deferred() {
+        tracing::debug!("deferred work pending: queueing barrier reply");
+        ctx.gate.defer_in(msg);
+        return Ok(());
     }
     match msg {
         Message::FileData { entry, content } => {
@@ -1708,7 +1801,16 @@ where
             let mut w = writer.lock().await;
             let _ = write_message(&mut *w, &Message::Pong, compress).await;
         }
-        Message::Pong => {}
+        // Our barrier came back: the peer applied everything we sent before
+        // it, so the snapshot taken at `Ping` may go to disk.
+        Message::Pong => ctx.baseline.commit_barrier(),
+        // The peer could not apply one of our ops. It does not hold that
+        // path, so drop it from the converged state — otherwise the next
+        // session reads its absence there as a deletion of our copy.
+        Message::ApplyFailed { path, reason } => {
+            tracing::warn!("peer failed to apply {}: {}", path.display(), reason);
+            ctx.baseline.forget(&path);
+        }
         // Per-op error reported by the peer (type conflict, perm denied,
         // etc.). Log and keep the session alive — bailing would just
         // trigger a reconnect that repeats the same failure.
