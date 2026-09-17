@@ -1,243 +1,71 @@
-# AGENTS.md — synx development guide
+# synx — AGENTS.md
 
-Working rules and architecture for anyone (human or AI) contributing to synx.
+Fast, real-time bidirectional file sync over SSH. One binary, two roles: the
+client (`synx LOCAL REMOTE`) spawns itself on the remote over SSH
+(`synx --agent PATH`) and they speak a framed binary protocol over the SSH
+pipe — no daemons, no new auth. Stack: Rust, tokio, postcard + zstd on the
+wire, blake3 hashing, fast_rsync deltas. The `Message` enum in
+`src/protocol.rs` **is** the entire client↔agent conversation — read it top
+to bottom before touching anything else.
 
-## What this is
+## Commands
 
-Fast, real-time bidirectional file sync over SSH. One binary, two roles:
-the client (`synx LOCAL REMOTE`) spawns itself on the remote over SSH
-(`synx --agent PATH`) and they speak a framed binary protocol over the
-SSH pipe. No daemons, no new auth — the user's existing `ssh` setup is
-the transport. Stack: Rust, tokio, postcard + zstd on the wire, blake3
-hashing, fast_rsync deltas.
-
-## Start here — reading order for a new session
-
-1. `src/main.rs` (52 lines) — routes `--agent` → `agent::run`, else → `sync::run`.
-2. `src/cli.rs` — every flag; `ClientArgs` is the client-side config struct.
-3. `src/protocol.rs` — the `Message` enum **is** the entire client↔agent
-   conversation. Read it top to bottom before touching anything else.
-4. `src/sync.rs` — client lifecycle: `run` (reconnect loop, `is_fatal`)
-   → `run_session` (spawn ssh, handshake, repo-mismatch check)
-   → `run_inner` (walk, manifest exchange, `build_plan`, initial sync)
-   → `peer::live_loop`.
-5. `src/agent.rs` — `run_io`: the agent's mirror of steps 3–4.
-6. `src/peer.rs` — everything both sides share (~2000 lines; internal map below).
-
-```
-client (local host)                          agent (remote host)
-┌─────────────┐   ssh pipe (stdin/stdout)   ┌─────────────┐
-│ sync.rs     │ ◀── framed protocol ──▶     │ agent.rs    │
-│ cli.rs      │     protocol.rs             │             │
-│ transport.rs│                             │             │
-└──────┬──────┘                             └──────┬──────┘
-       │            both sides share               │
-       └──────────▶ peer.rs (fs ops, live loop, git gate,
-                    chunked transfer, delta sync, suppression)
-```
-
-## Project structure
-
-```
-synx/
-├── src/
-│   ├── main.rs             entrypoint; --agent routing
-│   ├── cli.rs              clap defs; ClientArgs
-│   ├── transport.rs        [user@]host:/path parsing; ssh command build/spawn
-│   ├── protocol.rs         Message enum, framing, PROTOCOL_VERSION, size/chunk consts
-│   ├── sync.rs             client: handshake, manifests, build_plan, initial sync, reconnect
-│   ├── agent.rs            remote side: handshake, walk, applies client ops, forwards events
-│   ├── peer.rs             shared: apply_*, live_loop, Suppression, GitGate, delta, Pending
-│   ├── walker.rs           parallel manifest walk (blake3, all cores)
-│   ├── cache.rs            persistent (size,mtime)→hash cache
-│   ├── baseline.rs         persisted converged manifest (three-way diff ancestor)
-│   ├── ignores.rs          per-directory .gitignore / .synxignore stack
-│   ├── watcher.rs          notify (FSEvents/inotify), 200ms debounce, tolerant subtree watch, IdCache rename pairing
-│   ├── paths.rs            resolve_beneath confinement; .synx-tmp- prefix
-│   ├── ui.rs               terminal output
-│   └── <module>_tests.rs   unit tests, one file per module (see Hard rules)
-├── tests/cli_process.rs    CLI-level integration (runs the real binary)
-├── install.sh              one-liner installer
-├── CHANGELOG.md            auto-generated — never hand-edit
-├── Makefile               make coverage (cargo-llvm-cov, excludes *_tests.rs)
-└── .github/workflows/      ci.yml, release.yml (tag-driven), dependencies.yml (weekly dep-bump PRs)
-```
+- Build: `cargo build` · Release: `cargo build --release`
+- Run: `cargo run -- <LOCAL> <REMOTE>` — uses real ssh; synx must exist on the remote too (`--remote-synx CMD` overrides)
+- Full gate: `cargo fmt && cargo test && cargo clippy --all-targets`
+- One module's tests only: `cargo test peer::` · CLI layer only: `cargo test --test cli_process`
+- Coverage: `make coverage` (requires cargo-llvm-cov + llvm-tools-preview; excludes `*_tests.rs`)
 
 ## Where to look
 
 | Task | Start here |
 |------|------------|
-| Add/change a CLI flag | `src/cli.rs` (`Cli` + `ClientArgs`) → wire through `main.rs` → `cli_tests.rs`; README quick-start if user-facing |
-| Change the wire protocol | `src/protocol.rs` (`Message`, framing, `PROTOCOL_VERSION` — **bump it**) → dispatch in `peer.rs::handle_incoming`, `sync.rs`, `agent.rs`; round-trip test in `protocol_tests.rs` |
+| Add/change a CLI flag | `src/cli.rs` (`Cli` + `ClientArgs`) → wire through `src/main.rs` → `cli_tests.rs`; README quick-start if user-facing |
+| Change the wire protocol | `src/protocol.rs` (`Message`, framing — **bump `PROTOCOL_VERSION`**) → dispatch in `peer.rs::handle_incoming`, `sync.rs`, `agent.rs`; round-trip test in `protocol_tests.rs` |
 | Sync planning, deletions, conflicts | `sync.rs::build_plan` (three-way diff vs baseline) + `sync_tests.rs` |
 | Apply safety / fs mutations | `peer.rs::apply_*` → `paths.rs::resolve_beneath`; tmp+rename via `tmp_path` |
-| Live loop, echo suppression, coalescing | `peer.rs` (`live_loop`, `Suppression`, `coalesce`, `forward_local_events`) |
-| Missed-events safety net | `peer.rs::reconcile_sweep` (30s stat-only sweep) |
-| Git gate | `peer.rs::git_busy` / `GitGate` (MARKERS, STALE_AFTER, GIT_SETTLE) |
-| Ignore rules | `ignores.rs` (`IgnoreStack`); applied in `sync.rs` (remote manifest filter) + `watcher.rs` |
+| Live loop, echo suppression, coalescing | `peer.rs` (`live_loop`, `Suppression`, `coalesce`, `forward_local_events`); missed-events safety net `reconcile_sweep` |
+| Git gate | `peer.rs::git_busy` / `GitGate` (`MARKERS`, `STALE_AFTER`, `GIT_SETTLE`) |
+| Ignore rules | `ignores.rs` (`IgnoreStack`); remote manifest filtered through the **local** stack in `sync.rs`; also `watcher.rs` |
 | Walk / hashing performance | `walker.rs` + `cache.rs` |
-| Baseline / deletion evidence | `baseline.rs`; loaded in `sync.rs` (also stale-.git/ recovery there) |
+| Baseline / deletion evidence | `baseline.rs` (`Baseline` = read side, `LiveBaseline` = write side); loaded in `sync.rs` (stale-`.git/` recovery too) |
+| Watcher backends, debounce, rename pairing | `watcher.rs` (`spawn`, `watch_subtree_tolerant`, `IdCache::resolve_rename`) |
 | SSH invocation, remote parsing | `transport.rs` |
-| Watcher backends, debounce, unreadable dirs, rename pairing | `watcher.rs` (`spawn`, `watch_subtree_tolerant`, `IdCache::resolve_rename`) |
-| Terminal output | `ui.rs` |
-| CI behavior | `.github/workflows/ci.yml` — reusable `muvon/ci-workflow` rust-ci (stable, ubuntu+macos, beta on ubuntu) + musl build matrix (x86_64, aarch64) |
-| Cut a release | `Cargo.toml` version + bare-semver tag (no `v`) → `release.yml` builds/publishes; `CHANGELOG.md` is auto-generated — don't edit it |
-| Test coverage | `make coverage` (cargo-llvm-cov, `--ignore-filename-regex '_tests\.rs$'`) |
-| Weekly dependency-bump PRs | `.github/workflows/dependencies.yml` — automated `chore: update dependencies` PR (cargo update + upgrade + audit); verify CI then merge |
+| Cut a release | bump `version` in `Cargo.toml`, tag **bare semver, no `v`** → details in `.agents/architecture.md` |
 
-## How things work
+## Conventions
 
-### peer.rs internal map (the big shared file)
+- Unit tests live in `src/<module>_tests.rs`, wired from the module file with `#[cfg(test)] #[path = "<module>_tests.rs"] mod tests;`. Test-only *helpers* (e.g. `Baseline::from_entries`) may stay in the module behind `#[cfg(test)]`; `#[test]` functions never do.
+- New end-to-end behavior gets a **session-level test** over in-memory pipes: `run_inner(root, once_args(&root), false, Cursor::new(input), writer, None)` (`sync_tests.rs`), `run_io(root, Cursor::new(input), writer)` (`agent_tests.rs`); `encode()` builds wire bytes. No fake ssh, no child processes. (Layer 3, `tests/cli_process.rs`, runs the real binary via `CARGO_BIN_EXE_synx` for arg validation / early exits.)
+- Conventional commits (`feat:`, `fix:`, `refactor:`, …); branches off `master`, rebase before merge.
+- `CHANGELOG.md` is auto-generated from the commit log.
 
-- `apply_file_data` / `apply_mkdir` / `apply_symlink` / `apply_delete` / `apply_rename` — peer-requested mutations; all confined via `resolve_beneath`.
-- `git_busy` / `GitGate` — detects active git ops (rebase/merge/cherry-pick/revert/bisect, `index.lock`, `HEAD.lock`), queues `.git/` traffic until quiet.
-- `compute_signature` / `compute_delta` / `apply_delta_to_file` — fast_rsync deltas; result blake3-verified (fast_rsync uses MD4 internally, so blake3 is the only honest integrity check).
-- `Pending` — chunked transfer state machine (`start`/`chunk`/`end`).
-- `send_file` — push path: delta vs chunked vs whole-file; `is_precompressed` bypasses zstd for media/archives.
-- `Suppression` — state-based echo suppression (`mark_set`/`mark_deleted`/`mark_applied_delete`/`is_echo`).
-- `SessionCtx` / `live_loop` / `handle_incoming` / `forward_local_events` / `coalesce` — the bidirectional live loop.
-- `git_remotes` / `normalize_git_url` / `git_remotes_conflict` — wrong-repo protection.
+## Done
 
-### Key constants (the tuning knobs)
+- `cargo fmt && cargo test && cargo clippy --all-targets` exits 0 (what CI runs on push/PR to `main`/`master`/`develop`).
+- Any `Message` / wire-struct change: `PROTOCOL_VERSION` bumped and the `protocol_tests.rs` round-trip updated.
+- Sync-semantics-relevant changes covered by a session-level test (layer 2), not only unit tests.
 
-| Constant | Value | Where | Meaning |
-|----------|-------|-------|---------|
-| `PROTOCOL_VERSION` | 4 | protocol.rs | bump on ANY wire change |
-| `MAX_MESSAGE_SIZE` | 64 MiB | protocol.rs | per-message cap |
-| `COMPRESS_THRESHOLD` / `COMPRESS_LEVEL` | 512 B / 3 | protocol.rs | zstd above threshold |
-| `IO_BUF_SIZE` | 64 KiB | protocol.rs | ssh stdio buffering |
-| `CHUNK_THRESHOLD` / `CHUNK_SIZE` | 4 MiB / 4 MiB | protocol.rs | whole-file below one chunk, streamed above |
-| `MAX_CONCURRENT_PUSHES` | 4 | sync.rs | semaphore-bounded pushes |
-| `DELTA_MIN_SIZE` / `DELTA_MAX_SIZE` | 256 KiB / 256 MiB | sync.rs | delta-sync band; outside → full transfer |
-| `RSYNC_BLOCK_SIZE` / `RSYNC_STRONG_LEN` | 4096 / 8 | peer.rs | fast_rsync signature params |
-| `SUPPRESS_TTL` / `SUPPRESS_SWEEP` | 60 s / 5 s | peer.rs | echo-suppression entry lifetime |
-| `RECONCILE_INTERVAL` | 30 s | peer.rs | missed-events sweep; skipped when the watcher was silent |
-| `BARRIER_INTERVAL` | 3 s | peer.rs | `Ping`/`Pong` that confirms the baseline; silent when nothing is pending |
-| `STALE_AFTER` | 600 s | peer.rs | git markers older → ignored (crashed git self-heals) |
-| `GIT_SETTLE` | 5 s | peer.rs | quiet period after git finishes |
-| `DEBOUNCE` / `DEBOUNCE_TICK` | 200 ms / 100 ms | watcher.rs | editor save-storm coalescing / flush wakeup |
+## Gotchas
 
-### Sync semantics
-
-- `.git/` **is synced by design**; the gate only pauses it during active git operations.
-- At handshake both sides report normalized git remotes; both roots identifiable repos sharing zero remotes → client refuses (`--allow-repo-mismatch` overrides).
-- Deletions propagate only with baseline evidence: the surviving copy must be byte-identical to the last converged state. First run has no baseline → nothing is deleted (stale-path safety).
-- **The baseline may only record what the peer confirmed applying.** A path written there while the peer doesn't hold it is read as a deletion by the next session, which then deletes the last copy — that is how a live repo lost a commit. Two confirmation points, and no others: init sync (the peer's `SyncDone` follows every apply, and anything it failed arrives as `ApplyFailed` first — `sync.rs` keeps those paths out of the seed) and the live barrier (`LiveBaseline::begin_barrier` snapshots at `Ping`, `commit_barrier` writes it when `Pong` returns). Session teardown persists nothing: unconfirmed claims are dropped, and the next session re-derives them from the manifest exchange.
-- `ApplyFailed { path, reason }` — not a bare `Error` — is what an apply failure owes the sender, so it can `LiveBaseline::forget` the path and void any snapshot claiming it.
-- A `Ping` arriving while `.git/` ops sit in the gate's defer queue is queued behind them: answering early would confirm work that hasn't been applied. Teardown drains that queue (`GitGate::close`) rather than dropping it.
-- Type mismatch (file vs dir vs symlink) → conflict surfaced, skipped, never blind-applied.
-- The remote manifest is filtered through the **local** ignore stack before planning (agent doesn't know our rules).
-- Echo suppression is state-based (recorded mtime/hash vs current on-disk state), not a time window — user edits during apply still flow.
-- The stale-create guard fires only for deletes made **here** (`mark_deleted` / `mark_observed_deleted`, TTL-bounded). A delete applied on the peer's instruction uses `mark_applied_delete`: one connection delivers that peer's messages in order, so its later content for the path is newer, never stale. Dropping it (checkout/rebase removing a file and restoring it) loses the file here while the sender records it converged, and the next session reads that baseline as deletion evidence and removes the sender's copy too.
-- Stale-`.git/` recovery (`sync.rs`): local `.git/` wiped to match remote only when the baseline proves `.git/` was previously converged; otherwise kept and pushed.
-
-### Errors
-
-`anyhow` throughout. Client classifies via `is_fatal` (`sync.rs`) — fatal strings:
-`"protocol mismatch"`, `"invalid local path"`, `"remote must be "`, `"refusing to sync"`.
-Anything else → reconnect with exponential backoff (1s → 30s cap). **New fatal
-conditions must be added there** or the client reconnect-loops forever.
-
-### Fs safety chain
-
-peer-requested mutation → `peer.rs::apply_*` → `resolve_beneath` (rejects lexical
-traversal and symlink ancestors) → tmp file **beside the destination**
-(`.synx-tmp-<pid>-<nanos>`, same dir so rename(2) stays atomic) → rename.
-The watcher filters `is_internal_temp` so our own writes never echo back.
-
-## Hard rules
-
-1. **No inline tests.** Unit tests live in `src/<module>_tests.rs`, wired
-   from the module file with:
-
-   ```rust
-   #[cfg(test)]
-   #[path = "<module>_tests.rs"]
-   mod tests;
-   ```
-
-   Test-only *helpers* (e.g. `Baseline::from_entries`) may stay in the
-   module behind `#[cfg(test)]`; `#[test]` functions never do.
-
-2. **Wire format changes require a `PROTOCOL_VERSION` bump.** postcard
-   encodes structs as untagged sequences: `#[serde(default)]` does NOT
-   make an added field backward compatible (a truncated buffer fails with
-   `DeserializeUnexpectedEnd`). Old/new binaries mixing must fail the
-   version check with a clear message, not a decode error.
-
-3. **Conventional commits** (`feat:`, `fix:`, `refactor:`, …), branches off
-   `master`, rebase before merge. Never commit directly to `master` in
-   shared work.
-
-## Testing — three layers
-
-1. **Unit** — `src/<module>_tests.rs` (wiring above).
-2. **Session-level, no ssh** — drive the session functions directly with
-   in-memory pipes: `sync_tests.rs` calls
-   `run_inner(root, once_args(&root), false, Cursor::new(input), writer, None)`;
-   `agent_tests.rs` calls `run_io(root, Cursor::new(input), writer)`. The
-   `encode()` helper builds wire bytes; decode replies by looping
-   `read_message` over the shared `Vec<u8>` writer. **This is the pattern
-   for new end-to-end behavior** — no fake ssh, no child processes.
-3. **CLI process** — `tests/cli_process.rs` runs the real binary via
-   `CARGO_BIN_EXE_synx` (arg validation, early exits).
-
-Gotchas:
-- Recreate BOTH roots fresh per case (the `TestDir` nonce helper does this):
-  Both-mode sync overwrites `.git/config`, so reusing a root corrupts its identity.
-- `--once` hangs after the initial sync in real-process mode (client blocks
-  in `child.wait()`, agent never exits). Pre-existing; live mode unaffected;
-  session tests pass `child = None` and don't hit it.
-
-## Validation
-
-```bash
-# full gate
-cargo fmt && cargo test && cargo clippy --all-targets
-
-# one module's tests only
-cargo test peer::
-
-# CLI layer only
-cargo test --test cli_process
-
-# coverage report (requires cargo-llvm-cov + llvm-tools-preview)
-make coverage
-```
-
-CI runs on push/PR to `main`/`master`/`develop`: fmt/test/clippy via the
-reusable `muvon/ci-workflow` rust-ci job (stable on ubuntu+macos, beta on
-ubuntu), a coverage job (badge JSON pushed to the `badges` branch), musl
-builds for x86_64 and aarch64, and a `brief` job. Separately,
-`dependencies.yml` opens a weekly `chore: update dependencies` PR.
-
-## Troubleshooting
-
-| Symptom | Cause / fix |
-|---------|-------------|
-| `DeserializeUnexpectedEnd` on connect | wire format changed without a `PROTOCOL_VERSION` bump |
-| client reconnect-loops on a config error | error string missing from `is_fatal` — add it |
-| repo identity corrupted after test runs | roots reused across Both-mode cases — recreate fresh |
-| watcher silent under unreadable dirs | by design: `watch_subtree_tolerant` skips them and warns once; fix the perms |
-| same files re-sync every session | clock skew between hosts in both mode (mtime-wins) — NTP or explicit `--mode` |
-| protocol mismatch error at handshake | old/new binaries mixing — upgrade synx on both sides |
+- Recreate BOTH roots fresh per test case (the `TestDir` nonce helpers do this): Both-mode sync overwrites `.git/config`, so reusing a root corrupts its repo identity.
+- `--once` hangs after the initial sync in real-process mode (client blocks in `child.wait()`, agent never exits; pre-existing, live mode unaffected — session tests pass `child = None`).
+- New fatal error conditions must be added to `is_fatal` in `sync.rs`, or the client reconnect-loops forever on config errors.
+- fast_rsync uses MD4 internally — the blake3 verify after `apply_delta_to_file` is the only honest integrity check; never remove it.
+- Clock skew between hosts in Both mode → the same files re-sync every session (mtime-wins); NTP or explicit `--mode`.
+- postcard encodes structs as untagged sequences — `#[serde(default)]` does NOT make an added field backward compatible (truncated buffer fails with `DeserializeUnexpectedEnd`).
 
 ## Never
 
 - `#[test]` inline in a module file — always `src/<module>_tests.rs`.
-- Change `Message` or wire structs without bumping `PROTOCOL_VERSION`.
-- Mutate peer-requested paths outside `peer.rs::apply_*` (never bypass `resolve_beneath`).
-- Commit directly to `master` in shared work.
+- Change `Message` or any wire struct without bumping `PROTOCOL_VERSION`.
+- Mutate peer-requested paths outside `peer.rs::apply_*`; never bypass `paths.rs::resolve_beneath`.
+- Record in the baseline anything the peer hasn't confirmed applying — read `.agents/sync-semantics.md` before touching baseline/deletion logic.
 - Special-case `.git/` out of the sync — it's synced by design; the git gate owns pausing.
-- Hand-edit `CHANGELOG.md` — it's auto-generated from the commit log.
+- Hand-edit `CHANGELOG.md`.
+- Commit directly to `master` in shared work.
 
-## Release
+## References
 
-1. Bump `version` in `Cargo.toml`.
-2. Don't touch `CHANGELOG.md` — it's auto-generated from the commit log.
-3. Tag `0.1.4` — **bare semver, no `v` prefix** (release.yml's tag filter is
-   `[0-9]+.[0-9]+.[0-9]+*`) — and push it. `release.yml` then builds all four
-   targets (musl ×2, darwin ×2), publishes to crates.io, and creates the
-   GitHub release; `workflow_dispatch` can release a given tag manually.
-   Installers: `install.sh` (pulls the GitHub-release tarballs) and the
-   homebrew tap.
+- `.agents/architecture.md` — read when navigating the codebase or tuning timings: module map, reading order, `peer.rs` internals, every tuning constant, CI and release details.
+- `.agents/sync-semantics.md` — read before changing sync planning, applies, baseline, suppression, or the git gate: deletion/baseline invariants, error classification, fs safety chain, troubleshooting table.
