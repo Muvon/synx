@@ -372,3 +372,50 @@ async fn reports_git_remotes_in_hello_ack() {
             if git_remotes == &vec!["github.com/muvon/synx".to_string()]
     ));
 }
+
+#[tokio::test]
+async fn a_stopped_rebase_mirrored_from_the_peer_does_not_pause_git_sync() {
+    let root = TestDir::new("mirrored-rebase");
+    let rebase = root.0.join(".git/rebase-merge");
+    fs::create_dir_all(&rebase).unwrap();
+    let head_name = rebase.join("head-name");
+    fs::write(&head_name, b"refs/heads/feature\n").unwrap();
+    // The peer's git wrote it long ago; only the directory is fresh, from
+    // our own apply of it.
+    filetime::set_file_mtime(
+        &head_name,
+        filetime::FileTime::from_unix_time(1_700_000_000, 0),
+    )
+    .unwrap();
+    let input = encode([
+        Message::Hello {
+            version: PROTOCOL_VERSION,
+            root: PathBuf::from("client"),
+            mode: SyncMode::Both,
+            compress: false,
+        },
+        Message::ManifestBegin,
+        Message::ManifestEnd,
+        Message::SyncDone,
+        Message::Bye,
+    ])
+    .await;
+    let writer = Arc::new(Mutex::new(Vec::new()));
+    run_io(root.0.clone(), std::io::Cursor::new(input), writer.clone())
+        .await
+        .unwrap();
+
+    let output = writer.lock().await.clone();
+    let mut reader = output.as_slice();
+    let mut messages = Vec::new();
+    while !reader.is_empty() {
+        messages.push(read_message(&mut reader).await.unwrap());
+    }
+    assert!(!messages
+        .iter()
+        .any(|message| matches!(message, Message::ManifestExcluded { .. })));
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Message::ManifestEntry(entry) if entry.path == Path::new(".git/rebase-merge/head-name")
+    )));
+}

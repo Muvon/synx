@@ -645,6 +645,59 @@ fn git_gate_detects_live_stale_and_deferred_work() {
 }
 
 #[tokio::test]
+async fn sequencer_state_applied_for_the_peer_never_arms_the_git_gate() {
+    let root = TestDir::new("git-gate-applied");
+    let rebase = root.path().join(".git/rebase-merge");
+    fs::create_dir_all(&rebase).unwrap();
+    // An empty sequencer directory records no git step.
+    assert!(!git_busy(root.path()));
+
+    // A rebase the peer stopped long ago, mirrored here: the children carry
+    // the sender's old mtimes, the directory a fresh one from our writes.
+    let stopped = SystemTime::now() - Duration::from_secs(2 * 3600);
+    for name in ["head-name", "message"] {
+        let child = rebase.join(name);
+        fs::write(&child, name).unwrap();
+        filetime::set_file_mtime(&child, filetime::FileTime::from_system_time(stopped)).unwrap();
+    }
+    assert!(!git_busy(root.path()));
+
+    // Replaying the peer's finish into it churns the directory. The gate
+    // must stay open so the rest of that finish lands now, not one
+    // `STALE_AFTER` per op later.
+    let ctx = session_ctx(root.path());
+    let suppress = Suppression::default();
+    let pending = Pending::default();
+    let writer = Arc::new(Mutex::new(Vec::new()));
+    for msg in [
+        Message::FileData {
+            entry: file_entry(".git/rebase-merge/done", b"done"),
+            content: b"done".to_vec(),
+        },
+        Message::Delete {
+            path: PathBuf::from(".git/rebase-merge/message"),
+        },
+        Message::FileData {
+            entry: file_entry(".git/index", b"finished"),
+            content: b"finished".to_vec(),
+        },
+    ] {
+        handle_incoming(&ctx, msg, &suppress, &pending, &writer, true)
+            .await
+            .unwrap();
+    }
+    assert!(!ctx.gate.has_deferred());
+    assert_eq!(
+        fs::read(root.path().join(".git/index")).unwrap(),
+        b"finished"
+    );
+
+    // A git step here writes a child with a current mtime: busy again.
+    fs::write(rebase.join("msgnum"), b"41").unwrap();
+    assert!(git_busy(root.path()));
+}
+
+#[tokio::test]
 async fn handles_live_incoming_mutations_requests_and_guards() {
     let root = TestDir::new("incoming");
     fs::write(root.path().join(".gitignore"), "/ignored\n").unwrap();
@@ -1193,6 +1246,69 @@ async fn defers_only_git_events_while_repository_is_busy() {
 }
 
 #[tokio::test]
+async fn replay_keeps_what_the_local_git_operation_wrote() {
+    let root = TestDir::new("replay-superseded");
+    fs::create_dir(root.path().join(".git")).unwrap();
+    fs::write(root.path().join(".git/index"), b"rebased").unwrap();
+    let ctx = session_ctx(root.path());
+    let suppress = Suppression::default();
+    let pending = Pending::default();
+    let writer = Arc::new(Mutex::new(Vec::new()));
+    let stale_index = || Message::FileData {
+        entry: file_entry(".git/index", b"stale"),
+        content: b"stale".to_vec(),
+    };
+
+    // While our rebase ran, the peer refreshed its pre-rebase index and
+    // fetched an object; both queued behind the gate, then a barrier.
+    ctx.gate.defer_out(PathBuf::from(".git/index"));
+    ctx.gate.defer_in(stale_index());
+    ctx.gate.defer_in(Message::FileData {
+        entry: file_entry(".git/objects/aa/bb", b"blob"),
+        content: b"blob".to_vec(),
+    });
+    ctx.gate.defer_in(Message::Ping);
+    replay_deferred(&ctx, &suppress, &pending, &writer, true, true)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        fs::read(root.path().join(".git/index")).unwrap(),
+        b"rebased"
+    );
+    assert_eq!(
+        fs::read(root.path().join(".git/objects/aa/bb")).unwrap(),
+        b"blob"
+    );
+    let wire = writer.lock().await.clone();
+    let mut reader = wire.as_slice();
+    assert!(matches!(
+        read_message(&mut reader).await.unwrap(),
+        Message::FileData { entry, content }
+            if entry.path == Path::new(".git/index") && content == b"rebased"
+    ));
+    // The peer recorded its index as converged when it sent it.
+    assert!(matches!(
+        read_message(&mut reader).await.unwrap(),
+        Message::ApplyFailed { path, .. } if path == Path::new(".git/index")
+    ));
+    assert!(matches!(
+        read_message(&mut reader).await.unwrap(),
+        Message::Pong
+    ));
+    assert!(reader.is_empty());
+
+    // A side that doesn't send has nothing to defend: the peer's copy wins.
+    ctx.gate.defer_out(PathBuf::from(".git/index"));
+    ctx.gate.defer_in(stale_index());
+    replay_deferred(&ctx, &suppress, &pending, &writer, false, true)
+        .await
+        .unwrap();
+    assert_eq!(fs::read(root.path().join(".git/index")).unwrap(), b"stale");
+    assert_eq!(writer.lock().await.len(), wire.len());
+}
+
+#[tokio::test]
 async fn live_loop_replies_and_keeps_running_after_per_operation_errors() {
     let root = TestDir::new("live-loop");
     let ignores = Arc::new(IgnoreStack::from_manifest(root.path(), &[]));
@@ -1251,6 +1367,70 @@ async fn live_loop_replies_and_keeps_running_after_per_operation_errors() {
     ));
     assert!(reader.is_empty());
     assert!(!root.path().join("bad").exists());
+}
+
+#[tokio::test]
+async fn live_loop_never_lets_queued_peer_git_writes_overwrite_a_local_operation() {
+    let root = TestDir::new("live-loop-git");
+    fs::create_dir(root.path().join(".git")).unwrap();
+    fs::write(root.path().join(".git/index"), b"rebased").unwrap();
+    let ignores = Arc::new(IgnoreStack::from_manifest(root.path(), &[]));
+    let ignore_state = Arc::new(std::sync::OnceLock::new());
+    assert!(ignore_state.set(ignores.clone()).is_ok());
+    let watcher = watcher::spawn(
+        root.path().to_path_buf(),
+        Suppression::default(),
+        ignore_state,
+    )
+    .unwrap();
+    // The session ends with the gate still holding the peer's stale index.
+    // Whether the settle replay or teardown reaches it first, it must not
+    // land on what our rebase wrote.
+    let gate = GitGate::default();
+    gate.defer_out(PathBuf::from(".git/index"));
+    gate.defer_in(Message::FileData {
+        entry: file_entry(".git/index", b"stale"),
+        content: b"stale".to_vec(),
+    });
+    let mut input = Vec::new();
+    write_message(&mut input, &Message::Bye, false)
+        .await
+        .unwrap();
+    let writer = Arc::new(Mutex::new(Vec::new()));
+    let ctx = SessionCtx {
+        root: root.path().to_path_buf(),
+        mode: SyncMode::Both,
+        compress: false,
+        is_client: false,
+        ignores,
+        gate,
+        baseline: LiveBaseline::disabled(),
+    };
+    live_loop(
+        ctx,
+        std::io::Cursor::new(input),
+        writer.clone(),
+        Suppression::default(),
+        Pending::default(),
+        watcher,
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        fs::read(root.path().join(".git/index")).unwrap(),
+        b"rebased"
+    );
+    let wire = writer.lock().await.clone();
+    let mut reader = wire.as_slice();
+    let mut rejected = false;
+    while !reader.is_empty() {
+        if let Message::ApplyFailed { path, .. } = read_message(&mut reader).await.unwrap() {
+            rejected |= path == Path::new(".git/index");
+        }
+    }
+    assert!(rejected);
 }
 
 #[test]

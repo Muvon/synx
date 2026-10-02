@@ -240,14 +240,12 @@ pub fn is_under_git(rel: &Path) -> bool {
 /// edits keep syncing, only the VCS metadata is held back until the
 /// in-progress operation finishes.
 ///
-/// Staleness handling: a marker file older than `STALE_AFTER` is treated
-/// as garbage left over by a crashed git or a synx-induced sync (the bug
-/// before this guard existed). Pretending it's "busy" forever would
-/// deadlock recovery, so we deliberately ignore stale markers and let
-/// `.git/` sync resume. Real in-progress operations refresh markers
-/// far more often than this threshold — even an interactive rebase
-/// touching `done` / `git-rebase-todo` on every pick stays well inside
-/// the window.
+/// Staleness handling: a marker older than `STALE_AFTER` no longer pauses.
+/// Either git crashed and left it behind, or the operation is stopped
+/// waiting for the user (a conflict, `edit`, `break`): nothing under
+/// `.git/` moves until they resume, and that on-disk state is what git
+/// itself resumes from, so it syncs like any other quiet state. Pausing on
+/// it forever would deadlock recovery from a crashed git.
 pub fn git_busy(root: &Path) -> bool {
     use std::time::SystemTime;
     /// Markers younger than this are treated as a live operation.
@@ -278,10 +276,9 @@ pub fn git_busy(root: &Path) -> bool {
         let Ok(meta) = fs::metadata(&p) else {
             continue;
         };
-        // For directories (rebase-merge, rebase-apply), use the newest
-        // mtime among contents — git rewrites files inside on every step,
-        // so the dir's own mtime can be older than its contents.
-        let age = newest_age(&p, &meta, now);
+        let Some(age) = newest_age(&p, &meta, now) else {
+            continue;
+        };
         if age <= STALE_AFTER {
             return true;
         }
@@ -294,30 +291,34 @@ pub fn git_busy(root: &Path) -> bool {
     false
 }
 
-/// Most-recent age across `p` and (if `p` is a directory) one level of
-/// children. Cheap — bounded `readdir`, no recursion. Falls back to the
-/// passed `meta` if any stat fails.
-fn newest_age(p: &Path, meta: &fs::Metadata, now: std::time::SystemTime) -> Duration {
+/// How long ago git last wrote the marker at `p`: its own mtime for a file,
+/// the newest child's for a directory (`rebase-merge/`, `rebase-apply/`),
+/// which git rewrites on every step. `None` for an empty directory — nothing
+/// in it records a step. Cheap — bounded `readdir`, no recursion.
+///
+/// A directory's own mtime is never read: it moves whenever any entry in it
+/// is created or removed, including by synx applying the peer's copy of this
+/// state (tmp + rename, unlink). Counted as git activity, every replayed op
+/// re-armed the gate for another `STALE_AFTER`, and a receiving repo froze
+/// mid-rebase with the finished state stuck in its defer queue. Applied
+/// children carry the sender's mtimes, and the sender only ships them once
+/// they are stale on its own side.
+fn newest_age(p: &Path, meta: &fs::Metadata, now: std::time::SystemTime) -> Option<Duration> {
     let age_of = |m: &fs::Metadata| -> Duration {
         m.modified()
             .ok()
             .and_then(|t| now.duration_since(t).ok())
             .unwrap_or_default()
     };
-    let mut youngest = age_of(meta);
-    if meta.is_dir() {
-        if let Ok(rd) = fs::read_dir(p) {
-            for ent in rd.flatten() {
-                if let Ok(cm) = ent.metadata() {
-                    let a = age_of(&cm);
-                    if a < youngest {
-                        youngest = a;
-                    }
-                }
-            }
-        }
+    if !meta.is_dir() {
+        return Some(age_of(meta));
     }
-    youngest
+    fs::read_dir(p)
+        .ok()?
+        .flatten()
+        .filter_map(|ent| ent.metadata().ok())
+        .map(|m| age_of(&m))
+        .min()
 }
 
 /// Keep `.git/` paused this long after git's markers disappear. `git_busy`
@@ -1365,24 +1366,7 @@ where
                 // Replay `.git/` events deferred during a git operation, but
                 // only once git has actually settled.
                 if ctx.gate.has_deferred() && !ctx.gate.busy(&ctx.root) {
-                    let (paths, msgs) = ctx.gate.take_deferred();
-                    if send_local && !paths.is_empty() {
-                        // Synthesize a Modified for each touched path;
-                        // forward_local_events re-reads current state, so a
-                        // path that's now gone becomes a Delete.
-                        let events: Vec<FsEvent> = paths.into_iter().map(FsEvent::Modified).collect();
-                        forward_local_events(&ctx.root, events, &writer, ctx.compress, &suppress, ctx.is_client, &ctx.ignores, &ctx.gate, &ctx.baseline).await?;
-                    }
-                    for m in msgs {
-                        let failed = message_path(&m);
-                        if let Err(e) = handle_incoming(&ctx, m, &suppress, &pending, &writer, apply_remote).await {
-                            tracing::warn!("deferred apply failed: {}", e);
-                            if let Some(path) = failed {
-                                let mut w = writer.lock().await;
-                                let _ = write_message(&mut *w, &Message::ApplyFailed { path, reason: format!("{e}") }, ctx.compress).await;
-                            }
-                        }
-                    }
+                    replay_deferred(&ctx, &suppress, &pending, &writer, send_local, apply_remote).await?;
                     // A git mass rewrite is the highest-risk window for
                     // swallowed watcher events — sweep now instead of
                     // waiting for the periodic tick.
@@ -1433,15 +1417,119 @@ where
     // Apply what the gate is still holding instead of dropping it on the
     // floor. The peer counts those ops as delivered, so a `.git/` write
     // discarded here comes back next session as "this file is gone on their
-    // side" — and the three-way diff deletes the sender's only copy.
+    // side" — and the three-way diff deletes the sender's only copy. Ops our
+    // own git operation superseded are the exception (see `apply_deferred`).
     ctx.gate.close();
-    let (_, deferred) = ctx.gate.take_deferred();
-    for msg in deferred {
-        let failed = message_path(&msg);
-        if let Err(e) = handle_incoming(&ctx, msg, &suppress, &pending, &writer, apply_remote).await
-        {
-            tracing::warn!("deferred apply at exit failed: {}", e);
-            if let Some(path) = failed {
+    let (paths, deferred) = ctx.gate.take_deferred();
+    let ours: HashSet<PathBuf> = if send_local {
+        paths.into_iter().collect()
+    } else {
+        HashSet::new()
+    };
+    apply_deferred(
+        &ctx,
+        deferred,
+        &ours,
+        &suppress,
+        &pending,
+        &writer,
+        apply_remote,
+    )
+    .await;
+
+    // Nothing is written here on purpose: whatever this session recorded
+    // after its last confirmed barrier is a claim the peer never
+    // acknowledged, and the next session re-derives it from the manifest
+    // exchange anyway. Persisting it would be the same lie that deletes a
+    // repository when the link drops mid-push.
+    reader_task.abort();
+    Ok(())
+}
+
+/// Replay what the gate held once git has settled: our own touched `.git/`
+/// paths go out first, then the peer's queued ops apply in arrival order.
+async fn replay_deferred<W>(
+    ctx: &SessionCtx,
+    suppress: &Suppression,
+    pending: &Pending,
+    writer: &Arc<Mutex<W>>,
+    send_local: bool,
+    apply_remote: bool,
+) -> Result<()>
+where
+    W: AsyncWriteExt + Unpin,
+{
+    let (paths, msgs) = ctx.gate.take_deferred();
+    let ours: HashSet<PathBuf> = if send_local {
+        paths.iter().cloned().collect()
+    } else {
+        HashSet::new()
+    };
+    if send_local && !paths.is_empty() {
+        // Synthesize a Modified for each touched path;
+        // forward_local_events re-reads current state, so a
+        // path that's now gone becomes a Delete.
+        let events: Vec<FsEvent> = paths.into_iter().map(FsEvent::Modified).collect();
+        forward_local_events(
+            &ctx.root,
+            events,
+            writer,
+            ctx.compress,
+            suppress,
+            ctx.is_client,
+            &ctx.ignores,
+            &ctx.gate,
+            &ctx.baseline,
+        )
+        .await?;
+    }
+    apply_deferred(ctx, msgs, &ours, suppress, pending, writer, apply_remote).await;
+    Ok(())
+}
+
+/// Apply the peer's `.git/` ops queued while git was busy, in arrival order.
+///
+/// An op on a path in `ours` is dropped: our git operation rewrote that path
+/// while the op waited, and the peer made it against the state before. Applied,
+/// it overwrites the operation's result — the peer's refreshed pre-rebase index
+/// over the one the rebase just wrote, so the repo shows the whole rebase as
+/// uncommitted changes. Our version stands; `ApplyFailed` tells the peer not to
+/// record its own as converged. `ours` is empty on a side that doesn't send:
+/// there the peer's version is the one that counts.
+async fn apply_deferred<W>(
+    ctx: &SessionCtx,
+    msgs: Vec<Message>,
+    ours: &HashSet<PathBuf>,
+    suppress: &Suppression,
+    pending: &Pending,
+    writer: &Arc<Mutex<W>>,
+    apply_remote: bool,
+) where
+    W: AsyncWriteExt + Unpin,
+{
+    // A chunked transfer is several messages for one path; report it once.
+    let mut reported: HashSet<PathBuf> = HashSet::new();
+    for msg in msgs {
+        let path = message_path(&msg);
+        if let Some(path) = path.as_ref().filter(|p| ours.contains(*p)) {
+            if reported.insert(path.clone()) {
+                tracing::debug!("deferred op superseded by local git: {}", path.display());
+                let mut w = writer.lock().await;
+                let _ = write_message(
+                    &mut *w,
+                    &Message::ApplyFailed {
+                        path: path.clone(),
+                        reason: "superseded by local git operation".into(),
+                    },
+                    ctx.compress,
+                )
+                .await;
+            }
+            continue;
+        }
+        if let Err(e) = handle_incoming(ctx, msg, suppress, pending, writer, apply_remote).await {
+            tracing::warn!("deferred apply failed: {}", e);
+            if let Some(path) = path {
                 let mut w = writer.lock().await;
                 let _ = write_message(
                     &mut *w,
@@ -1455,14 +1543,6 @@ where
             }
         }
     }
-
-    // Nothing is written here on purpose: whatever this session recorded
-    // after its last confirmed barrier is a claim the peer never
-    // acknowledged, and the next session re-derives it from the manifest
-    // exchange anyway. Persisting it would be the same lie that deletes a
-    // repository when the link drops mid-push.
-    reader_task.abort();
-    Ok(())
 }
 
 /// The path an op applies to, or `None` for messages that carry none.

@@ -87,7 +87,7 @@ synx/
 | `SUPPRESS_TTL` / `SUPPRESS_SWEEP` | 60 s / 5 s | peer.rs | echo-suppression entry lifetime |
 | `RECONCILE_INTERVAL` | 30 s | peer.rs | missed-events sweep; skipped when the watcher was silent |
 | `BARRIER_INTERVAL` | 3 s | peer.rs | `Ping`/`Pong` that confirms the baseline; silent when nothing is pending |
-| `STALE_AFTER` | 600 s | peer.rs (`git_busy`) | git markers older → ignored (crashed git self-heals) |
+| `STALE_AFTER` | 600 s | peer.rs (`git_busy`) | git markers older → ignored (crashed git self-heals; a stopped rebase/merge syncs as quiet state) |
 | `GIT_SETTLE` | 5 s | peer.rs | quiet period after git finishes |
 | `DEBOUNCE` / `DEBOUNCE_TICK` | 200 ms / 100 ms | watcher.rs | editor save-storm coalescing / flush wakeup |
 | `MOVED_CAP` | 10 000 | watcher.rs | bound on remembered removed ids for rename pairing |
