@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.5] - 2026-10-06
+
+### 📋 Release Summary
+
+Replay now protects local Git changes, and synchronization confirms state before saving baselines.
+
+### 🐛 Bug Fixes & Stability
+
+- **peer**: protect local git changes during replay `713631d3`
+- **sync**: confirm state before saving baselines `9ad38f0a`
+
+### 📚 Documentation & Examples
+
+- **agents**: clarify sync architecture guidance `8a2828d1`
+
+### 🔄 Other Changes
+
+1 maintenance, dependency, and tooling update not listed individually.
+
 ## [0.1.4] - 2026-09-05
 
 ### 📋 Release Summary
