@@ -249,6 +249,36 @@ fn modify_vs_delete_keeps_changed_data() {
 }
 
 #[test]
+fn a_directory_delete_spares_children_the_plan_keeps() {
+    // `git gc` emptied a fan-out dir after the last sync and the next object
+    // recreated it on one side only: the dir still matches the baseline (a
+    // dir is its kind), the object inside does not.
+    let dir = entry("objects/ab", EntryKind::Dir, 0, 1);
+    let old = entry("objects/ab/old", EntryKind::File, 1, 1);
+    let new = entry("objects/ab/new", EntryKind::File, 2, 2);
+    let baseline = Baseline::from_entries([dir.clone(), old.clone()]);
+
+    let local_new = build_plan(&[dir.clone(), new.clone()], &[], &baseline, SyncMode::Both);
+    assert!(local_new.del_local.is_empty());
+    assert_eq!(paths(&local_new.push), ["objects/ab", "objects/ab/new"]);
+
+    let remote_new = build_plan(&[], &[dir.clone(), new.clone()], &baseline, SyncMode::Both);
+    assert!(remote_new.del_remote.is_empty());
+    let mut pulled = remote_new.get.clone();
+    pulled.sort();
+    assert_eq!(pulled, [dir.path.clone(), new.path.clone()]);
+
+    // Pull-only: the directory still survives, with nothing pushed.
+    let pull_only = build_plan(&[dir.clone(), new.clone()], &[], &baseline, SyncMode::Pull);
+    assert!(pull_only.del_local.is_empty());
+    assert!(pull_only.push.is_empty());
+
+    // Nothing left inside: the directory goes with its converged contents.
+    let emptied = build_plan(&[dir.clone(), old.clone()], &[], &baseline, SyncMode::Both);
+    assert_eq!(emptied.del_local, [dir.path.clone(), old.path.clone()]);
+}
+
+#[test]
 fn resolves_content_by_mode_and_mtime_but_never_type_conflicts() {
     let local = entry("file", EntryKind::File, 1, 10);
     let remote = entry("file", EntryKind::File, 2, 20);
@@ -625,6 +655,48 @@ async fn a_push_the_remote_rejected_stays_out_of_the_seeded_baseline() {
     let seeded = Baseline::load(&root.0);
     assert!(seeded.get(Path::new("landed")).is_some());
     assert!(seeded.get(Path::new("rejected")).is_none());
+}
+
+#[tokio::test]
+async fn init_sync_keeps_what_was_written_into_a_directory_the_peer_removed() {
+    let root = TestDir::new("spare-dir");
+    let dir = root.0.join("objects/ab");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("old"), b"packed away on the peer").unwrap();
+    // Converged last session: the directories and the file they held then.
+    let converged = ["objects", "objects/ab", "objects/ab/old"]
+        .map(|p| build_entry(&root.0, Path::new(p)).unwrap().unwrap())
+        .map(|e| (e.path.clone(), e));
+    LiveBaseline::seed(
+        root.0.clone(),
+        HashMap::from(converged),
+        &Baseline::default(),
+    );
+    // Written here since; the peer has never seen it.
+    fs::write(dir.join("new"), b"fresh object").unwrap();
+
+    // The peer emptied and removed the whole tree.
+    let input = encode([
+        Message::ManifestBegin,
+        Message::ManifestEnd,
+        Message::SyncDone,
+    ])
+    .await;
+    run_inner(
+        root.0.clone(),
+        once_args(&root.0),
+        false,
+        std::io::Cursor::new(input),
+        Arc::new(Mutex::new(Vec::new())),
+        None,
+    )
+    .await
+    .unwrap();
+
+    // The converged file follows the peer's delete; the new one and the
+    // directories holding it stay.
+    assert!(!dir.join("old").exists());
+    assert_eq!(fs::read(dir.join("new")).unwrap(), b"fresh object");
 }
 
 #[test]

@@ -4,8 +4,8 @@
 use anyhow::{Context, Result};
 use humansize::{format_size, BINARY};
 use owo_colors::OwoColorize;
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
@@ -1118,6 +1118,24 @@ fn build_plan(local: &[Entry], remote: &[Entry], baseline: &Baseline, mode: Sync
         }
     }
 
+    // A directory's identity is its kind alone, so baseline evidence can't
+    // show what it held, and applying its delete wipes everything beneath it
+    // — including children this plan keeps because they postdate the
+    // baseline. `git gc` empties `.git/objects/xx/` and the next write
+    // recreates it: the dir matches the baseline, the new object inside does
+    // not, and deleting the dir destroyed the object the plan was pushing.
+    // Such a directory survives and travels with its kept children.
+    for dir in spare_dirs_with_survivors(&mut del_local, &local_map) {
+        if allow_push {
+            push.push(local_map[&dir].clone());
+        }
+    }
+    for dir in spare_dirs_with_survivors(&mut del_remote, &remote_map) {
+        if allow_pull {
+            get.push(dir);
+        }
+    }
+
     // Dirs first, then symlinks, then files — guarantees parents exist
     // before children when applied on the receiving side.
     push.sort_by_key(|e| {
@@ -1136,6 +1154,32 @@ fn build_plan(local: &[Entry], remote: &[Entry], baseline: &Baseline, mode: Sync
         del_local,
         conflicts,
     }
+}
+
+/// Take out of `deleted` every directory that still holds an entry of `side`
+/// the plan keeps (anything not itself in `deleted`), and return them.
+fn spare_dirs_with_survivors(
+    deleted: &mut Vec<PathBuf>,
+    side: &HashMap<&PathBuf, &Entry>,
+) -> Vec<PathBuf> {
+    let doomed: HashSet<&PathBuf> = deleted.iter().collect();
+    let doomed_dirs: HashSet<&Path> = deleted
+        .iter()
+        .filter(|path| side.get(path).is_some_and(|e| e.kind == EntryKind::Dir))
+        .map(PathBuf::as_path)
+        .collect();
+    let mut spared: HashSet<PathBuf> = HashSet::new();
+    for path in side.keys().filter(|path| !doomed.contains(**path)) {
+        for ancestor in path.ancestors().skip(1) {
+            if doomed_dirs.contains(ancestor) {
+                spared.insert(ancestor.to_path_buf());
+            }
+        }
+    }
+    deleted.retain(|path| !spared.contains(path));
+    let mut spared: Vec<PathBuf> = spared.into_iter().collect();
+    spared.sort();
+    spared
 }
 
 #[cfg(test)]
