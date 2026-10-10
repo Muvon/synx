@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.6] - 2026-10-10
+
+### 📋 Release Summary
+
+Sync deletion now preserves paths that are marked for retention.
+
+### 🐛 Bug Fixes & Stability
+
+- **sync**: preserve retained paths during sync deletion `1fa1e782`
+
 ## [0.1.5] - 2026-10-06
 
 ### 📋 Release Summary
