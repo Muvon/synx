@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.7] - 2026-10-13
+
+### 📋 Release Summary
+
+File watching now limits inode-based rename pairing to macOS and avoids pairing stale inode events.
+
+### 🐛 Bug Fixes & Stability
+
+- **watcher**: restrict inode rename pairing to macOS `c65c0d67`
+- **watcher**: prevent stale inode rename pairing `51ad2fc7`
+
 ## [0.1.6] - 2026-10-10
 
 ### 📋 Release Summary
