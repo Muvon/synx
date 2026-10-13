@@ -9,7 +9,7 @@ use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use crate::ignores::IgnoreStack;
@@ -131,9 +131,9 @@ struct IdCacheInner {
     ids: BTreeMap<PathBuf, Known>,
     /// Ids of reported paths the backend just removed, waiting for the
     /// create that the other half of a rename arrives as (see
-    /// `resolve_rename`). Consumed on match; cleared once a mass delete
-    /// grows it past `MOVED_CAP`.
-    moved: HashMap<FileId, PathBuf>,
+    /// `resolve_rename`). Consumed on match; dropped after `MOVED_TTL`, or
+    /// all at once when a mass delete grows the map past `MOVED_CAP`.
+    moved: HashMap<FileId, (PathBuf, Instant)>,
     /// Until the manifest walk has seeded us, a recursive `add_path` (the
     /// root registration, or a directory created mid-walk) records only the
     /// directory itself; the seed covers the contents.
@@ -156,6 +156,14 @@ struct Known {
 
 /// Bound on remembered removed ids; only a mass delete gets near it.
 const MOVED_CAP: usize = 10_000;
+
+/// How long a removed id stays a rename candidate. The two halves of a
+/// rename arrive together and the create is flushed one debounce window
+/// later. Past that, a matching id is a reused inode — Linux hands a freed
+/// one to the next file at once — and pairing it would make the peer move
+/// whatever now lives at the old path (a recreated `.git/objects/xx/`)
+/// onto an unrelated new file.
+const MOVED_TTL: Duration = Duration::from_secs(2);
 
 impl IdCache {
     fn new(ignores: Arc<OnceLock<Arc<IgnoreStack>>>) -> Self {
@@ -227,8 +235,10 @@ impl IdCache {
         let from = g
             .moved
             .get(&id)
-            .filter(|from| *from != to && fs::symlink_metadata(from).is_err())
-            .cloned()?;
+            .filter(|(from, removed)| {
+                removed.elapsed() < MOVED_TTL && from != to && fs::symlink_metadata(from).is_err()
+            })
+            .map(|(from, _)| from.clone())?;
         g.moved.remove(&id);
         Some(
             notify::Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
@@ -282,10 +292,13 @@ impl FileIdCache for IdCache {
         };
         if let Some(known) = g.ids.remove(path) {
             if known.reported {
+                g.moved
+                    .retain(|_, (_, removed)| removed.elapsed() < MOVED_TTL);
                 if g.moved.len() >= MOVED_CAP {
                     g.moved.clear();
                 }
-                g.moved.insert(known.id, path.to_path_buf());
+                g.moved
+                    .insert(known.id, (path.to_path_buf(), Instant::now()));
             }
         }
         // Descendants sort directly after their parent, so a removed

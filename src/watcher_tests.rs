@@ -458,6 +458,22 @@ fn id_cache_resolves_a_collapsed_rename_by_id() {
 }
 
 #[test]
+fn id_cache_never_pairs_a_removal_older_than_the_ttl() {
+    let root = TestDir::new();
+    fs::write(root.0.join("old"), b"x").unwrap();
+    let mut cache = IdCache::default();
+    cache.seed([(root.0.join("old"), id_of(&root.0.join("old")))]);
+
+    // A create that shows up with a long-removed path's id is a reused
+    // inode, not the other half of a rename.
+    fs::rename(root.0.join("old"), root.0.join("new")).unwrap();
+    cache.remove_path(&root.0.join("old"));
+    std::thread::sleep(MOVED_TTL);
+    let create = event(EventKind::Create(CreateKind::File), &[root.0.join("new")]);
+    assert!(cache.resolve_rename(&create).is_none());
+}
+
+#[test]
 fn id_cache_pairs_only_paths_synx_has_reported() {
     let root = TestDir::new();
     fs::write(root.0.join("index"), b"v1").unwrap();
