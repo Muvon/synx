@@ -159,10 +159,9 @@ const MOVED_CAP: usize = 10_000;
 
 /// How long a removed id stays a rename candidate. The two halves of a
 /// rename arrive together and the create is flushed one debounce window
-/// later. Past that, a matching id is a reused inode — Linux hands a freed
-/// one to the next file at once — and pairing it would make the peer move
-/// whatever now lives at the old path (a recreated `.git/objects/xx/`)
-/// onto an unrelated new file.
+/// later. Past that, a matching id belongs to some other file, and pairing
+/// it would make the peer move whatever now lives at the old path (a
+/// recreated `.git/objects/xx/`) onto an unrelated new file.
 const MOVED_TTL: Duration = Duration::from_secs(2);
 
 impl IdCache {
@@ -473,7 +472,13 @@ pub fn spawn(
                 Ok(events) => {
                     let mut out: Vec<FsEvent> = Vec::with_capacity(events.len());
                     for ev in events {
-                        let raw = match ids_cb.resolve_rename(&ev.event) {
+                        // Only FSEvents splits renames. inotify pairs them by
+                        // cookie, and Linux hands a freed inode to the next
+                        // file at once, so an id match there proves no move.
+                        let paired = cfg!(target_os = "macos")
+                            .then(|| ids_cb.resolve_rename(&ev.event))
+                            .flatten();
+                        let raw = match paired {
                             Some(paired) => paired,
                             None => ev.event,
                         };
