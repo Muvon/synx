@@ -17,884 +17,837 @@ use crate::cli::ClientArgs;
 use crate::ignores::IgnoreStack;
 use crate::paths::resolve_beneath;
 use crate::peer::{
-    apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
-    compute_delta, compute_signature, forward_local_events, git_busy, git_remotes,
-    git_remotes_conflict, is_under_git, live_loop, send_file, GitGate, Pending, Suppression,
+	apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink, compute_delta,
+	compute_signature, forward_local_events, git_busy, git_remotes, git_remotes_conflict, is_under_git, live_loop,
+	send_file, GitGate, Pending, Suppression,
 };
 use crate::protocol::{
-    read_message, write_frame, write_message, Entry, EntryKind, Message, SyncMode, IO_BUF_SIZE,
-    PROTOCOL_VERSION,
+	read_message, write_frame, write_message, Entry, EntryKind, Message, SyncMode, IO_BUF_SIZE, PROTOCOL_VERSION,
 };
 use crate::transport::{parse_remote, spawn_ssh};
 use crate::walker::{ensure_root, walk_manifest};
 use crate::watcher;
 
 pub async fn run(args: ClientArgs) -> Result<()> {
-    let local_root = ensure_root(std::path::Path::new(&args.local))
-        .with_context(|| format!("invalid local path: {}", args.local))?;
-    let remote = parse_remote(&args.remote)?;
-    crate::ui::banner(&local_root, &remote, args.mode);
+	let local_root = ensure_root(std::path::Path::new(&args.local))
+		.with_context(|| format!("invalid local path: {}", args.local))?;
+	let remote = parse_remote(&args.remote)?;
+	crate::ui::banner(&local_root, &remote, args.mode);
 
-    // Wipe orphan tmps from any previous crashed run before we start.
-    crate::peer::cleanup_orphan_tmps();
+	// Wipe orphan tmps from any previous crashed run before we start.
+	crate::peer::cleanup_orphan_tmps();
 
-    let mut delay = std::time::Duration::from_secs(1);
-    let max_delay = std::time::Duration::from_secs(30);
-    let mut first_attempt = true;
+	let mut delay = std::time::Duration::from_secs(1);
+	let max_delay = std::time::Duration::from_secs(30);
+	let mut first_attempt = true;
 
-    loop {
-        match run_session(&local_root, &remote, &args, first_attempt).await {
-            Ok(()) => return Ok(()),
-            Err(e) if is_fatal(&e) => return Err(e),
-            Err(e) => {
-                crate::ui::warn(&format!(
-                    "connection lost: {} — reconnecting in {}s",
-                    short_err(&e),
-                    delay.as_secs()
-                ));
-                // Cancel-safe wait so Ctrl-C during the back-off exits cleanly.
-                tokio::select! {
-                    _ = tokio::time::sleep(delay) => {}
-                    _ = tokio::signal::ctrl_c() => {
-                        crate::ui::info("interrupted");
-                        return Ok(());
-                    }
-                }
-                delay = (delay * 2).min(max_delay);
-                first_attempt = false;
-            }
-        }
-    }
+	loop {
+		match run_session(&local_root, &remote, &args, first_attempt).await {
+			Ok(()) => return Ok(()),
+			Err(e) if is_fatal(&e) => return Err(e),
+			Err(e) => {
+				crate::ui::warn(&format!(
+					"connection lost: {} — reconnecting in {}s",
+					short_err(&e),
+					delay.as_secs()
+				));
+				// Cancel-safe wait so Ctrl-C during the back-off exits cleanly.
+				tokio::select! {
+					_ = tokio::time::sleep(delay) => {}
+					_ = tokio::signal::ctrl_c() => {
+						crate::ui::info("interrupted");
+						return Ok(());
+					}
+				}
+				delay = (delay * 2).min(max_delay);
+				first_attempt = false;
+			}
+		}
+	}
 }
 
 /// Errors that auto-reconnect can't fix — config-level issues. Anything
 /// network / connection / peer-side gets retried.
 fn is_fatal(e: &anyhow::Error) -> bool {
-    let s = e.to_string().to_lowercase();
-    s.contains("protocol mismatch")
-        || s.contains("invalid local path")
-        || s.contains("remote must be ")
-        || s.contains("refusing to sync")
+	let s = e.to_string().to_lowercase();
+	s.contains("protocol mismatch")
+		|| s.contains("invalid local path")
+		|| s.contains("remote must be ")
+		|| s.contains("refusing to sync")
 }
 
 fn short_err(e: &anyhow::Error) -> String {
-    let s = e.to_string();
-    s.lines().next().unwrap_or(&s).to_string()
+	let s = e.to_string();
+	s.lines().next().unwrap_or(&s).to_string()
 }
 
 /// One full session: spawn ssh, handshake, initial sync, live mode.
 /// Returns `Ok(())` on clean exit (Ctrl-C, `--once` done); `Err` on any
 /// connection-level failure (the outer loop will reconnect).
 async fn run_session(
-    local_root: &std::path::Path,
-    remote: &crate::transport::Remote,
-    args: &ClientArgs,
-    first_attempt: bool,
+	local_root: &std::path::Path,
+	remote: &crate::transport::Remote,
+	args: &ClientArgs,
+	first_attempt: bool,
 ) -> Result<()> {
-    let mut child = spawn_ssh(remote, args.ssh_opts.as_deref(), &args.remote_synx)?;
-    let stdin = child.stdin.take().context("ssh stdin missing")?;
-    let stdout = child.stdout.take().context("ssh stdout missing")?;
-    let mut reader = BufReader::with_capacity(IO_BUF_SIZE, stdout);
-    let writer_inner = BufWriter::with_capacity(IO_BUF_SIZE, stdin);
-    let compress = !args.no_compress;
+	let mut child = spawn_ssh(remote, args.ssh_opts.as_deref(), &args.remote_synx)?;
+	let stdin = child.stdin.take().context("ssh stdin missing")?;
+	let stdout = child.stdout.take().context("ssh stdout missing")?;
+	let mut reader = BufReader::with_capacity(IO_BUF_SIZE, stdout);
+	let writer_inner = BufWriter::with_capacity(IO_BUF_SIZE, stdin);
+	let compress = !args.no_compress;
 
-    let mut w = writer_inner;
-    write_message(
-        &mut w,
-        &Message::Hello {
-            version: PROTOCOL_VERSION,
-            root: PathBuf::from(&remote.path),
-            mode: args.mode,
-            compress,
-        },
-        false,
-    )
-    .await?;
-    let writer = Arc::new(Mutex::new(w));
+	let mut w = writer_inner;
+	write_message(
+		&mut w,
+		&Message::Hello {
+			version: PROTOCOL_VERSION,
+			root: PathBuf::from(&remote.path),
+			mode: args.mode,
+			compress,
+		},
+		false,
+	)
+	.await?;
+	let writer = Arc::new(Mutex::new(w));
 
-    match read_message(&mut reader).await? {
-        Message::HelloAck {
-            version,
-            root_existed,
-            git_remotes: remote_remotes,
-        } => {
-            if version != PROTOCOL_VERSION {
-                anyhow::bail!(
-                    "protocol mismatch (local={PROTOCOL_VERSION}, remote={version}). \
+	match read_message(&mut reader).await? {
+		Message::HelloAck {
+			version,
+			root_existed,
+			git_remotes: remote_remotes,
+		} => {
+			if version != PROTOCOL_VERSION {
+				anyhow::bail!(
+					"protocol mismatch (local={PROTOCOL_VERSION}, remote={version}). \
                      Update synx on both sides."
-                );
-            }
+				);
+			}
 
-            let local_remotes = git_remotes(local_root);
-            if !args.allow_repo_mismatch && git_remotes_conflict(&local_remotes, &remote_remotes) {
-                anyhow::bail!(
-                    "refusing to sync: different git repositories\n  \
+			let local_remotes = git_remotes(local_root);
+			if !args.allow_repo_mismatch && git_remotes_conflict(&local_remotes, &remote_remotes) {
+				anyhow::bail!(
+					"refusing to sync: different git repositories\n  \
                      local remotes:  {}\n  \
                      remote remotes: {}\n  \
                      pass --allow-repo-mismatch if this is intentional",
-                    local_remotes.join(", "),
-                    remote_remotes.join(", ")
-                );
-            }
-            if !root_existed && first_attempt {
-                crate::ui::warn(&format!("remote path created: {}", remote.path));
-            } else if first_attempt {
-                crate::ui::ok("connected");
-            } else {
-                crate::ui::ok("reconnected");
-            }
-        }
-        Message::Error(e) => anyhow::bail!("remote rejected handshake: {e}"),
-        m => anyhow::bail!("unexpected handshake reply: {:?}", m),
-    }
+					local_remotes.join(", "),
+					remote_remotes.join(", ")
+				);
+			}
+			if !root_existed && first_attempt {
+				crate::ui::warn(&format!("remote path created: {}", remote.path));
+			} else if first_attempt {
+				crate::ui::ok("connected");
+			} else {
+				crate::ui::ok("reconnected");
+			}
+		}
+		Message::Error(e) => anyhow::bail!("remote rejected handshake: {e}"),
+		m => anyhow::bail!("unexpected handshake reply: {:?}", m),
+	}
 
-    run_inner(
-        local_root.to_path_buf(),
-        args.clone(),
-        compress,
-        reader,
-        writer,
-        Some(child),
-    )
-    .await
+	run_inner(
+		local_root.to_path_buf(),
+		args.clone(),
+		compress,
+		reader,
+		writer,
+		Some(child),
+	)
+	.await
 }
 
 async fn run_inner<R, W>(
-    local_root: PathBuf,
-    args: ClientArgs,
-    compress: bool,
-    mut reader: R,
-    writer: Arc<Mutex<W>>,
-    mut child: Option<tokio::process::Child>,
+	local_root: PathBuf,
+	args: ClientArgs,
+	compress: bool,
+	mut reader: R,
+	writer: Arc<Mutex<W>>,
+	mut child: Option<tokio::process::Child>,
 ) -> Result<()>
 where
-    R: AsyncRead + AsyncReadExt + Unpin + Send + 'static,
-    W: AsyncWrite + AsyncWriteExt + Unpin + Send + 'static,
+	R: AsyncRead + AsyncReadExt + Unpin + Send + 'static,
+	W: AsyncWrite + AsyncWriteExt + Unpin + Send + 'static,
 {
-    // Spawn the watcher BEFORE the walk so events for files the user
-    // modifies during walk / manifest exchange / init-sync apply aren't
-    // lost (notify uses "events since now" at registration; events from
-    // before are never delivered). Events queue in the unbounded channel
-    // until init sync completes, then we drain + replay them with the
-    // suppress map populated.
-    let suppress = Suppression::default();
-    let pending = Pending::default();
-    // Install the watcher before any tree traversal. Ignore matchers are
-    // derived from the manifest pass below, eliminating the old preliminary
-    // full-tree scan. Until then events queue unfiltered and are filtered
-    // again before forwarding.
-    let ignore_state = Arc::new(OnceLock::new());
-    let mut watcher_handle =
-        watcher::spawn(local_root.clone(), suppress.clone(), ignore_state.clone())?;
+	// Spawn the watcher BEFORE the walk so events for files the user
+	// modifies during walk / manifest exchange / init-sync apply aren't
+	// lost (notify uses "events since now" at registration; events from
+	// before are never delivered). Events queue in the unbounded channel
+	// until init sync completes, then we drain + replay them with the
+	// suppress map populated.
+	let suppress = Suppression::default();
+	let pending = Pending::default();
+	// Install the watcher before any tree traversal. Ignore matchers are
+	// derived from the manifest pass below, eliminating the old preliminary
+	// full-tree scan. Until then events queue unfiltered and are filtered
+	// again before forwarding.
+	let ignore_state = Arc::new(OnceLock::new());
+	let mut watcher_handle = watcher::spawn(local_root.clone(), suppress.clone(), ignore_state.clone())?;
 
-    // ── Local manifest (parallel walk with hash cache) ──
-    // The cache lives behind an Arc<StdMutex> so the live loop's
-    // reconciliation sweeps can reuse it (stat-only for unchanged files)
-    // instead of re-hashing the tree every sweep.
-    let cache = Arc::new(std::sync::Mutex::new(HashCache::load(&local_root)));
-    let started = Instant::now();
-    let root_for_walk = local_root.clone();
-    // Held behind an Arc so the concurrent send task can read it without
-    // cloning the whole manifest; reclaimed to a plain Vec once the send
-    // completes (its Arc clone is dropped by then, so try_unwrap succeeds).
-    let cache_for_walk = Arc::clone(&cache);
-    let ids_for_walk = watcher_handle.ids.clone();
-    let (local_manifest, local_excluded) =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<Entry>, Vec<PathBuf>)> {
-            let mut cache = cache_for_walk
-                .lock()
-                .map_err(|_| anyhow::anyhow!("hash cache mutex poisoned"))?;
-            walk_manifest(&root_for_walk, &mut cache, Some(&ids_for_walk))
-        })
-        .await??;
-    let local_manifest = Arc::new(local_manifest);
-    let ignores = Arc::new(IgnoreStack::from_manifest(&local_root, &local_manifest));
-    let _ = ignore_state.set(ignores.clone());
-    let walk_ms = started.elapsed().as_millis();
-    tracing::debug!(
-        "local walk: {} entries in {} ms",
-        local_manifest.len(),
-        walk_ms
-    );
+	// ── Local manifest (parallel walk with hash cache) ──
+	// The cache lives behind an Arc<StdMutex> so the live loop's
+	// reconciliation sweeps can reuse it (stat-only for unchanged files)
+	// instead of re-hashing the tree every sweep.
+	let cache = Arc::new(std::sync::Mutex::new(HashCache::load(&local_root)));
+	let started = Instant::now();
+	let root_for_walk = local_root.clone();
+	// Held behind an Arc so the concurrent send task can read it without
+	// cloning the whole manifest; reclaimed to a plain Vec once the send
+	// completes (its Arc clone is dropped by then, so try_unwrap succeeds).
+	let cache_for_walk = Arc::clone(&cache);
+	let ids_for_walk = watcher_handle.ids.clone();
+	let (local_manifest, local_excluded) =
+		tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<Entry>, Vec<PathBuf>)> {
+			let mut cache = cache_for_walk
+				.lock()
+				.map_err(|_| anyhow::anyhow!("hash cache mutex poisoned"))?;
+			walk_manifest(&root_for_walk, &mut cache, Some(&ids_for_walk))
+		})
+		.await??;
+	let local_manifest = Arc::new(local_manifest);
+	let ignores = Arc::new(IgnoreStack::from_manifest(&local_root, &local_manifest));
+	let _ = ignore_state.set(ignores.clone());
+	let walk_ms = started.elapsed().as_millis();
+	tracing::debug!("local walk: {} entries in {} ms", local_manifest.len(), walk_ms);
 
-    // ── Send local manifest in parallel with receiving remote's ──
-    // Streamed with write_frame (no per-entry flush) + one flush at the end;
-    // the BufWriter still auto-flushes when full, so a large manifest can't
-    // deadlock against the remote's concurrent send.
-    let writer_for_send = writer.clone();
-    let manifest_for_send = Arc::clone(&local_manifest);
-    let excluded_for_send = local_excluded.clone();
-    let send_manifest_task = tokio::spawn(async move {
-        let mut w = writer_for_send.lock().await;
-        write_frame(&mut *w, &Message::ManifestBegin, compress).await?;
-        for prefix in excluded_for_send {
-            write_frame(&mut *w, &Message::ManifestExcluded { prefix }, compress).await?;
-        }
-        for e in manifest_for_send.iter() {
-            write_frame(&mut *w, &Message::ManifestEntry(e.clone()), compress).await?;
-        }
-        write_frame(&mut *w, &Message::ManifestEnd, compress).await?;
-        w.flush().await?;
-        Ok::<(), anyhow::Error>(())
-    });
+	// ── Send local manifest in parallel with receiving remote's ──
+	// Streamed with write_frame (no per-entry flush) + one flush at the end;
+	// the BufWriter still auto-flushes when full, so a large manifest can't
+	// deadlock against the remote's concurrent send.
+	let writer_for_send = writer.clone();
+	let manifest_for_send = Arc::clone(&local_manifest);
+	let excluded_for_send = local_excluded.clone();
+	let send_manifest_task = tokio::spawn(async move {
+		let mut w = writer_for_send.lock().await;
+		write_frame(&mut *w, &Message::ManifestBegin, compress).await?;
+		for prefix in excluded_for_send {
+			write_frame(&mut *w, &Message::ManifestExcluded { prefix }, compress).await?;
+		}
+		for e in manifest_for_send.iter() {
+			write_frame(&mut *w, &Message::ManifestEntry(e.clone()), compress).await?;
+		}
+		write_frame(&mut *w, &Message::ManifestEnd, compress).await?;
+		w.flush().await?;
+		Ok::<(), anyhow::Error>(())
+	});
 
-    let (raw_remote, remote_excluded) = receive_manifest(&mut reader).await?;
-    send_manifest_task.await??;
-    let mut local_manifest = Arc::try_unwrap(local_manifest).unwrap_or_else(|arc| (*arc).clone());
+	let (raw_remote, remote_excluded) = receive_manifest(&mut reader).await?;
+	send_manifest_task.await??;
+	let mut local_manifest = Arc::try_unwrap(local_manifest).unwrap_or_else(|arc| (*arc).clone());
 
-    // The remote agent doesn't know our ignore rules, so we filter its
-    // manifest through our local IgnoreStack before computing the plan.
-    let before = raw_remote.len();
-    let mut remote_manifest: Vec<Entry> = raw_remote
-        .into_iter()
-        .filter(|e| {
-            let is_dir = matches!(e.kind, EntryKind::Dir);
-            !ignores.is_ignored_rel(&e.path, is_dir)
-        })
-        .collect();
-    let filtered = before - remote_manifest.len();
-    if filtered > 0 {
-        tracing::debug!("filtered {} ignored remote entries", filtered);
-    }
+	// The remote agent doesn't know our ignore rules, so we filter its
+	// manifest through our local IgnoreStack before computing the plan.
+	let before = raw_remote.len();
+	let mut remote_manifest: Vec<Entry> = raw_remote
+		.into_iter()
+		.filter(|e| {
+			let is_dir = matches!(e.kind, EntryKind::Dir);
+			!ignores.is_ignored_rel(&e.path, is_dir)
+		})
+		.collect();
+	let filtered = before - remote_manifest.len();
+	if filtered > 0 {
+		tracing::debug!("filtered {} ignored remote entries", filtered);
+	}
 
-    // ── Paused subtrees (either side) ──
-    // A walker that deliberately excluded a subtree (today: `.git/` while a
-    // git operation is in progress) omits it from its manifest. Without this,
-    // the peer reads that omission as deletion evidence: every file under it
-    // still byte-identical to the baseline (HEAD, config — the stable ones)
-    // gets planned as a deletion, gutting a live repository. Excluded
-    // subtrees are invisible this session on BOTH sides: no pushes, pulls,
-    // or deletes touch them, and the baseline carries their last converged
-    // state forward (see the seeding below).
-    let mut excluded = local_excluded;
-    for prefix in remote_excluded {
-        if !excluded.contains(&prefix) {
-            excluded.push(prefix);
-        }
-    }
-    if !excluded.is_empty() {
-        strip_excluded(&mut local_manifest, &excluded);
-        strip_excluded(&mut remote_manifest, &excluded);
-        let listed: Vec<String> = excluded.iter().map(|p| p.display().to_string()).collect();
-        crate::ui::info(&format!(
-            "operation in progress — sync paused this session for: {}",
-            listed.join(", ")
-        ));
-    }
+	// ── Paused subtrees (either side) ──
+	// A walker that deliberately excluded a subtree (today: `.git/` while a
+	// git operation is in progress) omits it from its manifest. Without this,
+	// the peer reads that omission as deletion evidence: every file under it
+	// still byte-identical to the baseline (HEAD, config — the stable ones)
+	// gets planned as a deletion, gutting a live repository. Excluded
+	// subtrees are invisible this session on BOTH sides: no pushes, pulls,
+	// or deletes touch them, and the baseline carries their last converged
+	// state forward (see the seeding below).
+	let mut excluded = local_excluded;
+	for prefix in remote_excluded {
+		if !excluded.contains(&prefix) {
+			excluded.push(prefix);
+		}
+	}
+	if !excluded.is_empty() {
+		strip_excluded(&mut local_manifest, &excluded);
+		strip_excluded(&mut remote_manifest, &excluded);
+		let listed: Vec<String> = excluded.iter().map(|p| p.display().to_string()).collect();
+		crate::ui::info(&format!(
+			"operation in progress — sync paused this session for: {}",
+			listed.join(", ")
+		));
+	}
 
-    // ── Baseline ──
-    // The converged manifest from our last successful sync — the common
-    // ancestor that lets the three-way diff distinguish a genuine deletion
-    // from a creation on the peer (see build_plan). Empty on first run →
-    // conservative pull-back, no deletes propagate that session. Loaded here
-    // because the stale-.git/ recovery below needs the same evidence.
-    let baseline = Baseline::load(&local_root);
-    if baseline.is_empty() {
-        tracing::debug!("no baseline yet — deletions won't propagate until next sync");
-    }
+	// ── Baseline ──
+	// The converged manifest from our last successful sync — the common
+	// ancestor that lets the three-way diff distinguish a genuine deletion
+	// from a creation on the peer (see build_plan). Empty on first run →
+	// conservative pull-back, no deletes propagate that session. Loaded here
+	// because the stale-.git/ recovery below needs the same evidence.
+	let baseline = Baseline::load(&local_root);
+	if baseline.is_empty() {
+		tracing::debug!("no baseline yet — deletions won't propagate until next sync");
+	}
 
-    // ── Stale-.git/ recovery ──
-    // If local has leftover .git/ entries (from old-version synx propagating
-    // mid-rebase state, or a crashed git) and remote has NO .git/, mirror the
-    // wipe here — but ONLY when the baseline proves .git/ was part of the
-    // last converged state, which makes its absence on remote a deliberate
-    // delete. Without that evidence (first run, or .git/ never synced) local
-    // .git/ is unsynced data: keep it and let the plan push it instead —
-    // never lose data. Skip if local is genuinely mid-operation (git_busy
-    // after stale check).
-    //
-    // A busy-skip omission never reaches this branch: when either walker
-    // excluded .git/ (ManifestExcluded), both manifests were stripped above,
-    // so `local_has_git` is false and only a deliberate remote wipe — a real
-    // manifest, no exclusion, no .git/ entries — can trigger the clean-up.
-    let local_has_git = local_manifest.iter().any(|e| is_under_git(&e.path));
-    let remote_has_git = remote_manifest.iter().any(|e| is_under_git(&e.path));
-    if local_has_git && !remote_has_git && baseline.has_git() && !git_busy(&local_root) {
-        crate::ui::warn(
-            "local has leftover .git/ but remote has none — cleaning local .git/ to match",
-        );
-        let local_git_path = local_root.join(".git");
-        if let Err(e) = std::fs::remove_dir_all(&local_git_path) {
-            crate::ui::warn(&format!("failed to clean local .git/: {e}"));
-        } else {
-            // Strip .git/* entries from the manifest so the diff plan
-            // doesn't try to push them back.
-            local_manifest.retain(|e| !is_under_git(&e.path));
-        }
-    }
+	// ── Stale-.git/ recovery ──
+	// If local has leftover .git/ entries (from old-version synx propagating
+	// mid-rebase state, or a crashed git) and remote has NO .git/, mirror the
+	// wipe here — but ONLY when the baseline proves .git/ was part of the
+	// last converged state, which makes its absence on remote a deliberate
+	// delete. Without that evidence (first run, or .git/ never synced) local
+	// .git/ is unsynced data: keep it and let the plan push it instead —
+	// never lose data. Skip if local is genuinely mid-operation (git_busy
+	// after stale check).
+	//
+	// A busy-skip omission never reaches this branch: when either walker
+	// excluded .git/ (ManifestExcluded), both manifests were stripped above,
+	// so `local_has_git` is false and only a deliberate remote wipe — a real
+	// manifest, no exclusion, no .git/ entries — can trigger the clean-up.
+	let local_has_git = local_manifest.iter().any(|e| is_under_git(&e.path));
+	let remote_has_git = remote_manifest.iter().any(|e| is_under_git(&e.path));
+	if local_has_git && !remote_has_git && baseline.has_git() && !git_busy(&local_root) {
+		crate::ui::warn("local has leftover .git/ but remote has none — cleaning local .git/ to match");
+		let local_git_path = local_root.join(".git");
+		if let Err(e) = std::fs::remove_dir_all(&local_git_path) {
+			crate::ui::warn(&format!("failed to clean local .git/: {e}"));
+		} else {
+			// Strip .git/* entries from the manifest so the diff plan
+			// doesn't try to push them back.
+			local_manifest.retain(|e| !is_under_git(&e.path));
+		}
+	}
 
-    crate::ui::info(&format!(
-        "manifests:  local {}  •  remote {}{}",
-        local_manifest.len().to_string().bright_white(),
-        remote_manifest.len().to_string().bright_white(),
-        if filtered > 0 {
-            format!(" ({} ignored)", filtered).dimmed().to_string()
-        } else {
-            String::new()
-        },
-    ));
+	crate::ui::info(&format!(
+		"manifests:  local {}  •  remote {}{}",
+		local_manifest.len().to_string().bright_white(),
+		remote_manifest.len().to_string().bright_white(),
+		if filtered > 0 {
+			format!(" ({} ignored)", filtered).dimmed().to_string()
+		} else {
+			String::new()
+		},
+	));
 
-    // Build path indices up-front, moved straight into the send task (below).
-    // `remote_hash_by_send` tells the push side which files exist on the remote
-    // at different content (delta candidates). `local_file_by_send` maps our
-    // files to (size, hash) — the only fields the pull side needs to offer the
-    // server a signature and get a delta back instead of the whole file.
-    let remote_hash_by_send: HashMap<PathBuf, [u8; 32]> = remote_manifest
-        .iter()
-        .filter(|e| matches!(e.kind, EntryKind::File))
-        .map(|e| (e.path.clone(), e.hash))
-        .collect();
-    let local_file_by_send: HashMap<PathBuf, (u64, [u8; 32])> = local_manifest
-        .iter()
-        .filter(|e| matches!(e.kind, EntryKind::File))
-        .map(|e| (e.path.clone(), (e.size, e.hash)))
-        .collect();
+	// Build path indices up-front, moved straight into the send task (below).
+	// `remote_hash_by_send` tells the push side which files exist on the remote
+	// at different content (delta candidates). `local_file_by_send` maps our
+	// files to (size, hash) — the only fields the pull side needs to offer the
+	// server a signature and get a delta back instead of the whole file.
+	let remote_hash_by_send: HashMap<PathBuf, [u8; 32]> = remote_manifest
+		.iter()
+		.filter(|e| matches!(e.kind, EntryKind::File))
+		.map(|e| (e.path.clone(), e.hash))
+		.collect();
+	let local_file_by_send: HashMap<PathBuf, (u64, [u8; 32])> = local_manifest
+		.iter()
+		.filter(|e| matches!(e.kind, EntryKind::File))
+		.map(|e| (e.path.clone(), (e.size, e.hash)))
+		.collect();
 
-    // ── Diff ──
-    let plan = build_plan(&local_manifest, &remote_manifest, &baseline, args.mode);
-    plan.print();
+	// ── Diff ──
+	let plan = build_plan(&local_manifest, &remote_manifest, &baseline, args.mode);
+	plan.print();
 
-    if args.dry_run {
-        let mut w = writer.lock().await;
-        let _ = write_message(&mut *w, &Message::Bye, compress).await;
-        drop(w);
-        if let Some(child) = child.as_mut() {
-            let _ = child.wait().await;
-        }
-        return Ok(());
-    }
+	if args.dry_run {
+		let mut w = writer.lock().await;
+		let _ = write_message(&mut *w, &Message::Bye, compress).await;
+		drop(w);
+		if let Some(child) = child.as_mut() {
+			let _ = child.wait().await;
+		}
+		return Ok(());
+	}
 
-    let Plan {
-        push,
-        get,
-        del_remote,
-        del_local,
-        conflicts: _,
-    } = plan;
+	let Plan {
+		push,
+		get,
+		del_remote,
+		del_local,
+		conflicts: _,
+	} = plan;
 
-    // Apply remote-originated deletions locally. These are paths the peer
-    // removed whose local copy is still byte-identical to the last baseline,
-    // so it's a propagated deletion (not an unsynced local edit). Destructive,
-    // hence gated on the baseline match computed in build_plan.
-    for path in &del_local {
-        match apply_delete(&local_root, path) {
-            Ok(()) => {
-                suppress.mark_applied_delete(path.clone());
-                eprintln!("  {} × {}", "←".bright_cyan(), path.display());
-            }
-            Err(e) => tracing::warn!("local delete {}: {}", path.display(), e),
-        }
-    }
+	// Apply remote-originated deletions locally. These are paths the peer
+	// removed whose local copy is still byte-identical to the last baseline,
+	// so it's a propagated deletion (not an unsynced local edit). Destructive,
+	// hence gated on the baseline match computed in build_plan.
+	for path in &del_local {
+		match apply_delete(&local_root, path) {
+			Ok(()) => {
+				suppress.mark_applied_delete(path.clone());
+				eprintln!("  {} × {}", "←".bright_cyan(), path.display());
+			}
+			Err(e) => tracing::warn!("local delete {}: {}", path.display(), e),
+		}
+	}
 
-    // ── Execute initial sync ──
-    // Phase 1 (sequential):    dirs + symlinks. Parents must exist.
-    // Phase 2a (sequential):   delta sync for files where remote has an
-    //                          older version and the file is in our size
-    //                          band — saves wire bytes on large mutable
-    //                          files (logs, dumps, binaries that change
-    //                          slightly). Sequential because each item is
-    //                          a request → response → delta round-trip.
-    // Phase 2b (parallel):     full push for everything else, Semaphore-
-    //                          bounded so we don't blow up RAM: each push
-    //                          holds up to three copies of one chunk, and
-    //                          the writer lock serializes the wire anyway.
-    // Phase 3 (sequential):    FileGet pulls + SyncDone marker.
-    const MAX_CONCURRENT_PUSHES: usize = 4;
-    /// Below this size, the round-trip + signature overhead exceeds the
-    /// bytes saved by sending a delta — just push the whole thing.
-    const DELTA_MIN_SIZE: u64 = 256 * 1024;
-    /// Above this, we don't want to load `base + new` into RAM at once.
-    /// Larger files fall back to the chunked full-file path.
-    const DELTA_MAX_SIZE: u64 = 256 * 1024 * 1024;
+	// ── Execute initial sync ──
+	// Phase 1 (sequential):    dirs + symlinks. Parents must exist.
+	// Phase 2a (sequential):   delta sync for files where remote has an
+	//                          older version and the file is in our size
+	//                          band — saves wire bytes on large mutable
+	//                          files (logs, dumps, binaries that change
+	//                          slightly). Sequential because each item is
+	//                          a request → response → delta round-trip.
+	// Phase 2b (parallel):     full push for everything else, Semaphore-
+	//                          bounded so we don't blow up RAM: each push
+	//                          holds up to three copies of one chunk, and
+	//                          the writer lock serializes the wire anyway.
+	// Phase 3 (sequential):    FileGet pulls + SyncDone marker.
+	const MAX_CONCURRENT_PUSHES: usize = 4;
+	/// Below this size, the round-trip + signature overhead exceeds the
+	/// bytes saved by sending a delta — just push the whole thing.
+	const DELTA_MIN_SIZE: u64 = 256 * 1024;
+	/// Above this, we don't want to load `base + new` into RAM at once.
+	/// Larger files fall back to the chunked full-file path.
+	const DELTA_MAX_SIZE: u64 = 256 * 1024 * 1024;
 
-    // Channel: recv loop forwards `Signature` messages here so the send
-    // task (which fired the matching `SignatureRequest`) can await them.
-    let (sig_tx, mut sig_rx) = tokio::sync::mpsc::unbounded_channel::<(PathBuf, Option<Vec<u8>>)>();
+	// Channel: recv loop forwards `Signature` messages here so the send
+	// task (which fired the matching `SignatureRequest`) can await them.
+	let (sig_tx, mut sig_rx) = tokio::sync::mpsc::unbounded_channel::<(PathBuf, Option<Vec<u8>>)>();
 
-    let get_plan = get.clone();
-    let writer_for_send = writer.clone();
-    let local_root_for_send = local_root.clone();
-    let send_task = tokio::spawn(async move {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use tokio::sync::Semaphore;
+	let get_plan = get.clone();
+	let writer_for_send = writer.clone();
+	let local_root_for_send = local_root.clone();
+	let send_task = tokio::spawn(async move {
+		use std::sync::atomic::{AtomicU64, Ordering};
+		use tokio::sync::Semaphore;
 
-        let (non_files, all_files): (Vec<Entry>, Vec<Entry>) = push
-            .into_iter()
-            .partition(|e| !matches!(e.kind, EntryKind::File));
+		let (non_files, all_files): (Vec<Entry>, Vec<Entry>) =
+			push.into_iter().partition(|e| !matches!(e.kind, EntryKind::File));
 
-        // Phase 0: propagate local deletions to the remote. The agent's
-        // init-sync loop applies these (apply_delete + mark_deleted).
-        for path in del_remote {
-            let mut w = writer_for_send.lock().await;
-            write_message(&mut *w, &Message::Delete { path }, compress).await?;
-        }
+		// Phase 0: propagate local deletions to the remote. The agent's
+		// init-sync loop applies these (apply_delete + mark_deleted).
+		for path in del_remote {
+			let mut w = writer_for_send.lock().await;
+			write_message(&mut *w, &Message::Delete { path }, compress).await?;
+		}
 
-        // Phase 1.
-        for e in non_files {
-            let mut w = writer_for_send.lock().await;
-            match e.kind {
-                EntryKind::Dir => {
-                    write_message(&mut *w, &Message::MkDir { entry: e }, compress).await?
-                }
-                EntryKind::Symlink => {
-                    write_message(&mut *w, &Message::MkSymlink { entry: e }, compress).await?
-                }
-                EntryKind::File => unreachable!(),
-            }
-        }
+		// Phase 1.
+		for e in non_files {
+			let mut w = writer_for_send.lock().await;
+			match e.kind {
+				EntryKind::Dir => write_message(&mut *w, &Message::MkDir { entry: e }, compress).await?,
+				EntryKind::Symlink => write_message(&mut *w, &Message::MkSymlink { entry: e }, compress).await?,
+				EntryKind::File => unreachable!(),
+			}
+		}
 
-        // Split files: delta candidates (remote has different content of
-        // tractable size) vs full-push candidates.
-        let (delta_files, files): (Vec<Entry>, Vec<Entry>) = all_files.into_iter().partition(|e| {
-            if e.size < DELTA_MIN_SIZE || e.size > DELTA_MAX_SIZE {
-                return false;
-            }
-            match remote_hash_by_send.get(&e.path) {
-                // Remote has it AND content differs → worth a delta.
-                Some(remote_hash) => remote_hash != &e.hash,
-                None => false,
-            }
-        });
+		// Split files: delta candidates (remote has different content of
+		// tractable size) vs full-push candidates.
+		let (delta_files, files): (Vec<Entry>, Vec<Entry>) = all_files.into_iter().partition(|e| {
+			if e.size < DELTA_MIN_SIZE || e.size > DELTA_MAX_SIZE {
+				return false;
+			}
+			match remote_hash_by_send.get(&e.path) {
+				// Remote has it AND content differs → worth a delta.
+				Some(remote_hash) => remote_hash != &e.hash,
+				None => false,
+			}
+		});
 
-        let bytes = Arc::new(AtomicU64::new(0));
-        let bytes_saved = Arc::new(AtomicU64::new(0));
+		let bytes = Arc::new(AtomicU64::new(0));
+		let bytes_saved = Arc::new(AtomicU64::new(0));
 
-        // Phase 2a: delta sync, one file at a time.
-        for entry in delta_files {
-            let base_hash = remote_hash_by_send
-                .get(&entry.path)
-                .copied()
-                .unwrap_or([0u8; 32]);
-            // Request signature.
-            {
-                let mut w = writer_for_send.lock().await;
-                write_message(
-                    &mut *w,
-                    &Message::SignatureRequest {
-                        path: entry.path.clone(),
-                        base_hash,
-                    },
-                    compress,
-                )
-                .await?;
-            }
-            // Await signature response (recv loop forwards via sig_tx).
-            let (path, sig_opt) = sig_rx
-                .recv()
-                .await
-                .ok_or_else(|| anyhow::anyhow!("signature channel closed"))?;
-            if path != entry.path {
-                anyhow::bail!(
-                    "signature response out of order: expected {}, got {}",
-                    entry.path.display(),
-                    path.display()
-                );
-            }
-            match sig_opt {
-                Some(sig_bytes) => {
-                    // Compute delta against the version remote has.
-                    let full = local_root_for_send.join(&entry.path);
-                    let new_content =
-                        tokio::task::spawn_blocking(move || std::fs::read(full)).await??;
-                    let new_len = new_content.len() as u64;
-                    let entry_clone = entry.clone();
-                    let delta = tokio::task::spawn_blocking(move || {
-                        compute_delta(&sig_bytes, &new_content)
-                    })
-                    .await??;
-                    let delta_len = delta.len() as u64;
-                    {
-                        let mut w = writer_for_send.lock().await;
-                        write_message(
-                            &mut *w,
-                            &Message::Delta {
-                                entry: entry_clone,
-                                base_hash,
-                                delta,
-                            },
-                            compress,
-                        )
-                        .await?;
-                    }
-                    bytes.fetch_add(delta_len, Ordering::Relaxed);
-                    if new_len > delta_len {
-                        bytes_saved.fetch_add(new_len - delta_len, Ordering::Relaxed);
-                    }
-                    tracing::debug!(
-                        "delta {}: {} → {} bytes",
-                        entry.path.display(),
-                        new_len,
-                        delta_len
-                    );
-                }
-                None => {
-                    // Server couldn't produce a signature (file gone, hash
-                    // mismatch, etc.) — fall back to full transfer.
-                    tracing::debug!("delta fallback (full send): {}", entry.path.display());
-                    let n =
-                        send_file(&writer_for_send, &local_root_for_send, &entry, compress).await?;
-                    bytes.fetch_add(n, Ordering::Relaxed);
-                }
-            }
-        }
+		// Phase 2a: delta sync, one file at a time.
+		for entry in delta_files {
+			let base_hash = remote_hash_by_send.get(&entry.path).copied().unwrap_or([0u8; 32]);
+			// Request signature.
+			{
+				let mut w = writer_for_send.lock().await;
+				write_message(
+					&mut *w,
+					&Message::SignatureRequest {
+						path: entry.path.clone(),
+						base_hash,
+					},
+					compress,
+				)
+				.await?;
+			}
+			// Await signature response (recv loop forwards via sig_tx).
+			let (path, sig_opt) = sig_rx
+				.recv()
+				.await
+				.ok_or_else(|| anyhow::anyhow!("signature channel closed"))?;
+			if path != entry.path {
+				anyhow::bail!(
+					"signature response out of order: expected {}, got {}",
+					entry.path.display(),
+					path.display()
+				);
+			}
+			match sig_opt {
+				Some(sig_bytes) => {
+					// Compute delta against the version remote has.
+					let full = local_root_for_send.join(&entry.path);
+					let new_content = tokio::task::spawn_blocking(move || std::fs::read(full)).await??;
+					let new_len = new_content.len() as u64;
+					let entry_clone = entry.clone();
+					let delta = tokio::task::spawn_blocking(move || compute_delta(&sig_bytes, &new_content)).await??;
+					let delta_len = delta.len() as u64;
+					{
+						let mut w = writer_for_send.lock().await;
+						write_message(
+							&mut *w,
+							&Message::Delta {
+								entry: entry_clone,
+								base_hash,
+								delta,
+							},
+							compress,
+						)
+						.await?;
+					}
+					bytes.fetch_add(delta_len, Ordering::Relaxed);
+					if new_len > delta_len {
+						bytes_saved.fetch_add(new_len - delta_len, Ordering::Relaxed);
+					}
+					tracing::debug!("delta {}: {} → {} bytes", entry.path.display(), new_len, delta_len);
+				}
+				None => {
+					// Server couldn't produce a signature (file gone, hash
+					// mismatch, etc.) — fall back to full transfer.
+					tracing::debug!("delta fallback (full send): {}", entry.path.display());
+					let n = send_file(&writer_for_send, &local_root_for_send, &entry, compress).await?;
+					bytes.fetch_add(n, Ordering::Relaxed);
+				}
+			}
+		}
 
-        // Phase 2b: full push, parallel.
-        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_PUSHES));
-        let mut handles = Vec::with_capacity(files.len());
-        for e in files {
-            let permit = semaphore.clone().acquire_owned().await?;
-            let writer = writer_for_send.clone();
-            let root = local_root_for_send.clone();
-            let bytes = bytes.clone();
-            handles.push(tokio::spawn(async move {
-                let _p = permit;
-                let n = send_file(&writer, &root, &e, compress).await?;
-                bytes.fetch_add(n, Ordering::Relaxed);
-                Ok::<(), anyhow::Error>(())
-            }));
-        }
-        for h in handles {
-            h.await??;
-        }
+		// Phase 2b: full push, parallel.
+		let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_PUSHES));
+		let mut handles = Vec::with_capacity(files.len());
+		for e in files {
+			let permit = semaphore.clone().acquire_owned().await?;
+			let writer = writer_for_send.clone();
+			let root = local_root_for_send.clone();
+			let bytes = bytes.clone();
+			handles.push(tokio::spawn(async move {
+				let _p = permit;
+				let n = send_file(&writer, &root, &e, compress).await?;
+				bytes.fetch_add(n, Ordering::Relaxed);
+				Ok::<(), anyhow::Error>(())
+			}));
+		}
+		for h in handles {
+			h.await??;
+		}
 
-        // Phase 3: pulls.
-        // Split into:
-        //   delta_pulls — we have an older copy of this file in our size
-        //     band; ship its signature so the server can reply with a
-        //     `Delta` (mirror of push-delta but client-initiated).
-        //   regular    — we don't have the file at all, or it's outside
-        //     the delta band; do a plain FileGet.
-        let (delta_pulls, regular_pulls): (Vec<PathBuf>, Vec<PathBuf>) = get_plan
-            .into_iter()
-            .partition(|p| match local_file_by_send.get(p) {
-                Some(&(size, _)) => (DELTA_MIN_SIZE..=DELTA_MAX_SIZE).contains(&size),
-                None => false,
-            });
+		// Phase 3: pulls.
+		// Split into:
+		//   delta_pulls — we have an older copy of this file in our size
+		//     band; ship its signature so the server can reply with a
+		//     `Delta` (mirror of push-delta but client-initiated).
+		//   regular    — we don't have the file at all, or it's outside
+		//     the delta band; do a plain FileGet.
+		let (delta_pulls, regular_pulls): (Vec<PathBuf>, Vec<PathBuf>) =
+			get_plan.into_iter().partition(|p| match local_file_by_send.get(p) {
+				Some(&(size, _)) => (DELTA_MIN_SIZE..=DELTA_MAX_SIZE).contains(&size),
+				None => false,
+			});
 
-        for path in delta_pulls {
-            let base_hash = local_file_by_send
-                .get(&path)
-                .expect("partitioned by local_file_by_send membership")
-                .1;
-            let full = local_root_for_send.join(&path);
-            // Read + signature off the runtime; both are blocking.
-            let sig = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, anyhow::Error> {
-                let content = std::fs::read(&full)?;
-                Ok(compute_signature(&content))
-            })
-            .await??;
-            let mut w = writer_for_send.lock().await;
-            write_message(
-                &mut *w,
-                &Message::PullDelta {
-                    path,
-                    base_hash,
-                    sig,
-                },
-                compress,
-            )
-            .await?;
-        }
+		for path in delta_pulls {
+			let base_hash = local_file_by_send
+				.get(&path)
+				.expect("partitioned by local_file_by_send membership")
+				.1;
+			let full = local_root_for_send.join(&path);
+			// Read + signature off the runtime; both are blocking.
+			let sig = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, anyhow::Error> {
+				let content = std::fs::read(&full)?;
+				Ok(compute_signature(&content))
+			})
+			.await??;
+			let mut w = writer_for_send.lock().await;
+			write_message(&mut *w, &Message::PullDelta { path, base_hash, sig }, compress).await?;
+		}
 
-        for path in regular_pulls {
-            let mut w = writer_for_send.lock().await;
-            write_message(&mut *w, &Message::FileGet { path }, compress).await?;
-        }
-        let mut w = writer_for_send.lock().await;
-        write_message(&mut *w, &Message::SyncDone, compress).await?;
-        let saved = bytes_saved.load(Ordering::Relaxed);
-        if saved > 0 {
-            tracing::info!("delta sync saved {} bytes on the wire", saved);
-        }
-        Ok::<u64, anyhow::Error>(bytes.load(Ordering::Relaxed))
-    });
+		for path in regular_pulls {
+			let mut w = writer_for_send.lock().await;
+			write_message(&mut *w, &Message::FileGet { path }, compress).await?;
+		}
+		let mut w = writer_for_send.lock().await;
+		write_message(&mut *w, &Message::SyncDone, compress).await?;
+		let saved = bytes_saved.load(Ordering::Relaxed);
+		if saved > 0 {
+			tracing::info!("delta sync saved {} bytes on the wire", saved);
+		}
+		Ok::<u64, anyhow::Error>(bytes.load(Ordering::Relaxed))
+	});
 
-    // Receive: apply incoming server responses until peer SyncDone.
-    // Per-op apply errors during init sync are non-fatal — bailing here
-    // would tear down the session and the reconnect loop would hit the
-    // same error forever.
-    let mut bytes_recv: u64 = 0;
-    let mut received_files: u64 = 0;
-    // Paths this sync did NOT converge: we failed to apply the remote's
-    // version, or the remote reported failing to apply ours. Either way the
-    // two sides differ, so they must stay out of the seeded baseline —
-    // recorded as converged, the next session would read the gap as a
-    // deletion and remove the surviving copy.
-    let mut unconverged: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    let warn_apply = |unconverged: &mut std::collections::HashSet<PathBuf>,
-                      path: &std::path::Path,
-                      e: &anyhow::Error| {
-        tracing::warn!("apply {} failed: {}", path.display(), e);
-        unconverged.insert(path.to_path_buf());
-    };
-    loop {
-        let msg = read_message(&mut reader).await?;
-        match msg {
-            Message::FileData { entry, content } => {
-                bytes_recv += content.len() as u64;
-                let mt = entry.mtime;
-                let hash = entry.hash;
-                let path = entry.path.clone();
-                if let Err(e) = apply_file_data(&local_root, &entry, &content) {
-                    warn_apply(&mut unconverged, &path, &e);
-                } else {
-                    received_files += 1;
-                    suppress.mark_set(path, mt, hash);
-                }
-            }
-            Message::FileStart { entry, .. } => {
-                let path = entry.path.clone();
-                if let Err(e) = pending.start(&local_root, entry).await {
-                    warn_apply(&mut unconverged, &path, &e);
-                }
-            }
-            Message::FileChunk { path, data } => {
-                bytes_recv += data.len() as u64;
-                if let Err(e) = pending.chunk(&path, &data).await {
-                    warn_apply(&mut unconverged, &path, &e);
-                }
-            }
-            Message::FileEnd { path } => match pending.end(&local_root, &path).await {
-                Ok(Some(entry)) => {
-                    received_files += 1;
-                    suppress.mark_set(entry.path, entry.mtime, entry.hash);
-                }
-                Ok(None) => {}
-                Err(e) => warn_apply(&mut unconverged, &path, &e),
-            },
-            Message::MkDir { entry } => {
-                let path = entry.path.clone();
-                if let Err(e) = apply_mkdir(&local_root, &entry) {
-                    warn_apply(&mut unconverged, &path, &e);
-                } else {
-                    let mt = resolve_beneath(&local_root, &path)
-                        .ok()
-                        .and_then(|full| std::fs::metadata(full).ok())
-                        .map(|m| {
-                            use std::os::unix::fs::MetadataExt;
-                            m.mtime() * 1_000_000_000 + m.mtime_nsec()
-                        })
-                        .unwrap_or(entry.mtime);
-                    suppress.mark_mtime(path, mt);
-                }
-            }
-            Message::MkSymlink { entry } => {
-                let path = entry.path.clone();
-                if let Err(e) = apply_symlink(&local_root, &entry) {
-                    warn_apply(&mut unconverged, &path, &e);
-                } else {
-                    let mt = resolve_beneath(&local_root, &path)
-                        .ok()
-                        .and_then(|full| std::fs::symlink_metadata(full).ok())
-                        .map(|m| {
-                            use std::os::unix::fs::MetadataExt;
-                            m.mtime() * 1_000_000_000 + m.mtime_nsec()
-                        })
-                        .unwrap_or(entry.mtime);
-                    suppress.mark_mtime(path, mt);
-                }
-            }
-            Message::Delete { path } => {
-                if let Err(e) = apply_delete(&local_root, &path) {
-                    warn_apply(&mut unconverged, &path, &e);
-                } else {
-                    suppress.mark_applied_delete(path);
-                }
-            }
-            Message::Rename { from, to } => {
-                if let Err(e) = apply_rename(&local_root, &from, &to) {
-                    warn_apply(&mut unconverged, &to, &e);
-                } else {
-                    suppress.mark_applied_delete(from);
-                    let mt = resolve_beneath(&local_root, &to)
-                        .ok()
-                        .and_then(|full| std::fs::symlink_metadata(full).ok())
-                        .map(|m| {
-                            use std::os::unix::fs::MetadataExt;
-                            m.mtime() * 1_000_000_000 + m.mtime_nsec()
-                        })
-                        .unwrap_or(0);
-                    suppress.mark_mtime(to, mt);
-                }
-            }
-            Message::Signature { path, sig } => {
-                // Forward to send_task, which has a matching SignatureRequest
-                // waiting on the other end of this channel.
-                if sig_tx.send((path, sig)).is_err() {
-                    tracing::debug!("signature delivered after send_task ended");
-                }
-            }
-            Message::Delta {
-                entry,
-                base_hash,
-                delta,
-            } => {
-                // Response to one of our PullDelta requests. Patch our local
-                // (older) copy in place after both base- and result-hash
-                // verification (done inside apply_delta_to_file).
-                bytes_recv += delta.len() as u64;
-                let path = entry.path.clone();
-                let mt = entry.mtime;
-                let hash = entry.hash;
-                if let Err(e) = apply_delta_to_file(&local_root, &entry, base_hash, &delta) {
-                    warn_apply(&mut unconverged, &path, &e);
-                } else {
-                    received_files += 1;
-                    suppress.mark_set(path, mt, hash);
-                }
-            }
-            Message::Touch { path, mtime, mode } => {
-                // Server replied with metadata-only update (no content
-                // changed). Set mode + mtime if the file exists locally.
-                let full = resolve_beneath(&local_root, &path)?;
-                if std::fs::symlink_metadata(&full)
-                    .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(&full, std::fs::Permissions::from_mode(mode));
-                    let ft = filetime::FileTime::from_unix_time(
-                        mtime.div_euclid(1_000_000_000),
-                        mtime.rem_euclid(1_000_000_000) as u32,
-                    );
-                    let _ = filetime::set_file_mtime(&full, ft);
-                    suppress.mark_mtime(path, mtime);
-                }
-            }
-            Message::SyncDone => break,
-            // Remote could not apply one of our pushes. It doesn't hold that
-            // path, so keep it out of the baseline and let the next session
-            // push it again.
-            Message::ApplyFailed { path, reason } => {
-                tracing::warn!("remote failed to apply {}: {}", path.display(), reason);
-                unconverged.insert(path);
-            }
-            // Remote reported a per-op failure (type conflict, perm denied,
-            // git busy on its side). Log and continue — bailing here would
-            // tear down the session and retry forever.
-            Message::Error(e) => tracing::warn!("remote: {e}"),
-            Message::Bye => return Ok(()),
-            _ => tracing::debug!("ignored msg in init-sync recv"),
-        }
-    }
+	// Receive: apply incoming server responses until peer SyncDone.
+	// Per-op apply errors during init sync are non-fatal — bailing here
+	// would tear down the session and the reconnect loop would hit the
+	// same error forever.
+	let mut bytes_recv: u64 = 0;
+	let mut received_files: u64 = 0;
+	// Paths this sync did NOT converge: we failed to apply the remote's
+	// version, or the remote reported failing to apply ours. Either way the
+	// two sides differ, so they must stay out of the seeded baseline —
+	// recorded as converged, the next session would read the gap as a
+	// deletion and remove the surviving copy.
+	let mut unconverged: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+	let warn_apply =
+		|unconverged: &mut std::collections::HashSet<PathBuf>, path: &std::path::Path, e: &anyhow::Error| {
+			tracing::warn!("apply {} failed: {}", path.display(), e);
+			unconverged.insert(path.to_path_buf());
+		};
+	loop {
+		let msg = read_message(&mut reader).await?;
+		match msg {
+			Message::FileData { entry, content } => {
+				bytes_recv += content.len() as u64;
+				let mt = entry.mtime;
+				let hash = entry.hash;
+				let path = entry.path.clone();
+				if let Err(e) = apply_file_data(&local_root, &entry, &content) {
+					warn_apply(&mut unconverged, &path, &e);
+				} else {
+					received_files += 1;
+					suppress.mark_set(path, mt, hash);
+				}
+			}
+			Message::FileStart { entry, .. } => {
+				let path = entry.path.clone();
+				if let Err(e) = pending.start(&local_root, entry).await {
+					warn_apply(&mut unconverged, &path, &e);
+				}
+			}
+			Message::FileChunk { path, data } => {
+				bytes_recv += data.len() as u64;
+				if let Err(e) = pending.chunk(&path, &data).await {
+					warn_apply(&mut unconverged, &path, &e);
+				}
+			}
+			Message::FileEnd { path } => match pending.end(&local_root, &path).await {
+				Ok(Some(entry)) => {
+					received_files += 1;
+					suppress.mark_set(entry.path, entry.mtime, entry.hash);
+				}
+				Ok(None) => {}
+				Err(e) => warn_apply(&mut unconverged, &path, &e),
+			},
+			Message::MkDir { entry } => {
+				let path = entry.path.clone();
+				if let Err(e) = apply_mkdir(&local_root, &entry) {
+					warn_apply(&mut unconverged, &path, &e);
+				} else {
+					let mt = resolve_beneath(&local_root, &path)
+						.ok()
+						.and_then(|full| std::fs::metadata(full).ok())
+						.map(|m| {
+							use std::os::unix::fs::MetadataExt;
+							m.mtime() * 1_000_000_000 + m.mtime_nsec()
+						})
+						.unwrap_or(entry.mtime);
+					suppress.mark_mtime(path, mt);
+				}
+			}
+			Message::MkSymlink { entry } => {
+				let path = entry.path.clone();
+				if let Err(e) = apply_symlink(&local_root, &entry) {
+					warn_apply(&mut unconverged, &path, &e);
+				} else {
+					let mt = resolve_beneath(&local_root, &path)
+						.ok()
+						.and_then(|full| std::fs::symlink_metadata(full).ok())
+						.map(|m| {
+							use std::os::unix::fs::MetadataExt;
+							m.mtime() * 1_000_000_000 + m.mtime_nsec()
+						})
+						.unwrap_or(entry.mtime);
+					suppress.mark_mtime(path, mt);
+				}
+			}
+			Message::Delete { path } => {
+				if let Err(e) = apply_delete(&local_root, &path) {
+					warn_apply(&mut unconverged, &path, &e);
+				} else {
+					suppress.mark_applied_delete(path);
+				}
+			}
+			Message::Rename { from, to } => {
+				if let Err(e) = apply_rename(&local_root, &from, &to) {
+					warn_apply(&mut unconverged, &to, &e);
+				} else {
+					suppress.mark_applied_delete(from);
+					let mt = resolve_beneath(&local_root, &to)
+						.ok()
+						.and_then(|full| std::fs::symlink_metadata(full).ok())
+						.map(|m| {
+							use std::os::unix::fs::MetadataExt;
+							m.mtime() * 1_000_000_000 + m.mtime_nsec()
+						})
+						.unwrap_or(0);
+					suppress.mark_mtime(to, mt);
+				}
+			}
+			Message::Signature { path, sig } => {
+				// Forward to send_task, which has a matching SignatureRequest
+				// waiting on the other end of this channel.
+				if sig_tx.send((path, sig)).is_err() {
+					tracing::debug!("signature delivered after send_task ended");
+				}
+			}
+			Message::Delta {
+				entry,
+				base_hash,
+				delta,
+			} => {
+				// Response to one of our PullDelta requests. Patch our local
+				// (older) copy in place after both base- and result-hash
+				// verification (done inside apply_delta_to_file).
+				bytes_recv += delta.len() as u64;
+				let path = entry.path.clone();
+				let mt = entry.mtime;
+				let hash = entry.hash;
+				if let Err(e) = apply_delta_to_file(&local_root, &entry, base_hash, &delta) {
+					warn_apply(&mut unconverged, &path, &e);
+				} else {
+					received_files += 1;
+					suppress.mark_set(path, mt, hash);
+				}
+			}
+			Message::Touch { path, mtime, mode } => {
+				// Server replied with metadata-only update (no content
+				// changed). Set mode + mtime if the file exists locally.
+				let full = resolve_beneath(&local_root, &path)?;
+				if std::fs::symlink_metadata(&full)
+					.is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+				{
+					use std::os::unix::fs::PermissionsExt;
+					let _ = std::fs::set_permissions(&full, std::fs::Permissions::from_mode(mode));
+					let ft = filetime::FileTime::from_unix_time(
+						mtime.div_euclid(1_000_000_000),
+						mtime.rem_euclid(1_000_000_000) as u32,
+					);
+					let _ = filetime::set_file_mtime(&full, ft);
+					suppress.mark_mtime(path, mtime);
+				}
+			}
+			Message::SyncDone => break,
+			// Remote could not apply one of our pushes. It doesn't hold that
+			// path, so keep it out of the baseline and let the next session
+			// push it again.
+			Message::ApplyFailed { path, reason } => {
+				tracing::warn!("remote failed to apply {}: {}", path.display(), reason);
+				unconverged.insert(path);
+			}
+			// Remote reported a per-op failure (type conflict, perm denied,
+			// git busy on its side). Log and continue — bailing here would
+			// tear down the session and retry forever.
+			Message::Error(e) => tracing::warn!("remote: {e}"),
+			Message::Bye => return Ok(()),
+			_ => tracing::debug!("ignored msg in init-sync recv"),
+		}
+	}
 
-    let bytes_sent = send_task.await??;
+	let bytes_sent = send_task.await??;
 
-    crate::ui::ok(&format!(
-        "initial sync: {} sent, {} received in {:.1}s",
-        format_size(bytes_sent, BINARY).bright_green(),
-        format_size(bytes_recv, BINARY).bright_cyan(),
-        started.elapsed().as_secs_f32(),
-    ));
+	crate::ui::ok(&format!(
+		"initial sync: {} sent, {} received in {:.1}s",
+		format_size(bytes_sent, BINARY).bright_green(),
+		format_size(bytes_recv, BINARY).bright_cyan(),
+		started.elapsed().as_secs_f32(),
+	));
 
-    // Persist cache (we may have hashed new files).
-    if let Ok(mut c) = cache.lock() {
-        c.save(&local_root);
-    }
+	// Persist cache (we may have hashed new files).
+	if let Ok(mut c) = cache.lock() {
+		c.save(&local_root);
+	}
 
-    // Seed the next session's baseline from the converged manifest. After init
-    // sync the local tree equals the merged result: start from the local
-    // manifest, drop what we just deleted locally and anything that failed to
-    // apply on either side, and overwrite pulled paths with the remote's
-    // version (we now hold its content). Sound only here, at the one point
-    // both sides have confirmed their work: the remote's `SyncDone` follows
-    // every apply it did, and any it failed arrived as `ApplyFailed` before
-    // it. The live loop confirms its own updates per barrier (see
-    // `LiveBaseline::begin_barrier`).
-    let live_baseline = {
-        let remote_by_path: HashMap<&PathBuf, &Entry> =
-            remote_manifest.iter().map(|e| (&e.path, e)).collect();
-        let deleted_local: std::collections::HashSet<PathBuf> = del_local.iter().cloned().collect();
-        let mut converged: HashMap<PathBuf, Entry> = local_manifest
-            .iter()
-            .filter(|e| !deleted_local.contains(&e.path) && !unconverged.contains(&e.path))
-            .map(|e| (e.path.clone(), e.clone()))
-            .collect();
-        for p in &get {
-            if unconverged.contains(p) {
-                continue;
-            }
-            if let Some(r) = remote_by_path.get(p) {
-                converged.insert(p.clone(), (*r).clone());
-            }
-        }
-        if !excluded.is_empty() {
-            // Excluded subtrees were invisible this session — carry their
-            // last converged state forward so genuine-deletion evidence
-            // survives the pause instead of being dropped from the baseline.
-            for e in baseline.entries_under(&excluded) {
-                converged.entry(e.path.clone()).or_insert_with(|| e.clone());
-            }
-        }
-        LiveBaseline::seed(local_root.clone(), converged, &baseline)
-    };
-    // From here on only the live baseline and ignore stack matter; without
-    // this the manifests, plan and previous baseline would sit in memory —
-    // three more copies of every path — for the whole session.
-    drop((local_manifest, remote_manifest, baseline, get, del_local));
+	// Seed the next session's baseline from the converged manifest. After init
+	// sync the local tree equals the merged result: start from the local
+	// manifest, drop what we just deleted locally and anything that failed to
+	// apply on either side, and overwrite pulled paths with the remote's
+	// version (we now hold its content). Sound only here, at the one point
+	// both sides have confirmed their work: the remote's `SyncDone` follows
+	// every apply it did, and any it failed arrived as `ApplyFailed` before
+	// it. The live loop confirms its own updates per barrier (see
+	// `LiveBaseline::begin_barrier`).
+	let live_baseline = {
+		let remote_by_path: HashMap<&PathBuf, &Entry> = remote_manifest.iter().map(|e| (&e.path, e)).collect();
+		let deleted_local: std::collections::HashSet<PathBuf> = del_local.iter().cloned().collect();
+		let mut converged: HashMap<PathBuf, Entry> = local_manifest
+			.iter()
+			.filter(|e| !deleted_local.contains(&e.path) && !unconverged.contains(&e.path))
+			.map(|e| (e.path.clone(), e.clone()))
+			.collect();
+		for p in &get {
+			if unconverged.contains(p) {
+				continue;
+			}
+			if let Some(r) = remote_by_path.get(p) {
+				converged.insert(p.clone(), (*r).clone());
+			}
+		}
+		if !excluded.is_empty() {
+			// Excluded subtrees were invisible this session — carry their
+			// last converged state forward so genuine-deletion evidence
+			// survives the pause instead of being dropped from the baseline.
+			for e in baseline.entries_under(&excluded) {
+				converged.entry(e.path.clone()).or_insert_with(|| e.clone());
+			}
+		}
+		LiveBaseline::seed(local_root.clone(), converged, &baseline)
+	};
+	// From here on only the live baseline and ignore stack matter; without
+	// this the manifests, plan and previous baseline would sit in memory —
+	// three more copies of every path — for the whole session.
+	drop((local_manifest, remote_manifest, baseline, get, del_local));
 
-    let _ = received_files;
+	let _ = received_files;
 
-    if args.once {
-        let mut w = writer.lock().await;
-        let _ = write_message(&mut *w, &Message::Bye, compress).await;
-        drop(w);
-        if let Some(child) = child.as_mut() {
-            let _ = child.wait().await;
-        }
-        return Ok(());
-    }
+	if args.once {
+		let mut w = writer.lock().await;
+		let _ = write_message(&mut *w, &Message::Bye, compress).await;
+		drop(w);
+		if let Some(child) = child.as_mut() {
+			let _ = child.wait().await;
+		}
+		return Ok(());
+	}
 
-    // Shared per-session git gate (sticky .git/ pause + defer queue).
-    let gate = GitGate::default();
+	// Shared per-session git gate (sticky .git/ pause + defer queue).
+	let gate = GitGate::default();
 
-    // Drain any watcher events that accumulated during the walk + manifest
-    // exchange + init-sync apply. With suppress now populated for every
-    // file we just wrote, echoes of our own writes filter out and real
-    // user edits made during the startup window flow through to the peer.
-    let mut buffered: Vec<crate::watcher::FsEvent> = Vec::new();
-    while let Ok(batch) = watcher_handle.events.try_recv() {
-        buffered.extend(batch);
-    }
-    if !buffered.is_empty() {
-        tracing::debug!("draining {} buffered watcher events", buffered.len());
-        forward_local_events(
-            &local_root,
-            buffered,
-            &writer,
-            compress,
-            &suppress,
-            true,
-            &ignores,
-            &gate,
-            &live_baseline,
-        )
-        .await?;
-    }
+	// Drain any watcher events that accumulated during the walk + manifest
+	// exchange + init-sync apply. With suppress now populated for every
+	// file we just wrote, echoes of our own writes filter out and real
+	// user edits made during the startup window flow through to the peer.
+	let mut buffered: Vec<crate::watcher::FsEvent> = Vec::new();
+	while let Ok(batch) = watcher_handle.events.try_recv() {
+		buffered.extend(batch);
+	}
+	if !buffered.is_empty() {
+		tracing::debug!("draining {} buffered watcher events", buffered.len());
+		forward_local_events(
+			&local_root,
+			buffered,
+			&writer,
+			compress,
+			&suppress,
+			true,
+			&ignores,
+			&gate,
+			&live_baseline,
+		)
+		.await?;
+	}
 
-    crate::ui::info("watching for changes — ctrl+c to stop");
-    let ctx = crate::peer::SessionCtx {
-        root: local_root,
-        mode: args.mode,
-        compress,
-        is_client: true,
-        ignores,
-        gate,
-        baseline: live_baseline,
-    };
-    let result = live_loop(
-        ctx,
-        reader,
-        writer,
-        suppress,
-        pending,
-        watcher_handle,
-        Some(cache),
-    )
-    .await;
-    if let Some(child) = child.as_mut() {
-        let _ = child.wait().await;
-    }
-    result
+	crate::ui::info("watching for changes — ctrl+c to stop");
+	let ctx = crate::peer::SessionCtx {
+		root: local_root,
+		mode: args.mode,
+		compress,
+		is_client: true,
+		ignores,
+		gate,
+		baseline: live_baseline,
+	};
+	let result = live_loop(ctx, reader, writer, suppress, pending, watcher_handle, Some(cache)).await;
+	if let Some(child) = child.as_mut() {
+		let _ = child.wait().await;
+	}
+	result
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -906,36 +859,36 @@ where
 /// them, e.g. `.git/` mid-git-op).
 async fn receive_manifest<R>(reader: &mut R) -> Result<(Vec<Entry>, Vec<PathBuf>)>
 where
-    R: tokio::io::AsyncReadExt + Unpin,
+	R: tokio::io::AsyncReadExt + Unpin,
 {
-    match read_message(reader).await? {
-        Message::ManifestBegin => {}
-        Message::Error(e) => anyhow::bail!("remote: {e}"),
-        m => anyhow::bail!("expected ManifestBegin, got {:?}", m),
-    }
-    let mut entries: Vec<Entry> = Vec::new();
-    let mut excluded = Vec::new();
-    loop {
-        match read_message(reader).await? {
-            Message::ManifestEntry(e) => entries.push(e),
-            Message::ManifestExcluded { prefix } => {
-                if !excluded.contains(&prefix) {
-                    excluded.push(prefix);
-                }
-            }
-            Message::ManifestEnd => break,
-            Message::Error(e) => anyhow::bail!("remote: {e}"),
-            m => anyhow::bail!("during manifest: {:?}", m),
-        }
-    }
-    // The walker streams entries sorted, so this sort is a linear pass and
-    // one adjacent compare finds duplicates without copying every path into
-    // a set.
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
-    if let Some(dup) = entries.windows(2).find(|w| w[0].path == w[1].path) {
-        anyhow::bail!("duplicate manifest path: {}", dup[0].path.display());
-    }
-    Ok((entries, excluded))
+	match read_message(reader).await? {
+		Message::ManifestBegin => {}
+		Message::Error(e) => anyhow::bail!("remote: {e}"),
+		m => anyhow::bail!("expected ManifestBegin, got {:?}", m),
+	}
+	let mut entries: Vec<Entry> = Vec::new();
+	let mut excluded = Vec::new();
+	loop {
+		match read_message(reader).await? {
+			Message::ManifestEntry(e) => entries.push(e),
+			Message::ManifestExcluded { prefix } => {
+				if !excluded.contains(&prefix) {
+					excluded.push(prefix);
+				}
+			}
+			Message::ManifestEnd => break,
+			Message::Error(e) => anyhow::bail!("remote: {e}"),
+			m => anyhow::bail!("during manifest: {:?}", m),
+		}
+	}
+	// The walker streams entries sorted, so this sort is a linear pass and
+	// one adjacent compare finds duplicates without copying every path into
+	// a set.
+	entries.sort_by(|a, b| a.path.cmp(&b.path));
+	if let Some(dup) = entries.windows(2).find(|w| w[0].path == w[1].path) {
+		anyhow::bail!("duplicate manifest path: {}", dup[0].path.display());
+	}
+	Ok((entries, excluded))
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -944,80 +897,72 @@ where
 
 #[derive(Default, Clone)]
 struct Plan {
-    push: Vec<Entry>,
-    get: Vec<PathBuf>,
-    /// Deletions to propagate to the remote: paths the user removed locally
-    /// whose remote copy is still byte-identical to the last synced baseline.
-    del_remote: Vec<PathBuf>,
-    /// Deletions to apply locally: paths the remote removed whose local copy
-    /// is still byte-identical to the last synced baseline.
-    del_local: Vec<PathBuf>,
-    /// Paths where local and remote disagree on `kind` (e.g. one side has
-    /// a file, the other a directory). Skipped from sync because blindly
-    /// overwriting would either fail with EISDIR or destroy a directory
-    /// tree. User must resolve by hand.
-    conflicts: Vec<(PathBuf, EntryKind, EntryKind)>,
+	push: Vec<Entry>,
+	get: Vec<PathBuf>,
+	/// Deletions to propagate to the remote: paths the user removed locally
+	/// whose remote copy is still byte-identical to the last synced baseline.
+	del_remote: Vec<PathBuf>,
+	/// Deletions to apply locally: paths the remote removed whose local copy
+	/// is still byte-identical to the last synced baseline.
+	del_local: Vec<PathBuf>,
+	/// Paths where local and remote disagree on `kind` (e.g. one side has
+	/// a file, the other a directory). Skipped from sync because blindly
+	/// overwriting would either fail with EISDIR or destroy a directory
+	/// tree. User must resolve by hand.
+	conflicts: Vec<(PathBuf, EntryKind, EntryKind)>,
 }
 
 impl Plan {
-    fn print(&self) {
-        let push_files = self
-            .push
-            .iter()
-            .filter(|e| matches!(e.kind, EntryKind::File))
-            .count();
-        let push_dirs = self
-            .push
-            .iter()
-            .filter(|e| matches!(e.kind, EntryKind::Dir))
-            .count();
-        let push_links = self
-            .push
-            .iter()
-            .filter(|e| matches!(e.kind, EntryKind::Symlink))
-            .count();
-        let push_bytes: u64 = self
-            .push
-            .iter()
-            .filter(|e| matches!(e.kind, EntryKind::File))
-            .map(|e| e.size)
-            .sum();
-        let del_note = if self.del_remote.is_empty() && self.del_local.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "  •  delete {} remote {} local",
-                self.del_remote.len().to_string().bright_red(),
-                self.del_local.len().to_string().bright_red(),
-            )
-        };
-        crate::ui::info(&format!(
-            "plan: push {} files ({}) {} dirs {} links  •  pull {} entries{}",
-            push_files.to_string().bright_green(),
-            format_size(push_bytes, BINARY).bright_green(),
-            push_dirs,
-            push_links,
-            self.get.len().to_string().bright_cyan(),
-            del_note,
-        ));
-        if !self.conflicts.is_empty() {
-            crate::ui::warn(&format!(
-                "{} type conflicts (file/dir/symlink mismatch) — skipped, resolve manually:",
-                self.conflicts.len()
-            ));
-            for (path, lk, rk) in self.conflicts.iter().take(10) {
-                eprintln!(
-                    "    {}  local={:?}  remote={:?}",
-                    path.display().to_string().bright_yellow(),
-                    lk,
-                    rk
-                );
-            }
-            if self.conflicts.len() > 10 {
-                eprintln!("    … and {} more", self.conflicts.len() - 10);
-            }
-        }
-    }
+	fn print(&self) {
+		let push_files = self.push.iter().filter(|e| matches!(e.kind, EntryKind::File)).count();
+		let push_dirs = self.push.iter().filter(|e| matches!(e.kind, EntryKind::Dir)).count();
+		let push_links = self
+			.push
+			.iter()
+			.filter(|e| matches!(e.kind, EntryKind::Symlink))
+			.count();
+		let push_bytes: u64 = self
+			.push
+			.iter()
+			.filter(|e| matches!(e.kind, EntryKind::File))
+			.map(|e| e.size)
+			.sum();
+		let del_note = if self.del_remote.is_empty() && self.del_local.is_empty() {
+			String::new()
+		} else {
+			format!(
+				"  •  delete {} remote {} local",
+				self.del_remote.len().to_string().bright_red(),
+				self.del_local.len().to_string().bright_red(),
+			)
+		};
+		crate::ui::info(&format!(
+			"plan: push {} files ({}) {} dirs {} links  •  pull {} entries{}",
+			push_files.to_string().bright_green(),
+			format_size(push_bytes, BINARY).bright_green(),
+			push_dirs,
+			push_links,
+			self.get.len().to_string().bright_cyan(),
+			del_note,
+		));
+		if !self.conflicts.is_empty() {
+			crate::ui::warn(&format!(
+				"{} type conflicts (file/dir/symlink mismatch) — skipped, resolve manually:",
+				self.conflicts.len()
+			));
+			for (path, lk, rk) in self.conflicts.iter().take(10) {
+				eprintln!(
+					"    {}  local={:?}  remote={:?}",
+					path.display().to_string().bright_yellow(),
+					lk,
+					rk
+				);
+			}
+			if self.conflicts.len() > 10 {
+				eprintln!("    … and {} more", self.conflicts.len() - 10);
+			}
+		}
+	}
 }
 
 /// Drop entries under any excluded prefix. Applied to BOTH manifests when
@@ -1026,7 +971,7 @@ impl Plan {
 /// repo's HEAD/config got deleted (they match the baseline while
 /// index/objects churn, so only the stable files died).
 fn strip_excluded(entries: &mut Vec<Entry>, excluded: &[PathBuf]) {
-    entries.retain(|e| !excluded.iter().any(|prefix| e.path.starts_with(prefix)));
+	entries.retain(|e| !excluded.iter().any(|prefix| e.path.starts_with(prefix)));
 }
 
 /// Three-way diff. `baseline` is the converged manifest from the last
@@ -1037,149 +982,142 @@ fn strip_excluded(entries: &mut Vec<Entry>, excluded: &[PathBuf]) {
 /// baseline) or the surviving side has its own changes (modify-vs-delete),
 /// we never propagate the destructive op: we keep the data.
 fn build_plan(local: &[Entry], remote: &[Entry], baseline: &Baseline, mode: SyncMode) -> Plan {
-    let local_map: HashMap<&PathBuf, &Entry> = local.iter().map(|e| (&e.path, e)).collect();
-    let remote_map: HashMap<&PathBuf, &Entry> = remote.iter().map(|e| (&e.path, e)).collect();
+	let local_map: HashMap<&PathBuf, &Entry> = local.iter().map(|e| (&e.path, e)).collect();
+	let remote_map: HashMap<&PathBuf, &Entry> = remote.iter().map(|e| (&e.path, e)).collect();
 
-    let mut all_paths: Vec<&PathBuf> = local_map
-        .keys()
-        .copied()
-        .chain(remote_map.keys().copied())
-        .collect();
-    all_paths.sort();
-    all_paths.dedup();
+	let mut all_paths: Vec<&PathBuf> = local_map.keys().copied().chain(remote_map.keys().copied()).collect();
+	all_paths.sort();
+	all_paths.dedup();
 
-    // What this sync direction is allowed to mutate.
-    let (allow_push, allow_pull) = match mode {
-        SyncMode::Push => (true, false),
-        SyncMode::Pull => (false, true),
-        SyncMode::Both => (true, true),
-    };
+	// What this sync direction is allowed to mutate.
+	let (allow_push, allow_pull) = match mode {
+		SyncMode::Push => (true, false),
+		SyncMode::Pull => (false, true),
+		SyncMode::Both => (true, true),
+	};
 
-    let mut push: Vec<Entry> = Vec::new();
-    let mut get: Vec<PathBuf> = Vec::new();
-    let mut del_remote: Vec<PathBuf> = Vec::new();
-    let mut del_local: Vec<PathBuf> = Vec::new();
-    let mut conflicts: Vec<(PathBuf, EntryKind, EntryKind)> = Vec::new();
+	let mut push: Vec<Entry> = Vec::new();
+	let mut get: Vec<PathBuf> = Vec::new();
+	let mut del_remote: Vec<PathBuf> = Vec::new();
+	let mut del_local: Vec<PathBuf> = Vec::new();
+	let mut conflicts: Vec<(PathBuf, EntryKind, EntryKind)> = Vec::new();
 
-    for p in all_paths {
-        let l = local_map.get(p).copied();
-        let r = remote_map.get(p).copied();
-        let b = baseline.get(p);
-        match (l, r) {
-            (Some(l), None) => {
-                // Present locally, absent on remote. Either the remote
-                // deleted a file we both had, or we created it. It's a real
-                // remote deletion only if our copy is unchanged since the
-                // baseline; otherwise (we changed it, or no baseline) keep
-                // local and re-push.
-                let remote_deleted = b.map(|b| l.same_content(b)).unwrap_or(false);
-                if remote_deleted && allow_pull {
-                    del_local.push(l.path.clone());
-                } else if allow_push {
-                    push.push(l.clone());
-                }
-            }
-            (None, Some(r)) => {
-                // Absent locally, present on remote. Either we deleted a file
-                // we both had, or the remote created it. It's a real local
-                // deletion only if the remote copy is unchanged since the
-                // baseline; otherwise (remote changed it, or no baseline)
-                // keep remote and pull.
-                let local_deleted = b.map(|b| r.same_content(b)).unwrap_or(false);
-                if local_deleted && allow_push {
-                    del_remote.push(r.path.clone());
-                } else if allow_pull {
-                    get.push(r.path.clone());
-                }
-            }
-            (Some(l), Some(r)) => {
-                if l.same_content(r) {
-                    continue;
-                }
-                // Type mismatch (file vs dir vs symlink): blindly applying
-                // would either fail (EISDIR) or destroy a directory tree.
-                // Skip and surface for manual resolution.
-                if l.kind != r.kind {
-                    conflicts.push((l.path.clone(), l.kind, r.kind));
-                    continue;
-                }
-                let local_wins = match mode {
-                    SyncMode::Push => true,
-                    SyncMode::Pull => false,
-                    SyncMode::Both => l.mtime >= r.mtime,
-                };
-                if local_wins {
-                    push.push(l.clone());
-                } else {
-                    get.push(r.path.clone());
-                }
-            }
-            (None, None) => unreachable!(),
-        }
-    }
+	for p in all_paths {
+		let l = local_map.get(p).copied();
+		let r = remote_map.get(p).copied();
+		let b = baseline.get(p);
+		match (l, r) {
+			(Some(l), None) => {
+				// Present locally, absent on remote. Either the remote
+				// deleted a file we both had, or we created it. It's a real
+				// remote deletion only if our copy is unchanged since the
+				// baseline; otherwise (we changed it, or no baseline) keep
+				// local and re-push.
+				let remote_deleted = b.map(|b| l.same_content(b)).unwrap_or(false);
+				if remote_deleted && allow_pull {
+					del_local.push(l.path.clone());
+				} else if allow_push {
+					push.push(l.clone());
+				}
+			}
+			(None, Some(r)) => {
+				// Absent locally, present on remote. Either we deleted a file
+				// we both had, or the remote created it. It's a real local
+				// deletion only if the remote copy is unchanged since the
+				// baseline; otherwise (remote changed it, or no baseline)
+				// keep remote and pull.
+				let local_deleted = b.map(|b| r.same_content(b)).unwrap_or(false);
+				if local_deleted && allow_push {
+					del_remote.push(r.path.clone());
+				} else if allow_pull {
+					get.push(r.path.clone());
+				}
+			}
+			(Some(l), Some(r)) => {
+				if l.same_content(r) {
+					continue;
+				}
+				// Type mismatch (file vs dir vs symlink): blindly applying
+				// would either fail (EISDIR) or destroy a directory tree.
+				// Skip and surface for manual resolution.
+				if l.kind != r.kind {
+					conflicts.push((l.path.clone(), l.kind, r.kind));
+					continue;
+				}
+				let local_wins = match mode {
+					SyncMode::Push => true,
+					SyncMode::Pull => false,
+					SyncMode::Both => l.mtime >= r.mtime,
+				};
+				if local_wins {
+					push.push(l.clone());
+				} else {
+					get.push(r.path.clone());
+				}
+			}
+			(None, None) => unreachable!(),
+		}
+	}
 
-    // A directory's identity is its kind alone, so baseline evidence can't
-    // show what it held, and applying its delete wipes everything beneath it
-    // — including children this plan keeps because they postdate the
-    // baseline. `git gc` empties `.git/objects/xx/` and the next write
-    // recreates it: the dir matches the baseline, the new object inside does
-    // not, and deleting the dir destroyed the object the plan was pushing.
-    // Such a directory survives and travels with its kept children.
-    for dir in spare_dirs_with_survivors(&mut del_local, &local_map) {
-        if allow_push {
-            push.push(local_map[&dir].clone());
-        }
-    }
-    for dir in spare_dirs_with_survivors(&mut del_remote, &remote_map) {
-        if allow_pull {
-            get.push(dir);
-        }
-    }
+	// A directory's identity is its kind alone, so baseline evidence can't
+	// show what it held, and applying its delete wipes everything beneath it
+	// — including children this plan keeps because they postdate the
+	// baseline. `git gc` empties `.git/objects/xx/` and the next write
+	// recreates it: the dir matches the baseline, the new object inside does
+	// not, and deleting the dir destroyed the object the plan was pushing.
+	// Such a directory survives and travels with its kept children.
+	for dir in spare_dirs_with_survivors(&mut del_local, &local_map) {
+		if allow_push {
+			push.push(local_map[&dir].clone());
+		}
+	}
+	for dir in spare_dirs_with_survivors(&mut del_remote, &remote_map) {
+		if allow_pull {
+			get.push(dir);
+		}
+	}
 
-    // Dirs first, then symlinks, then files — guarantees parents exist
-    // before children when applied on the receiving side.
-    push.sort_by_key(|e| {
-        let prio = match e.kind {
-            EntryKind::Dir => 0u8,
-            EntryKind::Symlink => 1,
-            EntryKind::File => 2,
-        };
-        (prio, e.path.clone())
-    });
+	// Dirs first, then symlinks, then files — guarantees parents exist
+	// before children when applied on the receiving side.
+	push.sort_by_key(|e| {
+		let prio = match e.kind {
+			EntryKind::Dir => 0u8,
+			EntryKind::Symlink => 1,
+			EntryKind::File => 2,
+		};
+		(prio, e.path.clone())
+	});
 
-    Plan {
-        push,
-        get,
-        del_remote,
-        del_local,
-        conflicts,
-    }
+	Plan {
+		push,
+		get,
+		del_remote,
+		del_local,
+		conflicts,
+	}
 }
 
 /// Take out of `deleted` every directory that still holds an entry of `side`
 /// the plan keeps (anything not itself in `deleted`), and return them.
-fn spare_dirs_with_survivors(
-    deleted: &mut Vec<PathBuf>,
-    side: &HashMap<&PathBuf, &Entry>,
-) -> Vec<PathBuf> {
-    let doomed: HashSet<&PathBuf> = deleted.iter().collect();
-    let doomed_dirs: HashSet<&Path> = deleted
-        .iter()
-        .filter(|path| side.get(path).is_some_and(|e| e.kind == EntryKind::Dir))
-        .map(PathBuf::as_path)
-        .collect();
-    let mut spared: HashSet<PathBuf> = HashSet::new();
-    for path in side.keys().filter(|path| !doomed.contains(**path)) {
-        for ancestor in path.ancestors().skip(1) {
-            if doomed_dirs.contains(ancestor) {
-                spared.insert(ancestor.to_path_buf());
-            }
-        }
-    }
-    deleted.retain(|path| !spared.contains(path));
-    let mut spared: Vec<PathBuf> = spared.into_iter().collect();
-    spared.sort();
-    spared
+fn spare_dirs_with_survivors(deleted: &mut Vec<PathBuf>, side: &HashMap<&PathBuf, &Entry>) -> Vec<PathBuf> {
+	let doomed: HashSet<&PathBuf> = deleted.iter().collect();
+	let doomed_dirs: HashSet<&Path> = deleted
+		.iter()
+		.filter(|path| side.get(path).is_some_and(|e| e.kind == EntryKind::Dir))
+		.map(PathBuf::as_path)
+		.collect();
+	let mut spared: HashSet<PathBuf> = HashSet::new();
+	for path in side.keys().filter(|path| !doomed.contains(**path)) {
+		for ancestor in path.ancestors().skip(1) {
+			if doomed_dirs.contains(ancestor) {
+				spared.insert(ancestor.to_path_buf());
+			}
+		}
+	}
+	deleted.retain(|path| !spared.contains(path));
+	let mut spared: Vec<PathBuf> = spared.into_iter().collect();
+	spared.sort();
+	spared
 }
 
 #[cfg(test)]

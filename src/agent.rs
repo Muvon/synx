@@ -8,9 +8,7 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
-use tokio::io::{
-    stdin, stdout, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
-};
+use tokio::io::{stdin, stdout, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::Mutex;
 
 use crate::baseline::LiveBaseline;
@@ -18,413 +16,399 @@ use crate::cache::HashCache;
 use crate::ignores::IgnoreStack;
 use crate::paths::resolve_beneath;
 use crate::peer::{
-    apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink,
-    cleanup_orphan_tmps, compute_delta, compute_signature, forward_local_events, git_remotes,
-    live_loop, send_file, GitGate, Pending, Suppression,
+	apply_delete, apply_delta_to_file, apply_file_data, apply_mkdir, apply_rename, apply_symlink, cleanup_orphan_tmps,
+	compute_delta, compute_signature, forward_local_events, git_remotes, live_loop, send_file, GitGate, Pending,
+	Suppression,
 };
-use crate::protocol::{
-    read_message, write_frame, write_message, EntryKind, Message, IO_BUF_SIZE, PROTOCOL_VERSION,
-};
+use crate::protocol::{read_message, write_frame, write_message, EntryKind, Message, IO_BUF_SIZE, PROTOCOL_VERSION};
 use crate::walker::{build_entry, ensure_root, walk_manifest};
 use crate::watcher;
 
 pub async fn run(path: PathBuf) -> Result<()> {
-    // Wipe stale tmps left by a previous crashed run on this host.
-    cleanup_orphan_tmps();
+	// Wipe stale tmps left by a previous crashed run on this host.
+	cleanup_orphan_tmps();
 
-    let stdin = stdin();
-    let stdout = stdout();
-    let reader = BufReader::with_capacity(IO_BUF_SIZE, stdin);
-    let writer_inner = BufWriter::with_capacity(IO_BUF_SIZE, stdout);
-    let writer = Arc::new(Mutex::new(writer_inner));
-    run_io(path, reader, writer).await
+	let stdin = stdin();
+	let stdout = stdout();
+	let reader = BufReader::with_capacity(IO_BUF_SIZE, stdin);
+	let writer_inner = BufWriter::with_capacity(IO_BUF_SIZE, stdout);
+	let writer = Arc::new(Mutex::new(writer_inner));
+	run_io(path, reader, writer).await
 }
 
 async fn run_io<R, W>(path: PathBuf, mut reader: R, writer: Arc<Mutex<W>>) -> Result<()>
 where
-    R: AsyncRead + AsyncReadExt + Unpin + Send + 'static,
-    W: AsyncWrite + AsyncWriteExt + Unpin + Send,
+	R: AsyncRead + AsyncReadExt + Unpin + Send + 'static,
+	W: AsyncWrite + AsyncWriteExt + Unpin + Send,
 {
-    // ── Handshake ──
-    let hello = read_message(&mut reader).await.context("reading Hello")?;
-    let (mode, compress) = match hello {
-        Message::Hello {
-            version,
-            root: _client_root,
-            mode,
-            compress,
-        } => {
-            if version != PROTOCOL_VERSION {
-                anyhow::bail!("protocol mismatch (remote={PROTOCOL_VERSION}, client={version})");
-            }
-            (mode, compress)
-        }
-        other => anyhow::bail!("expected Hello, got {:?}", other),
-    };
+	// ── Handshake ──
+	let hello = read_message(&mut reader).await.context("reading Hello")?;
+	let (mode, compress) = match hello {
+		Message::Hello {
+			version,
+			root: _client_root,
+			mode,
+			compress,
+		} => {
+			if version != PROTOCOL_VERSION {
+				anyhow::bail!("protocol mismatch (remote={PROTOCOL_VERSION}, client={version})");
+			}
+			(mode, compress)
+		}
+		other => anyhow::bail!("expected Hello, got {:?}", other),
+	};
 
-    let root_existed = path.exists();
-    let root = ensure_root(&path)?;
-    let remotes = git_remotes(&root);
+	let root_existed = path.exists();
+	let root = ensure_root(&path)?;
+	let remotes = git_remotes(&root);
 
-    // Spawn watcher BEFORE the walk so events for files modified during
-    // the walk / manifest exchange / init-sync apply window are captured
-    // (notify uses "events since now" at registration). Events accumulate
-    // in the channel until we drain + replay them after init sync.
-    let suppress = Suppression::default();
-    let pending = Pending::default();
-    // Start watching before any tree traversal. Ignore matchers are populated
-    // from the manifest below; until then events are buffered unfiltered and
-    // filtered again before forwarding.
-    let ignore_state = Arc::new(OnceLock::new());
-    let mut watcher_handle = watcher::spawn(root.clone(), suppress.clone(), ignore_state.clone())?;
+	// Spawn watcher BEFORE the walk so events for files modified during
+	// the walk / manifest exchange / init-sync apply window are captured
+	// (notify uses "events since now" at registration). Events accumulate
+	// in the channel until we drain + replay them after init sync.
+	let suppress = Suppression::default();
+	let pending = Pending::default();
+	// Start watching before any tree traversal. Ignore matchers are populated
+	// from the manifest below; until then events are buffered unfiltered and
+	// filtered again before forwarding.
+	let ignore_state = Arc::new(OnceLock::new());
+	let mut watcher_handle = watcher::spawn(root.clone(), suppress.clone(), ignore_state.clone())?;
 
-    {
-        let mut w = writer.lock().await;
-        write_message(
-            &mut *w,
-            &Message::HelloAck {
-                version: PROTOCOL_VERSION,
-                root_existed,
-                git_remotes: remotes,
-            },
-            false,
-        )
-        .await?;
-    }
+	{
+		let mut w = writer.lock().await;
+		write_message(
+			&mut *w,
+			&Message::HelloAck {
+				version: PROTOCOL_VERSION,
+				root_existed,
+				git_remotes: remotes,
+			},
+			false,
+		)
+		.await?;
+	}
 
-    // ── Walk + send manifest, concurrently receive client manifest ──
-    let cache = HashCache::load(&root);
-    let root_for_walk = root.clone();
-    let ids_for_walk = watcher_handle.ids.clone();
-    let walk_task = tokio::task::spawn_blocking(move || {
-        let mut cache = cache;
-        let (manifest, excluded) = walk_manifest(&root_for_walk, &mut cache, Some(&ids_for_walk))?;
-        Ok::<_, anyhow::Error>((manifest, excluded, cache))
-    });
+	// ── Walk + send manifest, concurrently receive client manifest ──
+	let cache = HashCache::load(&root);
+	let root_for_walk = root.clone();
+	let ids_for_walk = watcher_handle.ids.clone();
+	let walk_task = tokio::task::spawn_blocking(move || {
+		let mut cache = cache;
+		let (manifest, excluded) = walk_manifest(&root_for_walk, &mut cache, Some(&ids_for_walk))?;
+		Ok::<_, anyhow::Error>((manifest, excluded, cache))
+	});
 
-    // Drain client's manifest (we don't need to keep it; the client orchestrates).
-    let mut client_count = 0usize;
-    match read_message(&mut reader).await? {
-        Message::ManifestBegin => {}
-        Message::Error(e) => anyhow::bail!("client: {e}"),
-        m => anyhow::bail!("expected ManifestBegin, got {:?}", m),
-    }
-    loop {
-        match read_message(&mut reader).await? {
-            Message::ManifestEntry(_) => client_count += 1,
-            // The client's walker paused a subtree. Nothing to do here — the
-            // client plans; we only need to not reject the message.
-            Message::ManifestExcluded { .. } => {}
-            Message::ManifestEnd => break,
-            Message::Error(e) => anyhow::bail!("client: {e}"),
-            m => anyhow::bail!("during client manifest: {:?}", m),
-        }
-    }
-    tracing::debug!("client manifest: {client_count} entries");
+	// Drain client's manifest (we don't need to keep it; the client orchestrates).
+	let mut client_count = 0usize;
+	match read_message(&mut reader).await? {
+		Message::ManifestBegin => {}
+		Message::Error(e) => anyhow::bail!("client: {e}"),
+		m => anyhow::bail!("expected ManifestBegin, got {:?}", m),
+	}
+	loop {
+		match read_message(&mut reader).await? {
+			Message::ManifestEntry(_) => client_count += 1,
+			// The client's walker paused a subtree. Nothing to do here — the
+			// client plans; we only need to not reject the message.
+			Message::ManifestExcluded { .. } => {}
+			Message::ManifestEnd => break,
+			Message::Error(e) => anyhow::bail!("client: {e}"),
+			m => anyhow::bail!("during client manifest: {:?}", m),
+		}
+	}
+	tracing::debug!("client manifest: {client_count} entries");
 
-    let (local_manifest, excluded, mut cache) = walk_task.await??;
-    let ignores = Arc::new(IgnoreStack::from_manifest(&root, &local_manifest));
-    let _ = ignore_state.set(ignores.clone());
-    tracing::debug!("agent manifest: {} entries", local_manifest.len());
+	let (local_manifest, excluded, mut cache) = walk_task.await??;
+	let ignores = Arc::new(IgnoreStack::from_manifest(&root, &local_manifest));
+	let _ = ignore_state.set(ignores.clone());
+	tracing::debug!("agent manifest: {} entries", local_manifest.len());
 
-    {
-        // Stream with write_frame (no per-entry flush) + one flush at the end;
-        // the BufWriter auto-flushes when full so this can't deadlock.
-        let mut w = writer.lock().await;
-        write_frame(&mut *w, &Message::ManifestBegin, compress).await?;
-        for prefix in excluded {
-            write_frame(&mut *w, &Message::ManifestExcluded { prefix }, compress).await?;
-        }
-        // Moved, not cloned: each entry is freed once framed.
-        for e in local_manifest {
-            write_frame(&mut *w, &Message::ManifestEntry(e), compress).await?;
-        }
-        write_frame(&mut *w, &Message::ManifestEnd, compress).await?;
-        w.flush().await?;
-    }
+	{
+		// Stream with write_frame (no per-entry flush) + one flush at the end;
+		// the BufWriter auto-flushes when full so this can't deadlock.
+		let mut w = writer.lock().await;
+		write_frame(&mut *w, &Message::ManifestBegin, compress).await?;
+		for prefix in excluded {
+			write_frame(&mut *w, &Message::ManifestExcluded { prefix }, compress).await?;
+		}
+		// Moved, not cloned: each entry is freed once framed.
+		for e in local_manifest {
+			write_frame(&mut *w, &Message::ManifestEntry(e), compress).await?;
+		}
+		write_frame(&mut *w, &Message::ManifestEnd, compress).await?;
+		w.flush().await?;
+	}
 
-    // ── Initial-sync op loop. Process whatever the client sends until SyncDone. ──
-    // `suppress` and `pending` were created above (before the walk) so the
-    // watcher already shares the suppression map. Marks recorded here
-    // (one per apply op) are matched against watcher events later.
-    //
-    // Per-op apply errors (e.g. type conflict slipping past the plan check,
-    // permission denied) are logged + reported to the client via
-    // Message::Error and we CONTINUE — losing the session over one bad
-    // file would just trigger the outer reconnect loop and repeat the
-    // exact same failure indefinitely.
-    // Reported with the path attached: the client has to know *which* file
-    // it may not record as converged, or its baseline claims content we
-    // never wrote and the next session deletes the client's copy.
-    let report_err = |path: &std::path::Path, e: &anyhow::Error| -> Message {
-        tracing::warn!("agent: apply {}: {}", path.display(), e);
-        Message::ApplyFailed {
-            path: path.to_path_buf(),
-            reason: e.to_string(),
-        }
-    };
-    loop {
-        let msg = read_message(&mut reader).await?;
-        match msg {
-            Message::FileData { entry, content } => {
-                let path = entry.path.clone();
-                let mtime = entry.mtime;
-                let hash = entry.hash;
-                if let Err(e) = apply_file_data(&root, &entry, &content) {
-                    let failed = report_err(&path, &e);
-                    let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &failed, compress).await;
-                } else {
-                    suppress.mark_set(path, mtime, hash);
-                }
-            }
-            Message::FileStart { entry, .. } => {
-                let path = entry.path.clone();
-                if let Err(e) = pending.start(&root, entry).await {
-                    let failed = report_err(&path, &e);
-                    let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &failed, compress).await;
-                }
-            }
-            Message::FileChunk { path, data } => {
-                if let Err(e) = pending.chunk(&path, &data).await {
-                    let failed = report_err(&path, &e);
-                    let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &failed, compress).await;
-                }
-            }
-            Message::FileEnd { path } => match pending.end(&root, &path).await {
-                Ok(Some(entry)) => {
-                    suppress.mark_set(entry.path, entry.mtime, entry.hash);
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    let failed = report_err(&path, &e);
-                    let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &failed, compress).await;
-                }
-            },
-            Message::MkDir { entry } => {
-                let path = entry.path.clone();
-                let mtime = entry.mtime;
-                if let Err(e) = apply_mkdir(&root, &entry) {
-                    let failed = report_err(&path, &e);
-                    let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &failed, compress).await;
-                } else {
-                    suppress.mark_mtime(path, mtime);
-                }
-            }
-            Message::MkSymlink { entry } => {
-                let path = entry.path.clone();
-                let mtime = entry.mtime;
-                if let Err(e) = apply_symlink(&root, &entry) {
-                    let failed = report_err(&path, &e);
-                    let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &failed, compress).await;
-                } else {
-                    suppress.mark_mtime(path, mtime);
-                }
-            }
-            Message::Delete { path } => {
-                if let Err(e) = apply_delete(&root, &path) {
-                    let failed = report_err(&path, &e);
-                    let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &failed, compress).await;
-                } else {
-                    suppress.mark_deleted(path);
-                }
-            }
-            Message::Rename { from, to } => {
-                if let Err(e) = apply_rename(&root, &from, &to) {
-                    let failed = report_err(&to, &e);
-                    let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &failed, compress).await;
-                } else {
-                    suppress.mark_deleted(from);
-                    let mt = resolve_beneath(&root, &to)
-                        .ok()
-                        .and_then(|full| std::fs::symlink_metadata(full).ok())
-                        .map(|m| {
-                            use std::os::unix::fs::MetadataExt;
-                            m.mtime() * 1_000_000_000 + m.mtime_nsec()
-                        })
-                        .unwrap_or(0);
-                    suppress.mark_mtime(to, mt);
-                }
-            }
-            Message::SignatureRequest { path, base_hash } => {
-                // Read our local copy, verify hash, compute signature.
-                let full = resolve_beneath(&root, &path)?;
-                let sig_opt = match std::fs::read(&full) {
-                    Ok(content) => {
-                        let actual = blake3::hash(&content);
-                        if actual.as_bytes() == &base_hash {
-                            Some(compute_signature(&content))
-                        } else {
-                            tracing::debug!(
-                                "signature: base mismatch for {} (file changed)",
-                                path.display()
-                            );
-                            None
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!("signature: read {}: {e}", path.display());
-                        None
-                    }
-                };
-                let mut w = writer.lock().await;
-                write_message(
-                    &mut *w,
-                    &Message::Signature { path, sig: sig_opt },
-                    compress,
-                )
-                .await?;
-            }
-            Message::Delta {
-                entry,
-                base_hash,
-                delta,
-            } => {
-                let path = entry.path.clone();
-                let mtime = entry.mtime;
-                let hash = entry.hash;
-                if let Err(e) = apply_delta_to_file(&root, &entry, base_hash, &delta) {
-                    let failed = report_err(&path, &e);
-                    let mut w = writer.lock().await;
-                    let _ = write_message(&mut *w, &failed, compress).await;
-                } else {
-                    suppress.mark_set(path, mtime, hash);
-                }
-            }
-            Message::PullDelta {
-                path,
-                base_hash,
-                sig,
-            } => {
-                // Client wants this file and has shipped us a signature of
-                // what it already has. If we can produce a delta smaller
-                // than the file itself, do that. Otherwise fall back to a
-                // normal send.
-                match build_entry(&root, &path)? {
-                    None => {
-                        // We don't have it — tell client to delete its copy.
-                        let mut w = writer.lock().await;
-                        write_message(&mut *w, &Message::Delete { path }, compress).await?;
-                    }
-                    Some(entry) => match entry.kind {
-                        EntryKind::Dir => {
-                            let mut w = writer.lock().await;
-                            write_message(&mut *w, &Message::MkDir { entry }, compress).await?;
-                        }
-                        EntryKind::Symlink => {
-                            let mut w = writer.lock().await;
-                            write_message(&mut *w, &Message::MkSymlink { entry }, compress).await?;
-                        }
-                        EntryKind::File => {
-                            let full = resolve_beneath(&root, &entry.path)?;
-                            let new_content = std::fs::read(&full)?;
-                            // 75% threshold: if the delta isn't meaningfully
-                            // smaller than the full file, just send the file.
-                            let delta_worth_it_max = entry.size.saturating_mul(3) / 4;
-                            match compute_delta(&sig, &new_content) {
-                                Ok(delta) if (delta.len() as u64) < delta_worth_it_max => {
-                                    let mut w = writer.lock().await;
-                                    write_message(
-                                        &mut *w,
-                                        &Message::Delta {
-                                            entry,
-                                            base_hash,
-                                            delta,
-                                        },
-                                        compress,
-                                    )
-                                    .await?;
-                                }
-                                _ => {
-                                    send_file(&writer, &root, &entry, compress).await?;
-                                }
-                            }
-                        }
-                    },
-                }
-            }
-            Message::FileGet { path } => {
-                if let Some(entry) = build_entry(&root, &path)? {
-                    match entry.kind {
-                        EntryKind::File => {
-                            send_file(&writer, &root, &entry, compress).await?;
-                        }
-                        EntryKind::Dir => {
-                            let mut w = writer.lock().await;
-                            write_message(&mut *w, &Message::MkDir { entry }, compress).await?;
-                        }
-                        EntryKind::Symlink => {
-                            let mut w = writer.lock().await;
-                            write_message(&mut *w, &Message::MkSymlink { entry }, compress).await?;
-                        }
-                    }
-                } else {
-                    tracing::warn!("FileGet for missing path: {}", path.display());
-                }
-            }
-            Message::SyncDone => break,
-            Message::Error(e) => anyhow::bail!("client: {e}"),
-            Message::Bye => return Ok(()),
-            other => tracing::debug!("ignoring during init sync: {:?}", other),
-        }
-    }
+	// ── Initial-sync op loop. Process whatever the client sends until SyncDone. ──
+	// `suppress` and `pending` were created above (before the walk) so the
+	// watcher already shares the suppression map. Marks recorded here
+	// (one per apply op) are matched against watcher events later.
+	//
+	// Per-op apply errors (e.g. type conflict slipping past the plan check,
+	// permission denied) are logged + reported to the client via
+	// Message::Error and we CONTINUE — losing the session over one bad
+	// file would just trigger the outer reconnect loop and repeat the
+	// exact same failure indefinitely.
+	// Reported with the path attached: the client has to know *which* file
+	// it may not record as converged, or its baseline claims content we
+	// never wrote and the next session deletes the client's copy.
+	let report_err = |path: &std::path::Path, e: &anyhow::Error| -> Message {
+		tracing::warn!("agent: apply {}: {}", path.display(), e);
+		Message::ApplyFailed {
+			path: path.to_path_buf(),
+			reason: e.to_string(),
+		}
+	};
+	loop {
+		let msg = read_message(&mut reader).await?;
+		match msg {
+			Message::FileData { entry, content } => {
+				let path = entry.path.clone();
+				let mtime = entry.mtime;
+				let hash = entry.hash;
+				if let Err(e) = apply_file_data(&root, &entry, &content) {
+					let failed = report_err(&path, &e);
+					let mut w = writer.lock().await;
+					let _ = write_message(&mut *w, &failed, compress).await;
+				} else {
+					suppress.mark_set(path, mtime, hash);
+				}
+			}
+			Message::FileStart { entry, .. } => {
+				let path = entry.path.clone();
+				if let Err(e) = pending.start(&root, entry).await {
+					let failed = report_err(&path, &e);
+					let mut w = writer.lock().await;
+					let _ = write_message(&mut *w, &failed, compress).await;
+				}
+			}
+			Message::FileChunk { path, data } => {
+				if let Err(e) = pending.chunk(&path, &data).await {
+					let failed = report_err(&path, &e);
+					let mut w = writer.lock().await;
+					let _ = write_message(&mut *w, &failed, compress).await;
+				}
+			}
+			Message::FileEnd { path } => match pending.end(&root, &path).await {
+				Ok(Some(entry)) => {
+					suppress.mark_set(entry.path, entry.mtime, entry.hash);
+				}
+				Ok(None) => {}
+				Err(e) => {
+					let failed = report_err(&path, &e);
+					let mut w = writer.lock().await;
+					let _ = write_message(&mut *w, &failed, compress).await;
+				}
+			},
+			Message::MkDir { entry } => {
+				let path = entry.path.clone();
+				let mtime = entry.mtime;
+				if let Err(e) = apply_mkdir(&root, &entry) {
+					let failed = report_err(&path, &e);
+					let mut w = writer.lock().await;
+					let _ = write_message(&mut *w, &failed, compress).await;
+				} else {
+					suppress.mark_mtime(path, mtime);
+				}
+			}
+			Message::MkSymlink { entry } => {
+				let path = entry.path.clone();
+				let mtime = entry.mtime;
+				if let Err(e) = apply_symlink(&root, &entry) {
+					let failed = report_err(&path, &e);
+					let mut w = writer.lock().await;
+					let _ = write_message(&mut *w, &failed, compress).await;
+				} else {
+					suppress.mark_mtime(path, mtime);
+				}
+			}
+			Message::Delete { path } => {
+				if let Err(e) = apply_delete(&root, &path) {
+					let failed = report_err(&path, &e);
+					let mut w = writer.lock().await;
+					let _ = write_message(&mut *w, &failed, compress).await;
+				} else {
+					suppress.mark_deleted(path);
+				}
+			}
+			Message::Rename { from, to } => {
+				if let Err(e) = apply_rename(&root, &from, &to) {
+					let failed = report_err(&to, &e);
+					let mut w = writer.lock().await;
+					let _ = write_message(&mut *w, &failed, compress).await;
+				} else {
+					suppress.mark_deleted(from);
+					let mt = resolve_beneath(&root, &to)
+						.ok()
+						.and_then(|full| std::fs::symlink_metadata(full).ok())
+						.map(|m| {
+							use std::os::unix::fs::MetadataExt;
+							m.mtime() * 1_000_000_000 + m.mtime_nsec()
+						})
+						.unwrap_or(0);
+					suppress.mark_mtime(to, mt);
+				}
+			}
+			Message::SignatureRequest { path, base_hash } => {
+				// Read our local copy, verify hash, compute signature.
+				let full = resolve_beneath(&root, &path)?;
+				let sig_opt = match std::fs::read(&full) {
+					Ok(content) => {
+						let actual = blake3::hash(&content);
+						if actual.as_bytes() == &base_hash {
+							Some(compute_signature(&content))
+						} else {
+							tracing::debug!("signature: base mismatch for {} (file changed)", path.display());
+							None
+						}
+					}
+					Err(e) => {
+						tracing::debug!("signature: read {}: {e}", path.display());
+						None
+					}
+				};
+				let mut w = writer.lock().await;
+				write_message(&mut *w, &Message::Signature { path, sig: sig_opt }, compress).await?;
+			}
+			Message::Delta {
+				entry,
+				base_hash,
+				delta,
+			} => {
+				let path = entry.path.clone();
+				let mtime = entry.mtime;
+				let hash = entry.hash;
+				if let Err(e) = apply_delta_to_file(&root, &entry, base_hash, &delta) {
+					let failed = report_err(&path, &e);
+					let mut w = writer.lock().await;
+					let _ = write_message(&mut *w, &failed, compress).await;
+				} else {
+					suppress.mark_set(path, mtime, hash);
+				}
+			}
+			Message::PullDelta { path, base_hash, sig } => {
+				// Client wants this file and has shipped us a signature of
+				// what it already has. If we can produce a delta smaller
+				// than the file itself, do that. Otherwise fall back to a
+				// normal send.
+				match build_entry(&root, &path)? {
+					None => {
+						// We don't have it — tell client to delete its copy.
+						let mut w = writer.lock().await;
+						write_message(&mut *w, &Message::Delete { path }, compress).await?;
+					}
+					Some(entry) => match entry.kind {
+						EntryKind::Dir => {
+							let mut w = writer.lock().await;
+							write_message(&mut *w, &Message::MkDir { entry }, compress).await?;
+						}
+						EntryKind::Symlink => {
+							let mut w = writer.lock().await;
+							write_message(&mut *w, &Message::MkSymlink { entry }, compress).await?;
+						}
+						EntryKind::File => {
+							let full = resolve_beneath(&root, &entry.path)?;
+							let new_content = std::fs::read(&full)?;
+							// 75% threshold: if the delta isn't meaningfully
+							// smaller than the full file, just send the file.
+							let delta_worth_it_max = entry.size.saturating_mul(3) / 4;
+							match compute_delta(&sig, &new_content) {
+								Ok(delta) if (delta.len() as u64) < delta_worth_it_max => {
+									let mut w = writer.lock().await;
+									write_message(
+										&mut *w,
+										&Message::Delta {
+											entry,
+											base_hash,
+											delta,
+										},
+										compress,
+									)
+									.await?;
+								}
+								_ => {
+									send_file(&writer, &root, &entry, compress).await?;
+								}
+							}
+						}
+					},
+				}
+			}
+			Message::FileGet { path } => {
+				if let Some(entry) = build_entry(&root, &path)? {
+					match entry.kind {
+						EntryKind::File => {
+							send_file(&writer, &root, &entry, compress).await?;
+						}
+						EntryKind::Dir => {
+							let mut w = writer.lock().await;
+							write_message(&mut *w, &Message::MkDir { entry }, compress).await?;
+						}
+						EntryKind::Symlink => {
+							let mut w = writer.lock().await;
+							write_message(&mut *w, &Message::MkSymlink { entry }, compress).await?;
+						}
+					}
+				} else {
+					tracing::warn!("FileGet for missing path: {}", path.display());
+				}
+			}
+			Message::SyncDone => break,
+			Message::Error(e) => anyhow::bail!("client: {e}"),
+			Message::Bye => return Ok(()),
+			other => tracing::debug!("ignoring during init sync: {:?}", other),
+		}
+	}
 
-    // Tell the client we're done responding.
-    {
-        let mut w = writer.lock().await;
-        write_message(&mut *w, &Message::SyncDone, compress).await?;
-    }
+	// Tell the client we're done responding.
+	{
+		let mut w = writer.lock().await;
+		write_message(&mut *w, &Message::SyncDone, compress).await?;
+	}
 
-    // Persist our cache; the agent never re-walks, so free it too.
-    cache.save(&root);
-    drop(cache);
+	// Persist our cache; the agent never re-walks, so free it too.
+	cache.save(&root);
+	drop(cache);
 
-    // Drain watcher events buffered during the walk + manifest exchange +
-    // ops loop. Echoes of our own writes filter through `suppress`; real
-    // user edits made on the remote during the startup window flow to the
-    // client.
-    // Agent has no plan/baseline; a disabled one keeps the shared signatures
-    // uniform while skipping all persistence. The git gate, however, is real.
-    let gate = GitGate::default();
-    let live_baseline = LiveBaseline::disabled();
-    let mut buffered: Vec<crate::watcher::FsEvent> = Vec::new();
-    while let Ok(batch) = watcher_handle.events.try_recv() {
-        buffered.extend(batch);
-    }
-    if !buffered.is_empty() {
-        tracing::debug!("agent: draining {} buffered watcher events", buffered.len());
-        forward_local_events(
-            &root,
-            buffered,
-            &writer,
-            compress,
-            &suppress,
-            false,
-            &ignores,
-            &gate,
-            &live_baseline,
-        )
-        .await?;
-    }
+	// Drain watcher events buffered during the walk + manifest exchange +
+	// ops loop. Echoes of our own writes filter through `suppress`; real
+	// user edits made on the remote during the startup window flow to the
+	// client.
+	// Agent has no plan/baseline; a disabled one keeps the shared signatures
+	// uniform while skipping all persistence. The git gate, however, is real.
+	let gate = GitGate::default();
+	let live_baseline = LiveBaseline::disabled();
+	let mut buffered: Vec<crate::watcher::FsEvent> = Vec::new();
+	while let Ok(batch) = watcher_handle.events.try_recv() {
+		buffered.extend(batch);
+	}
+	if !buffered.is_empty() {
+		tracing::debug!("agent: draining {} buffered watcher events", buffered.len());
+		forward_local_events(
+			&root,
+			buffered,
+			&writer,
+			compress,
+			&suppress,
+			false,
+			&ignores,
+			&gate,
+			&live_baseline,
+		)
+		.await?;
+	}
 
-    // ── Live mode ──
-    let ctx = crate::peer::SessionCtx {
-        root,
-        mode,
-        compress,
-        is_client: false,
-        ignores,
-        gate,
-        baseline: live_baseline,
-    };
-    live_loop(ctx, reader, writer, suppress, pending, watcher_handle, None).await
+	// ── Live mode ──
+	let ctx = crate::peer::SessionCtx {
+		root,
+		mode,
+		compress,
+		is_client: false,
+		ignores,
+		gate,
+		baseline: live_baseline,
+	};
+	live_loop(ctx, reader, writer, suppress, pending, watcher_handle, None).await
 }
 
 #[cfg(test)]

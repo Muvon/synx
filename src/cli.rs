@@ -20,63 +20,63 @@ EXAMPLES:
     long_about = LONG_ABOUT,
 )]
 pub struct Cli {
-    /// Local directory to sync (or, with --agent, the remote-side path).
-    #[arg(value_name = "LOCAL")]
-    pub local: Option<String>,
+	/// Local directory to sync (or, with --agent, the remote-side path).
+	#[arg(value_name = "LOCAL")]
+	pub local: Option<String>,
 
-    /// Remote target as [user@]host:/path
-    #[arg(value_name = "REMOTE")]
-    pub remote: Option<String>,
+	/// Remote target as [user@]host:/path
+	#[arg(value_name = "REMOTE")]
+	pub remote: Option<String>,
 
-    /// Sync direction
-    #[arg(short, long, value_enum, default_value_t = SyncMode::Both)]
-    pub mode: SyncMode,
+	/// Sync direction
+	#[arg(short, long, value_enum, default_value_t = SyncMode::Both)]
+	pub mode: SyncMode,
 
-    /// Increase logging verbosity (-v, -vv)
-    #[arg(short, long, action = clap::ArgAction::Count)]
-    pub verbose: u8,
+	/// Increase logging verbosity (-v, -vv)
+	#[arg(short, long, action = clap::ArgAction::Count)]
+	pub verbose: u8,
 
-    /// Internal: run as the remote-side agent (invoked over SSH).
-    #[arg(long, hide = true)]
-    pub agent: bool,
+	/// Internal: run as the remote-side agent (invoked over SSH).
+	#[arg(long, hide = true)]
+	pub agent: bool,
 
-    /// Extra arguments to pass to the ssh client, e.g. "-p 2222 -i ~/.ssh/key"
-    #[arg(long, value_name = "OPTS", allow_hyphen_values = true)]
-    pub ssh_opts: Option<String>,
+	/// Extra arguments to pass to the ssh client, e.g. "-p 2222 -i ~/.ssh/key"
+	#[arg(long, value_name = "OPTS", allow_hyphen_values = true)]
+	pub ssh_opts: Option<String>,
 
-    /// Disable on-the-wire zstd compression.
-    #[arg(long)]
-    pub no_compress: bool,
+	/// Disable on-the-wire zstd compression.
+	#[arg(long)]
+	pub no_compress: bool,
 
-    /// Perform the initial sync and exit, without entering live-watch mode.
-    #[arg(long)]
-    pub once: bool,
+	/// Perform the initial sync and exit, without entering live-watch mode.
+	#[arg(long)]
+	pub once: bool,
 
-    /// Print the planned operations and exit without applying them.
-    #[arg(long)]
-    pub dry_run: bool,
+	/// Print the planned operations and exit without applying them.
+	#[arg(long)]
+	pub dry_run: bool,
 
-    /// Sync even when local and remote roots are git repos with no
-    /// shared remote (i.e. different projects).
-    #[arg(long)]
-    pub allow_repo_mismatch: bool,
+	/// Sync even when local and remote roots are git repos with no
+	/// shared remote (i.e. different projects).
+	#[arg(long)]
+	pub allow_repo_mismatch: bool,
 
-    /// Command used to invoke synx on the remote (must be in PATH).
-    #[arg(long, default_value = "synx", value_name = "CMD")]
-    pub remote_synx: String,
+	/// Command used to invoke synx on the remote (must be in PATH).
+	#[arg(long, default_value = "synx", value_name = "CMD")]
+	pub remote_synx: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct ClientArgs {
-    pub local: String,
-    pub remote: String,
-    pub mode: SyncMode,
-    pub ssh_opts: Option<String>,
-    pub no_compress: bool,
-    pub once: bool,
-    pub dry_run: bool,
-    pub allow_repo_mismatch: bool,
-    pub remote_synx: String,
+	pub local: String,
+	pub remote: String,
+	pub mode: SyncMode,
+	pub ssh_opts: Option<String>,
+	pub no_compress: bool,
+	pub once: bool,
+	pub dry_run: bool,
+	pub allow_repo_mismatch: bool,
+	pub remote_synx: String,
 }
 
 #[cfg(test)]

@@ -11,81 +11,81 @@ use std::path::{Path, PathBuf};
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct HashCache {
-    entries: HashMap<PathBuf, CacheEntry>,
-    /// Runtime-only: an unchanged walk should not rewrite the whole cache.
-    #[serde(skip)]
-    dirty: bool,
+	entries: HashMap<PathBuf, CacheEntry>,
+	/// Runtime-only: an unchanged walk should not rewrite the whole cache.
+	#[serde(skip)]
+	dirty: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheEntry {
-    pub size: u64,
-    pub mtime: i64,
-    pub hash: [u8; 32],
+	pub size: u64,
+	pub mtime: i64,
+	pub hash: [u8; 32],
 }
 
 impl HashCache {
-    pub fn load(root: &Path) -> Self {
-        let Some(path) = cache_path_for(root) else {
-            return Self::default();
-        };
-        Self::load_from_path(&path)
-    }
+	pub fn load(root: &Path) -> Self {
+		let Some(path) = cache_path_for(root) else {
+			return Self::default();
+		};
+		Self::load_from_path(&path)
+	}
 
-    fn load_from_path(path: &Path) -> Self {
-        match fs::read(path) {
-            Ok(bytes) => postcard::from_bytes(&bytes).unwrap_or_default(),
-            Err(_) => Self::default(),
-        }
-    }
+	fn load_from_path(path: &Path) -> Self {
+		match fs::read(path) {
+			Ok(bytes) => postcard::from_bytes(&bytes).unwrap_or_default(),
+			Err(_) => Self::default(),
+		}
+	}
 
-    pub fn save(&mut self, root: &Path) {
-        if !self.dirty {
-            return;
-        }
-        let Some(path) = cache_path_for(root) else {
-            return;
-        };
-        self.save_to_path(&path);
-    }
+	pub fn save(&mut self, root: &Path) {
+		if !self.dirty {
+			return;
+		}
+		let Some(path) = cache_path_for(root) else {
+			return;
+		};
+		self.save_to_path(&path);
+	}
 
-    fn save_to_path(&mut self, path: &Path) {
-        if !self.dirty {
-            return;
-        }
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Ok(bytes) = postcard::to_allocvec(self) {
-            if fs::write(path, bytes).is_ok() {
-                self.dirty = false;
-            }
-        }
-    }
+	fn save_to_path(&mut self, path: &Path) {
+		if !self.dirty {
+			return;
+		}
+		if let Some(parent) = path.parent() {
+			let _ = fs::create_dir_all(parent);
+		}
+		if let Ok(bytes) = postcard::to_allocvec(self) {
+			if fs::write(path, bytes).is_ok() {
+				self.dirty = false;
+			}
+		}
+	}
 
-    pub fn lookup(&self, rel: &Path, size: u64, mtime: i64) -> Option<[u8; 32]> {
-        self.entries
-            .get(rel)
-            .filter(|e| e.size == size && e.mtime == mtime)
-            .map(|e| e.hash)
-    }
+	pub fn lookup(&self, rel: &Path, size: u64, mtime: i64) -> Option<[u8; 32]> {
+		self.entries
+			.get(rel)
+			.filter(|e| e.size == size && e.mtime == mtime)
+			.map(|e| e.hash)
+	}
 
-    pub fn record(&mut self, rel: &Path, size: u64, mtime: i64, hash: [u8; 32]) {
-        let next = CacheEntry { size, mtime, hash };
-        if self.entries.get(rel) == Some(&next) {
-            return;
-        }
-        self.entries.insert(rel.to_path_buf(), next);
-        self.dirty = true;
-    }
+	pub fn record(&mut self, rel: &Path, size: u64, mtime: i64, hash: [u8; 32]) {
+		let next = CacheEntry { size, mtime, hash };
+		if self.entries.get(rel) == Some(&next) {
+			return;
+		}
+		self.entries.insert(rel.to_path_buf(), next);
+		self.dirty = true;
+	}
 }
 
 fn cache_path_for(root: &Path) -> Option<PathBuf> {
-    let base = dirs::cache_dir()?.join("synx");
-    let mut h = blake3::Hasher::new();
-    h.update(root.as_os_str().as_encoded_bytes());
-    let id = h.finalize().to_hex();
-    Some(base.join(format!("{}.cache", &id.as_str()[..16])))
+	let base = dirs::cache_dir()?.join("synx");
+	let mut h = blake3::Hasher::new();
+	h.update(root.as_os_str().as_encoded_bytes());
+	let id = h.finalize().to_hex();
+	Some(base.join(format!("{}.cache", &id.as_str()[..16])))
 }
 
 #[cfg(test)]

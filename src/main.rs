@@ -21,35 +21,35 @@ use cli::Cli;
 // only add thread stacks.
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    ui::init(cli.verbose, cli.agent);
+	let cli = Cli::parse();
+	ui::init(cli.verbose, cli.agent);
 
-    if cli.agent {
-        let path = cli
-            .local
-            .ok_or_else(|| anyhow::anyhow!("--agent requires a path argument"))?;
-        return agent::run(std::path::PathBuf::from(path)).await;
-    }
+	if cli.agent {
+		let path = cli
+			.local
+			.ok_or_else(|| anyhow::anyhow!("--agent requires a path argument"))?;
+		return agent::run(std::path::PathBuf::from(path)).await;
+	}
 
-    let local = cli
-        .local
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("missing <LOCAL> path (try: synx --help)"))?;
-    let remote = cli
-        .remote
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("missing <REMOTE> target (try: synx --help)"))?;
+	let local = cli
+		.local
+		.clone()
+		.ok_or_else(|| anyhow::anyhow!("missing <LOCAL> path (try: synx --help)"))?;
+	let remote = cli
+		.remote
+		.clone()
+		.ok_or_else(|| anyhow::anyhow!("missing <REMOTE> target (try: synx --help)"))?;
 
-    sync::run(cli::ClientArgs {
-        local,
-        remote,
-        mode: cli.mode,
-        ssh_opts: cli.ssh_opts.clone(),
-        no_compress: cli.no_compress,
-        once: cli.once,
-        dry_run: cli.dry_run,
-        allow_repo_mismatch: cli.allow_repo_mismatch,
-        remote_synx: cli.remote_synx.clone(),
-    })
-    .await
+	sync::run(cli::ClientArgs {
+		local,
+		remote,
+		mode: cli.mode,
+		ssh_opts: cli.ssh_opts.clone(),
+		no_compress: cli.no_compress,
+		once: cli.once,
+		dry_run: cli.dry_run,
+		allow_repo_mismatch: cli.allow_repo_mismatch,
+		remote_synx: cli.remote_synx.clone(),
+	})
+	.await
 }

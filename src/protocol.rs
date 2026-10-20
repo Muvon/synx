@@ -23,46 +23,46 @@ pub const CHUNK_THRESHOLD: usize = CHUNK_SIZE;
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SyncMode {
-    /// local → remote only
-    Push,
-    /// remote → local only
-    Pull,
-    /// bidirectional (default)
-    Both,
+	/// local → remote only
+	Push,
+	/// remote → local only
+	Pull,
+	/// bidirectional (default)
+	Both,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EntryKind {
-    File,
-    Dir,
-    Symlink,
+	File,
+	Dir,
+	Symlink,
 }
 
 /// A single filesystem entry, relative to the sync root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
-    pub path: PathBuf,
-    pub kind: EntryKind,
-    pub size: u64,
-    /// nanoseconds since Unix epoch
-    pub mtime: i64,
-    pub mode: u32,
-    /// blake3 hash; zeroed for non-files
-    pub hash: [u8; 32],
-    pub link_target: Option<PathBuf>,
+	pub path: PathBuf,
+	pub kind: EntryKind,
+	pub size: u64,
+	/// nanoseconds since Unix epoch
+	pub mtime: i64,
+	pub mode: u32,
+	/// blake3 hash; zeroed for non-files
+	pub hash: [u8; 32],
+	pub link_target: Option<PathBuf>,
 }
 
 impl Entry {
-    pub fn same_content(&self, other: &Entry) -> bool {
-        if self.kind != other.kind {
-            return false;
-        }
-        match self.kind {
-            EntryKind::File => self.hash == other.hash,
-            EntryKind::Dir => true,
-            EntryKind::Symlink => self.link_target == other.link_target,
-        }
-    }
+	pub fn same_content(&self, other: &Entry) -> bool {
+		if self.kind != other.kind {
+			return false;
+		}
+		match self.kind {
+			EntryKind::File => self.hash == other.hash,
+			EntryKind::Dir => true,
+			EntryKind::Symlink => self.link_target == other.link_target,
+		}
+	}
 }
 
 /// Byte payloads carry `serde_bytes` so postcard copies them as one slice
@@ -70,229 +70,229 @@ impl Entry {
 /// is identical to plain `Vec<u8>`, so this is not a wire change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
-    /// First message from client.
-    Hello {
-        version: u32,
-        root: PathBuf,
-        mode: SyncMode,
-        compress: bool,
-    },
-    /// Server's response.
-    HelloAck {
-        version: u32,
-        root_existed: bool,
-        /// Normalized remote URLs of the agent's git repo; empty when the
-        /// root is not a repo or has no remotes. Lets the client refuse
-        /// syncing two different repositories over one path.
-        git_remotes: Vec<String>,
-    },
+	/// First message from client.
+	Hello {
+		version: u32,
+		root: PathBuf,
+		mode: SyncMode,
+		compress: bool,
+	},
+	/// Server's response.
+	HelloAck {
+		version: u32,
+		root_existed: bool,
+		/// Normalized remote URLs of the agent's git repo; empty when the
+		/// root is not a repo or has no remotes. Lets the client refuse
+		/// syncing two different repositories over one path.
+		git_remotes: Vec<String>,
+	},
 
-    // ── Manifest exchange (streaming) ──
-    ManifestBegin,
-    ManifestEntry(Entry),
-    ManifestEnd,
+	// ── Manifest exchange (streaming) ──
+	ManifestBegin,
+	ManifestEntry(Entry),
+	ManifestEnd,
 
-    // ── Filesystem operations ──
-    /// Request peer to send us this file.
-    FileGet {
-        path: PathBuf,
-    },
-    /// Whole-file payload (small/medium files).
-    FileData {
-        entry: Entry,
-        #[serde(with = "serde_bytes")]
-        content: Vec<u8>,
-    },
-    /// Begin a chunked file transfer; receiver opens a tmp file.
-    FileStart {
-        entry: Entry,
-        total_size: u64,
-    },
-    /// One chunk of a large file (multiple per file).
-    FileChunk {
-        path: PathBuf,
-        #[serde(with = "serde_bytes")]
-        data: Vec<u8>,
-    },
-    /// Finish a chunked file transfer; receiver renames tmp into place.
-    FileEnd {
-        path: PathBuf,
-    },
-    /// Sync metadata only (mtime + mode) when the file's content is
-    /// unchanged. Avoids re-transferring the body on a `touch`-like change.
-    Touch {
-        path: PathBuf,
-        mtime: i64,
-        mode: u32,
-    },
-    /// Ask peer to compute a rsync-style signature of the file it has at
-    /// `path` (its old version). `base_hash` lets the peer verify it still
-    /// has the version the sender expects.
-    SignatureRequest {
-        path: PathBuf,
-        base_hash: [u8; 32],
-    },
-    /// Response to `SignatureRequest`. `sig = None` means the peer can't
-    /// (or won't) produce a signature — the sender should fall back to a
-    /// full transfer.
-    Signature {
-        path: PathBuf,
-        #[serde(with = "serde_bytes")]
-        sig: Option<Vec<u8>>,
-    },
-    /// Patch the peer's existing file using the given delta.
-    /// `base_hash` is the hash of the version the delta was computed against;
-    /// receiver MUST verify the result (blake3) matches `entry.hash`.
-    Delta {
-        entry: Entry,
-        base_hash: [u8; 32],
-        #[serde(with = "serde_bytes")]
-        delta: Vec<u8>,
-    },
-    /// Client-initiated pull with a signature of the version we already
-    /// have. The server responds with a `Delta` (preferred) or `FileData` /
-    /// chunked transfer fallback.
-    PullDelta {
-        path: PathBuf,
-        base_hash: [u8; 32],
-        #[serde(with = "serde_bytes")]
-        sig: Vec<u8>,
-    },
-    /// Create or update a directory's metadata.
-    MkDir {
-        entry: Entry,
-    },
-    /// Create or replace a symlink.
-    MkSymlink {
-        entry: Entry,
-    },
-    /// Remove a path (files or dirs).
-    Delete {
-        path: PathBuf,
-    },
-    /// Rename / move within the sync root.
-    Rename {
-        from: PathBuf,
-        to: PathBuf,
-    },
+	// ── Filesystem operations ──
+	/// Request peer to send us this file.
+	FileGet {
+		path: PathBuf,
+	},
+	/// Whole-file payload (small/medium files).
+	FileData {
+		entry: Entry,
+		#[serde(with = "serde_bytes")]
+		content: Vec<u8>,
+	},
+	/// Begin a chunked file transfer; receiver opens a tmp file.
+	FileStart {
+		entry: Entry,
+		total_size: u64,
+	},
+	/// One chunk of a large file (multiple per file).
+	FileChunk {
+		path: PathBuf,
+		#[serde(with = "serde_bytes")]
+		data: Vec<u8>,
+	},
+	/// Finish a chunked file transfer; receiver renames tmp into place.
+	FileEnd {
+		path: PathBuf,
+	},
+	/// Sync metadata only (mtime + mode) when the file's content is
+	/// unchanged. Avoids re-transferring the body on a `touch`-like change.
+	Touch {
+		path: PathBuf,
+		mtime: i64,
+		mode: u32,
+	},
+	/// Ask peer to compute a rsync-style signature of the file it has at
+	/// `path` (its old version). `base_hash` lets the peer verify it still
+	/// has the version the sender expects.
+	SignatureRequest {
+		path: PathBuf,
+		base_hash: [u8; 32],
+	},
+	/// Response to `SignatureRequest`. `sig = None` means the peer can't
+	/// (or won't) produce a signature — the sender should fall back to a
+	/// full transfer.
+	Signature {
+		path: PathBuf,
+		#[serde(with = "serde_bytes")]
+		sig: Option<Vec<u8>>,
+	},
+	/// Patch the peer's existing file using the given delta.
+	/// `base_hash` is the hash of the version the delta was computed against;
+	/// receiver MUST verify the result (blake3) matches `entry.hash`.
+	Delta {
+		entry: Entry,
+		base_hash: [u8; 32],
+		#[serde(with = "serde_bytes")]
+		delta: Vec<u8>,
+	},
+	/// Client-initiated pull with a signature of the version we already
+	/// have. The server responds with a `Delta` (preferred) or `FileData` /
+	/// chunked transfer fallback.
+	PullDelta {
+		path: PathBuf,
+		base_hash: [u8; 32],
+		#[serde(with = "serde_bytes")]
+		sig: Vec<u8>,
+	},
+	/// Create or update a directory's metadata.
+	MkDir {
+		entry: Entry,
+	},
+	/// Create or replace a symlink.
+	MkSymlink {
+		entry: Entry,
+	},
+	/// Remove a path (files or dirs).
+	Delete {
+		path: PathBuf,
+	},
+	/// Rename / move within the sync root.
+	Rename {
+		from: PathBuf,
+		to: PathBuf,
+	},
 
-    /// Sender has nothing more for the initial-sync phase.
-    SyncDone,
+	/// Sender has nothing more for the initial-sync phase.
+	SyncDone,
 
-    Ping,
-    Pong,
-    Bye,
-    Error(String),
+	Ping,
+	Pong,
+	Bye,
+	Error(String),
 
-    /// The sender's walker deliberately excluded this subtree from its
-    /// manifest (e.g. `.git/` while a git operation is in progress — see
-    /// `peer::git_busy`). Sent between `ManifestBegin` and `ManifestEnd`,
-    /// once per excluded subtree. The receiver must treat the subtree as
-    /// invisible for this session's plan: the absence of entries under it is
-    /// NOT deletion evidence. An exclusion can only make a session more
-    /// conservative — it never causes a write or delete. Appended last so
-    /// existing variant indices stay wire-stable.
-    ManifestExcluded {
-        prefix: PathBuf,
-    },
+	/// The sender's walker deliberately excluded this subtree from its
+	/// manifest (e.g. `.git/` while a git operation is in progress — see
+	/// `peer::git_busy`). Sent between `ManifestBegin` and `ManifestEnd`,
+	/// once per excluded subtree. The receiver must treat the subtree as
+	/// invisible for this session's plan: the absence of entries under it is
+	/// NOT deletion evidence. An exclusion can only make a session more
+	/// conservative — it never causes a write or delete. Appended last so
+	/// existing variant indices stay wire-stable.
+	ManifestExcluded {
+		prefix: PathBuf,
+	},
 
-    /// The receiver could not apply the op for `path` (permission denied,
-    /// type conflict, disk full). Carries the path — unlike the free-form
-    /// `Error` — because the sender must drop it from its converged state:
-    /// a path recorded as converged while the peer doesn't hold it is read
-    /// as "the peer deleted this" by the next session's three-way diff,
-    /// which then deletes the sender's copy. Appended last so existing
-    /// variant indices stay wire-stable.
-    ApplyFailed {
-        path: PathBuf,
-        reason: String,
-    },
+	/// The receiver could not apply the op for `path` (permission denied,
+	/// type conflict, disk full). Carries the path — unlike the free-form
+	/// `Error` — because the sender must drop it from its converged state:
+	/// a path recorded as converged while the peer doesn't hold it is read
+	/// as "the peer deleted this" by the next session's three-way diff,
+	/// which then deletes the sender's copy. Appended last so existing
+	/// variant indices stay wire-stable.
+	ApplyFailed {
+		path: PathBuf,
+		reason: String,
+	},
 }
 
 /// Protocol paths are always relative to the negotiated synchronization root.
 /// Rejecting traversal at decode time protects every dispatcher, including
 /// future message handlers that might otherwise forget a local check.
 fn validate_relative_path(path: &Path) -> io::Result<()> {
-    let mut has_component = false;
-    for component in path.components() {
-        match component {
-            Component::Normal(_) => has_component = true,
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("unsafe protocol path: {}", path.display()),
-                ));
-            }
-        }
-    }
-    if !has_component {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "protocol path must not be empty",
-        ));
-    }
-    Ok(())
+	let mut has_component = false;
+	for component in path.components() {
+		match component {
+			Component::Normal(_) => has_component = true,
+			_ => {
+				return Err(io::Error::new(
+					io::ErrorKind::InvalidData,
+					format!("unsafe protocol path: {}", path.display()),
+				));
+			}
+		}
+	}
+	if !has_component {
+		return Err(io::Error::new(
+			io::ErrorKind::InvalidData,
+			"protocol path must not be empty",
+		));
+	}
+	Ok(())
 }
 
 impl Message {
-    fn validate_paths(&self) -> io::Result<()> {
-        match self {
-            Message::ManifestEntry(entry) => validate_relative_path(&entry.path),
-            Message::FileData { entry, .. } | Message::Delta { entry, .. } => {
-                validate_entry_kind(entry, EntryKind::File)
-            }
-            Message::FileStart { entry, total_size } => {
-                validate_entry_kind(entry, EntryKind::File)?;
-                if *total_size != entry.size {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "FileStart size does not match entry metadata",
-                    ));
-                }
-                Ok(())
-            }
-            Message::MkDir { entry } => validate_entry_kind(entry, EntryKind::Dir),
-            Message::MkSymlink { entry } => validate_entry_kind(entry, EntryKind::Symlink),
-            Message::FileGet { path }
-            | Message::FileChunk { path, .. }
-            | Message::FileEnd { path }
-            | Message::Touch { path, .. }
-            | Message::SignatureRequest { path, .. }
-            | Message::Signature { path, .. }
-            | Message::PullDelta { path, .. }
-            | Message::Delete { path }
-            | Message::ApplyFailed { path, .. }
-            | Message::ManifestExcluded { prefix: path } => validate_relative_path(path),
-            Message::Rename { from, to } => {
-                validate_relative_path(from)?;
-                validate_relative_path(to)
-            }
-            Message::Hello { .. }
-            | Message::HelloAck { .. }
-            | Message::ManifestBegin
-            | Message::ManifestEnd
-            | Message::SyncDone
-            | Message::Ping
-            | Message::Pong
-            | Message::Bye
-            | Message::Error(_) => Ok(()),
-        }
-    }
+	fn validate_paths(&self) -> io::Result<()> {
+		match self {
+			Message::ManifestEntry(entry) => validate_relative_path(&entry.path),
+			Message::FileData { entry, .. } | Message::Delta { entry, .. } => {
+				validate_entry_kind(entry, EntryKind::File)
+			}
+			Message::FileStart { entry, total_size } => {
+				validate_entry_kind(entry, EntryKind::File)?;
+				if *total_size != entry.size {
+					return Err(io::Error::new(
+						io::ErrorKind::InvalidData,
+						"FileStart size does not match entry metadata",
+					));
+				}
+				Ok(())
+			}
+			Message::MkDir { entry } => validate_entry_kind(entry, EntryKind::Dir),
+			Message::MkSymlink { entry } => validate_entry_kind(entry, EntryKind::Symlink),
+			Message::FileGet { path }
+			| Message::FileChunk { path, .. }
+			| Message::FileEnd { path }
+			| Message::Touch { path, .. }
+			| Message::SignatureRequest { path, .. }
+			| Message::Signature { path, .. }
+			| Message::PullDelta { path, .. }
+			| Message::Delete { path }
+			| Message::ApplyFailed { path, .. }
+			| Message::ManifestExcluded { prefix: path } => validate_relative_path(path),
+			Message::Rename { from, to } => {
+				validate_relative_path(from)?;
+				validate_relative_path(to)
+			}
+			Message::Hello { .. }
+			| Message::HelloAck { .. }
+			| Message::ManifestBegin
+			| Message::ManifestEnd
+			| Message::SyncDone
+			| Message::Ping
+			| Message::Pong
+			| Message::Bye
+			| Message::Error(_) => Ok(()),
+		}
+	}
 }
 
 fn validate_entry_kind(entry: &Entry, expected: EntryKind) -> io::Result<()> {
-    validate_relative_path(&entry.path)?;
-    if entry.kind != expected {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "message entry kind mismatch for {}: expected {expected:?}, got {:?}",
-                entry.path.display(),
-                entry.kind
-            ),
-        ));
-    }
-    Ok(())
+	validate_relative_path(&entry.path)?;
+	if entry.kind != expected {
+		return Err(io::Error::new(
+			io::ErrorKind::InvalidData,
+			format!(
+				"message entry kind mismatch for {}: expected {expected:?}, got {:?}",
+				entry.path.display(),
+				entry.kind
+			),
+		));
+	}
+	Ok(())
 }
 
 // ── Wire framing ──
@@ -302,50 +302,49 @@ fn validate_entry_kind(entry: &Entry, expected: EntryKind) -> io::Result<()> {
 const FLAG_COMPRESSED: u8 = 0x01;
 
 thread_local! {
-    // One zstd context per thread rather than per message: building one
-    // allocates and faults in a multi-megabyte workspace, which dominated
-    // the cost of framing small files.
-    static COMPRESSOR: RefCell<zstd::bulk::Compressor<'static>> =
-        RefCell::new(zstd::bulk::Compressor::new(COMPRESS_LEVEL).expect("zstd compressor"));
-    static DECOMPRESSOR: RefCell<zstd::bulk::Decompressor<'static>> =
-        RefCell::new(zstd::bulk::Decompressor::new().expect("zstd decompressor"));
+	// One zstd context per thread rather than per message: building one
+	// allocates and faults in a multi-megabyte workspace, which dominated
+	// the cost of framing small files.
+	static COMPRESSOR: RefCell<zstd::bulk::Compressor<'static>> =
+		RefCell::new(zstd::bulk::Compressor::new(COMPRESS_LEVEL).expect("zstd compressor"));
+	static DECOMPRESSOR: RefCell<zstd::bulk::Decompressor<'static>> =
+		RefCell::new(zstd::bulk::Decompressor::new().expect("zstd decompressor"));
 }
 
 fn compress_payload(bytes: &[u8]) -> io::Result<Vec<u8>> {
-    COMPRESSOR.with(|c| c.borrow_mut().compress(bytes))
+	COMPRESSOR.with(|c| c.borrow_mut().compress(bytes))
 }
 
 pub async fn read_message<R>(reader: &mut R) -> io::Result<Message>
 where
-    R: AsyncReadExt + Unpin,
+	R: AsyncReadExt + Unpin,
 {
-    let mut hdr = [0u8; 5];
-    reader.read_exact(&mut hdr).await?;
-    let len = u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
-    let flags = hdr[4];
-    if flags & !FLAG_COMPRESSED != 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("unknown frame flags: {flags:#04x}"),
-        ));
-    }
-    if len > MAX_MESSAGE_SIZE {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("message too large: {} bytes", len),
-        ));
-    }
-    let mut buf = vec![0u8; len];
-    reader.read_exact(&mut buf).await?;
-    let bytes = if flags & FLAG_COMPRESSED != 0 {
-        decode_compressed_limited(&buf, MAX_MESSAGE_SIZE)?
-    } else {
-        buf
-    };
-    let message: Message =
-        postcard::from_bytes(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    message.validate_paths()?;
-    Ok(message)
+	let mut hdr = [0u8; 5];
+	reader.read_exact(&mut hdr).await?;
+	let len = u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
+	let flags = hdr[4];
+	if flags & !FLAG_COMPRESSED != 0 {
+		return Err(io::Error::new(
+			io::ErrorKind::InvalidData,
+			format!("unknown frame flags: {flags:#04x}"),
+		));
+	}
+	if len > MAX_MESSAGE_SIZE {
+		return Err(io::Error::new(
+			io::ErrorKind::InvalidData,
+			format!("message too large: {} bytes", len),
+		));
+	}
+	let mut buf = vec![0u8; len];
+	reader.read_exact(&mut buf).await?;
+	let bytes = if flags & FLAG_COMPRESSED != 0 {
+		decode_compressed_limited(&buf, MAX_MESSAGE_SIZE)?
+	} else {
+		buf
+	};
+	let message: Message = postcard::from_bytes(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+	message.validate_paths()?;
+	Ok(message)
 }
 
 /// Decode without allowing a small compressed frame to expand beyond the
@@ -355,37 +354,37 @@ where
 /// exactly that and decode in one shot. Frames without one fall back to the
 /// streaming decoder behind a hard read limit.
 fn decode_compressed_limited(compressed: &[u8], max_size: usize) -> io::Result<Vec<u8>> {
-    let invalid = |e: io::Error| io::Error::new(io::ErrorKind::InvalidData, e);
-    let declared = zstd::zstd_safe::get_frame_content_size(compressed)
-        .ok()
-        .flatten()
-        .map(|n| usize::try_from(n).unwrap_or(usize::MAX));
-    let decoded = match declared {
-        Some(n) if n <= max_size => DECOMPRESSOR
-            .with(|d| d.borrow_mut().decompress(compressed, n))
-            .map_err(invalid)?,
-        Some(n) => return Err(too_large(n)),
-        None => {
-            let decoder = zstd::stream::read::Decoder::new(compressed).map_err(invalid)?;
-            let mut decoded = Vec::new();
-            decoder
-                .take(max_size.saturating_add(1) as u64)
-                .read_to_end(&mut decoded)
-                .map_err(invalid)?;
-            decoded
-        }
-    };
-    if decoded.len() > max_size {
-        return Err(too_large(decoded.len()));
-    }
-    Ok(decoded)
+	let invalid = |e: io::Error| io::Error::new(io::ErrorKind::InvalidData, e);
+	let declared = zstd::zstd_safe::get_frame_content_size(compressed)
+		.ok()
+		.flatten()
+		.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+	let decoded = match declared {
+		Some(n) if n <= max_size => DECOMPRESSOR
+			.with(|d| d.borrow_mut().decompress(compressed, n))
+			.map_err(invalid)?,
+		Some(n) => return Err(too_large(n)),
+		None => {
+			let decoder = zstd::stream::read::Decoder::new(compressed).map_err(invalid)?;
+			let mut decoded = Vec::new();
+			decoder
+				.take(max_size.saturating_add(1) as u64)
+				.read_to_end(&mut decoded)
+				.map_err(invalid)?;
+			decoded
+		}
+	};
+	if decoded.len() > max_size {
+		return Err(too_large(decoded.len()));
+	}
+	Ok(decoded)
 }
 
 fn too_large(len: usize) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidData,
-        format!("decompressed message too large: {len} bytes"),
-    )
+	io::Error::new(
+		io::ErrorKind::InvalidData,
+		format!("decompressed message too large: {len} bytes"),
+	)
 }
 
 /// Encode + frame a message into `writer` WITHOUT flushing. Use for bulk
@@ -393,42 +392,41 @@ fn too_large(len: usize) -> io::Error {
 /// BufWriter still auto-flushes when full, so back-pressure is preserved.
 pub async fn write_frame<W>(writer: &mut W, msg: &Message, compress: bool) -> io::Result<()>
 where
-    W: AsyncWriteExt + Unpin,
+	W: AsyncWriteExt + Unpin,
 {
-    let bytes =
-        postcard::to_allocvec(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    let (payload, flags) = if compress && bytes.len() > COMPRESS_THRESHOLD {
-        let c = compress_payload(&bytes).map_err(io::Error::other)?;
-        // Only use the compressed form if it actually saves space.
-        if c.len() + 5 < bytes.len() {
-            (c, FLAG_COMPRESSED)
-        } else {
-            (bytes, 0)
-        }
-    } else {
-        (bytes, 0)
-    };
-    if payload.len() > MAX_MESSAGE_SIZE {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("outgoing message too large: {} bytes", payload.len()),
-        ));
-    }
-    let len = (payload.len() as u32).to_be_bytes();
-    writer.write_all(&len).await?;
-    writer.write_all(&[flags]).await?;
-    writer.write_all(&payload).await?;
-    Ok(())
+	let bytes = postcard::to_allocvec(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+	let (payload, flags) = if compress && bytes.len() > COMPRESS_THRESHOLD {
+		let c = compress_payload(&bytes).map_err(io::Error::other)?;
+		// Only use the compressed form if it actually saves space.
+		if c.len() + 5 < bytes.len() {
+			(c, FLAG_COMPRESSED)
+		} else {
+			(bytes, 0)
+		}
+	} else {
+		(bytes, 0)
+	};
+	if payload.len() > MAX_MESSAGE_SIZE {
+		return Err(io::Error::new(
+			io::ErrorKind::InvalidData,
+			format!("outgoing message too large: {} bytes", payload.len()),
+		));
+	}
+	let len = (payload.len() as u32).to_be_bytes();
+	writer.write_all(&len).await?;
+	writer.write_all(&[flags]).await?;
+	writer.write_all(&payload).await?;
+	Ok(())
 }
 
 /// Frame + flush a single message. The default for live traffic, where each
 /// message should hit the wire immediately.
 pub async fn write_message<W>(writer: &mut W, msg: &Message, compress: bool) -> io::Result<()>
 where
-    W: AsyncWriteExt + Unpin,
+	W: AsyncWriteExt + Unpin,
 {
-    write_frame(writer, msg, compress).await?;
-    writer.flush().await
+	write_frame(writer, msg, compress).await?;
+	writer.flush().await
 }
 
 #[cfg(test)]
