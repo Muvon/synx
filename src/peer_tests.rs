@@ -585,6 +585,26 @@ fn git_gate_detects_live_stale_and_deferred_work() {
 	assert!(!git_busy(root.path()));
 }
 
+#[test]
+fn git_gate_covers_operations_in_linked_worktrees() {
+	// A commit in a linked worktree locks its index under
+	// `.git/worktrees/<name>/`, inside the synced `.git/`.
+	let root = TestDir::new("git-gate-worktree");
+	let admin = root.path().join(".git/worktrees/review");
+	fs::create_dir_all(&admin).unwrap();
+	assert!(!git_busy(root.path()));
+	let lock = admin.join("index.lock");
+	fs::write(&lock, b"lock").unwrap();
+	assert!(git_busy(root.path()));
+
+	filetime::set_file_mtime(
+		&lock,
+		filetime::FileTime::from_system_time(SystemTime::now() - Duration::from_secs(601)),
+	)
+	.unwrap();
+	assert!(!git_busy(root.path()));
+}
+
 #[tokio::test]
 async fn sequencer_state_applied_for_the_peer_never_arms_the_git_gate() {
 	let root = TestDir::new("git-gate-applied");
@@ -1392,6 +1412,167 @@ async fn live_loop_never_lets_queued_peer_git_writes_overwrite_a_local_operation
 		}
 	}
 	assert!(rejected);
+}
+
+/// A branch ref the client sent at `base`, moved on by a commit while a long
+/// transfer held the queued local events, plus `lib.rs`, unchanged here.
+fn stale_copy_ctx(root: &Path) -> SessionCtx {
+	fs::create_dir_all(root.join(".git/refs/heads")).unwrap();
+	fs::write(root.join(".git/refs/heads/topic"), b"commit\n").unwrap();
+	fs::write(root.join("lib.rs"), b"old").unwrap();
+	let mut ctx = session_ctx(root);
+	ctx.baseline = LiveBaseline::seed(
+		root.to_path_buf(),
+		HashMap::from([
+			(
+				PathBuf::from(".git/refs/heads/topic"),
+				file_entry(".git/refs/heads/topic", b"base\n"),
+			),
+			(PathBuf::from("lib.rs"), file_entry("lib.rs", b"old")),
+		]),
+		&Baseline::default(),
+	);
+	ctx
+}
+
+#[tokio::test]
+async fn a_stale_peer_copy_never_overwrites_a_newer_local_change() {
+	let root = TestDir::new("stale-copy");
+	let ctx = stale_copy_ctx(root.path());
+	let rel = PathBuf::from(".git/refs/heads/topic");
+	let stale = file_entry(".git/refs/heads/topic", b"base\n");
+	let suppress = Suppression::default();
+	let pending = Pending::default();
+	let writer = Arc::new(Mutex::new(Vec::new()));
+
+	for msg in [
+		Message::FileData {
+			entry: stale.clone(),
+			content: b"base\n".to_vec(),
+		},
+		Message::FileStart {
+			entry: stale.clone(),
+			total_size: stale.size,
+		},
+	] {
+		let err = handle_incoming(&ctx, msg, &suppress, &pending, &writer, true)
+			.await
+			.unwrap_err();
+		assert!(err.to_string().contains("stale copy"), "{err}");
+	}
+	handle_incoming(
+		&ctx,
+		Message::FileEnd { path: rel.clone() },
+		&suppress,
+		&pending,
+		&writer,
+		true,
+	)
+	.await
+	.unwrap();
+	assert_eq!(fs::read(root.path().join(&rel)).unwrap(), b"commit\n");
+	// No echo mark either: it would make the queued commit look like our
+	// own write and drop it, so the old ref won on both sides.
+	assert!(!suppress.is_echo(root.path(), &FsEvent::Modified(rel)));
+
+	// A real peer change never matches the baseline and still lands.
+	handle_incoming(
+		&ctx,
+		Message::FileData {
+			entry: file_entry("lib.rs", b"new"),
+			content: b"new".to_vec(),
+		},
+		&suppress,
+		&pending,
+		&writer,
+		true,
+	)
+	.await
+	.unwrap();
+	assert_eq!(fs::read(root.path().join("lib.rs")).unwrap(), b"new");
+}
+
+#[tokio::test]
+async fn live_loop_tells_the_peer_its_stale_copy_did_not_land() {
+	let root = TestDir::new("live-loop-stale");
+	let ctx = stale_copy_ctx(root.path());
+	let ignore_state = Arc::new(std::sync::OnceLock::new());
+	assert!(ignore_state.set(ctx.ignores.clone()).is_ok());
+	let watcher = watcher::spawn(root.path().to_path_buf(), Suppression::default(), ignore_state).unwrap();
+	let mut input = Vec::new();
+	for message in [
+		Message::FileData {
+			entry: file_entry(".git/refs/heads/topic", b"base\n"),
+			content: b"base\n".to_vec(),
+		},
+		Message::Bye,
+	] {
+		write_message(&mut input, &message, false).await.unwrap();
+	}
+	let writer = Arc::new(Mutex::new(Vec::new()));
+	live_loop(
+		ctx,
+		std::io::Cursor::new(input),
+		writer.clone(),
+		Suppression::default(),
+		Pending::default(),
+		watcher,
+		None,
+	)
+	.await
+	.unwrap();
+
+	assert_eq!(
+		fs::read(root.path().join(".git/refs/heads/topic")).unwrap(),
+		b"commit\n"
+	);
+	let wire = writer.lock().await.clone();
+	let mut reader = wire.as_slice();
+	let mut refused = false;
+	while !reader.is_empty() {
+		if let Message::ApplyFailed { path, reason } = read_message(&mut reader).await.unwrap() {
+			refused |= path == Path::new(".git/refs/heads/topic") && reason.contains("stale copy");
+		}
+	}
+	assert!(refused);
+}
+
+#[tokio::test]
+async fn content_the_baseline_already_holds_goes_out_as_a_touch() {
+	// git "freshens" a pack it reuses an object from: a new mtime over the
+	// same bytes, long after any suppression record of it has lapsed.
+	let root = TestDir::new("freshen");
+	let rel = ".git/objects/pack/pack-1.pack";
+	fs::create_dir_all(root.path().join(".git/objects/pack")).unwrap();
+	fs::write(root.path().join(rel), b"pack bytes").unwrap();
+	let on_disk = build_entry(root.path(), Path::new(rel)).unwrap().unwrap();
+	let baseline = LiveBaseline::seed(
+		root.path().to_path_buf(),
+		HashMap::from([(on_disk.path.clone(), Entry { mtime: 1, ..on_disk })]),
+		&Baseline::default(),
+	);
+	let writer = Arc::new(Mutex::new(Vec::new()));
+	forward_local_events(
+		root.path(),
+		vec![FsEvent::Modified(PathBuf::from(rel))],
+		&writer,
+		false,
+		&Suppression::default(),
+		false,
+		&IgnoreStack::from_manifest(root.path(), &[]),
+		&GitGate::default(),
+		&baseline,
+	)
+	.await
+	.unwrap();
+
+	let wire = writer.lock().await.clone();
+	let mut reader = wire.as_slice();
+	assert!(matches!(
+		read_message(&mut reader).await.unwrap(),
+		Message::Touch { path, .. } if path == Path::new(rel)
+	));
+	assert!(reader.is_empty());
 }
 
 #[test]

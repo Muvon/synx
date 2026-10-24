@@ -96,6 +96,30 @@ fn is_already_equal(root: &Path, entry: &Entry) -> bool {
 	}
 }
 
+/// True when the peer sends back the content `entry.path` last converged to
+/// while the local copy has changed since and that change has not reached
+/// the peer yet — e.g. our own earlier send echoed back while a long
+/// transfer held the queued local events. Applying it puts the old content
+/// over the newer one, and the echo mark the apply leaves makes the queued
+/// local event look like our own write, so the old content wins on both
+/// sides (a `git commit` lost its branch ref this way). A real peer change
+/// never matches the baseline, so it is never refused here. Needs the
+/// baseline, which only the client keeps.
+fn is_stale_peer_copy(root: &Path, baseline: &LiveBaseline, entry: &Entry) -> bool {
+	let Some(converged) =
+		baseline.with_entries(|b| b.get(&entry.path).filter(|base| base.same_content(entry)).cloned())
+	else {
+		return false;
+	};
+	match build_entry(root, &entry.path) {
+		Ok(Some(local)) => !local.same_content(&converged),
+		// Removed here since and the delete is still queued: same story.
+		Ok(None) => true,
+		// Unreadable: let the apply itself report what is wrong.
+		Err(_) => false,
+	}
+}
+
 // ─────────────────────────────────────────────────────────────
 // Apply: deterministic, atomic filesystem mutations.
 // ─────────────────────────────────────────────────────────────
@@ -240,8 +264,9 @@ pub fn git_busy(root: &Path) -> bool {
 
 	let git_dir = root.join(".git");
 	// `.git` may not exist, may be a worktree pointer file, or a real dir.
-	// We only handle the regular-dir case; worktrees are uncommon enough
-	// that paying for them isn't worth the complexity now.
+	// We only handle the regular-dir case: a root that is itself a linked
+	// worktree is uncommon enough that paying for it isn't worth the
+	// complexity now.
 	if !git_dir.is_dir() {
 		return false;
 	}
@@ -255,23 +280,34 @@ pub fn git_busy(root: &Path) -> bool {
 		"index.lock",
 		"HEAD.lock",
 	];
+	// A linked worktree of this repo runs its git operations out of its own
+	// admin dir, `.git/worktrees/<name>/`. That dir sits inside the synced
+	// `.git/` and holds the same markers, so a commit there must pause the
+	// sync exactly like one in the main checkout.
+	let worktrees = fs::read_dir(git_dir.join("worktrees"))
+		.into_iter()
+		.flatten()
+		.flatten()
+		.map(|ent| ent.path());
 	let now = SystemTime::now();
-	for m in MARKERS {
-		let p = git_dir.join(m);
-		let Ok(meta) = fs::metadata(&p) else {
-			continue;
-		};
-		let Some(age) = newest_age(&p, &meta, now) else {
-			continue;
-		};
-		if age <= STALE_AFTER {
-			return true;
+	for dir in std::iter::once(git_dir).chain(worktrees) {
+		for m in MARKERS {
+			let p = dir.join(m);
+			let Ok(meta) = fs::metadata(&p) else {
+				continue;
+			};
+			let Some(age) = newest_age(&p, &meta, now) else {
+				continue;
+			};
+			if age <= STALE_AFTER {
+				return true;
+			}
+			tracing::debug!(
+				"ignoring stale git marker {} (age {}s) — .git/ sync allowed",
+				p.display(),
+				age.as_secs()
+			);
 		}
-		tracing::debug!(
-			"ignoring stale git marker {} (age {}s) — .git/ sync allowed",
-			p.display(),
-			age.as_secs()
-		);
 	}
 	false
 }
@@ -1567,6 +1603,15 @@ where
 				ctx.baseline.set(entry);
 				return Ok(());
 			}
+			// Our last converged content coming back over a newer local change:
+			// keep ours. Its queued event (or the next sweep) sends it, and
+			// `ApplyFailed` tells the peer it did not land.
+			if is_stale_peer_copy(root, &ctx.baseline, &entry) {
+				anyhow::bail!(
+					"stale copy of {}: changed here since the last sync, keeping ours",
+					entry.path.display()
+				);
+			}
 			// Stale-create guard: peer is sending us a file we just deleted.
 			// Their FileData was already on the wire when our Delete arrived,
 			// so drop it instead of resurrecting the file the user removed.
@@ -1610,6 +1655,14 @@ where
 				tracing::trace!("dedup (recv FileStart): {}", entry.path.display());
 				ctx.baseline.set(entry);
 				return Ok(());
+			}
+			// Stale-copy guard (chunked transfer variant). The chunks that
+			// follow find no pending transfer and are dropped.
+			if is_stale_peer_copy(root, &ctx.baseline, &entry) {
+				anyhow::bail!(
+					"stale copy of {}: changed here since the last sync, keeping ours",
+					entry.path.display()
+				);
 			}
 			// Stale-create guard (chunked transfer variant).
 			let full = resolve_beneath(root, &entry.path)?;
@@ -2018,8 +2071,16 @@ where
 						// Content-unchanged optimization: if we already
 						// synced this exact content (matching hash on
 						// record), send a lightweight Touch — mtime + mode
-						// only — instead of re-transmitting the body.
-						if suppress.prior_hash(&entry.path) == Some(entry.hash) {
+						// only — instead of re-transmitting the body. The
+						// suppression record lapses after `SUPPRESS_TTL`; the
+						// baseline doesn't, and git bumps a pack's mtime
+						// whenever it reuses an object in it ("freshening"),
+						// which re-sent a 480 MiB pack and held this loop
+						// for minutes.
+						let converged = suppress.prior_hash(&entry.path) == Some(entry.hash)
+							|| baseline
+								.with_entries(|b| b.get(&entry.path).is_some_and(|base| base.same_content(&entry)));
+						if converged {
 							if log_event {
 								eprintln!(
 									"  {} {}  {}",
