@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.10] - 2026-10-24
+
+### 📋 Release Summary
+
+Stale peer copies are now rejected, and Git locks are honored during synchronization.
+
+### 🐛 Bug Fixes & Stability
+
+- **peer**: reject stale peer copies and honor Git locks `6cf0ef41`
+
 ## [0.1.9] - 2026-10-24
 
 ### 🔧 Improvements & Optimizations
