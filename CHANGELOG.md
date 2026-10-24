@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9] - 2026-10-24
+
+### 🔧 Improvements & Optimizations
+
+- **dependencies**: upgrade dirs and zstd dependencies `ab4effb3`
+- **dependencies**: upgrade Rust dependencies `873a7748`
+
 ## [0.1.8] - 2026-10-24
 
 ### 🔧 Improvements & Optimizations
