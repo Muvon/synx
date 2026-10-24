@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8] - 2026-10-24
+
+### 🔧 Improvements & Optimizations
+
+- **sync**: rework synchronization state and protocol handling `22a0236a`
+- format Rust code at 120 columns `6c0c5ea2`
+
 ## [0.1.7] - 2026-10-13
 
 ### 📋 Release Summary
