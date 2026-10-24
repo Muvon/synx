@@ -171,7 +171,7 @@ where
 					let mut w = writer.lock().await;
 					let _ = write_message(&mut *w, &failed, compress).await;
 				} else {
-					suppress.mark_set(path, mtime, hash);
+					suppress.mark_set(path, mtime, hash, entry.mode);
 				}
 			}
 			Message::FileStart { entry, .. } => {
@@ -191,7 +191,7 @@ where
 			}
 			Message::FileEnd { path } => match pending.end(&root, &path).await {
 				Ok(Some(entry)) => {
-					suppress.mark_set(entry.path, entry.mtime, entry.hash);
+					suppress.mark_set(entry.path, entry.mtime, entry.hash, entry.mode);
 				}
 				Ok(None) => {}
 				Err(e) => {
@@ -283,7 +283,7 @@ where
 					let mut w = writer.lock().await;
 					let _ = write_message(&mut *w, &failed, compress).await;
 				} else {
-					suppress.mark_set(path, mtime, hash);
+					suppress.mark_set(path, mtime, hash, entry.mode);
 				}
 			}
 			Message::PullDelta { path, base_hash, sig } => {

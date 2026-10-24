@@ -602,7 +602,7 @@ where
 					warn_apply(&mut unconverged, &path, &e);
 				} else {
 					received_files += 1;
-					suppress.mark_set(path, mt, hash);
+					suppress.mark_set(path, mt, hash, entry.mode);
 				}
 			}
 			Message::FileStart { entry, .. } => {
@@ -620,7 +620,7 @@ where
 			Message::FileEnd { path } => match pending.end(&local_root, &path).await {
 				Ok(Some(entry)) => {
 					received_files += 1;
-					suppress.mark_set(entry.path, entry.mtime, entry.hash);
+					suppress.mark_set(entry.path, entry.mtime, entry.hash, entry.mode);
 				}
 				Ok(None) => {}
 				Err(e) => warn_apply(&mut unconverged, &path, &e),
@@ -703,7 +703,7 @@ where
 					warn_apply(&mut unconverged, &path, &e);
 				} else {
 					received_files += 1;
-					suppress.mark_set(path, mt, hash);
+					suppress.mark_set(path, mt, hash, entry.mode);
 				}
 			}
 			Message::Touch { path, mtime, mode } => {
@@ -1034,7 +1034,10 @@ fn build_plan(local: &[Entry], remote: &[Entry], baseline: &Baseline, mode: Sync
 				}
 			}
 			(Some(l), Some(r)) => {
-				if l.same_content(r) {
+				// Same bytes under different permission bits is a chmod that
+				// never crossed. It moves no mtime, so the usual tie-break below
+				// decides it (equal mtimes: local wins).
+				if l.same_content(r) && !l.perms_differ(r) {
 					continue;
 				}
 				// Type mismatch (file vs dir vs symlink): blindly applying

@@ -141,14 +141,18 @@ fn identifies_precompressed_extensions_case_insensitively() {
 }
 
 #[test]
-fn equality_fast_paths_require_matching_type_size_content_and_link_target() {
+fn equality_fast_paths_require_matching_type_size_mode_content_and_link_target() {
 	let root = TestDir::new("equal");
 	fs::write(root.path().join("file"), b"content").unwrap();
+	fs::set_permissions(root.path().join("file"), fs::Permissions::from_mode(0o640)).unwrap();
 	fs::create_dir(root.path().join("dir")).unwrap();
 	std::os::unix::fs::symlink("file", root.path().join("link")).unwrap();
 
 	let mut file = file_entry("file", b"content");
 	assert!(is_already_equal(root.path(), &file));
+	file.mode = 0o750;
+	assert!(!is_already_equal(root.path(), &file));
+	file.mode = 0o640;
 	file.size += 1;
 	assert!(!is_already_equal(root.path(), &file));
 	file.size -= 1;
@@ -412,9 +416,14 @@ fn suppression_is_state_based_and_tracks_hashes_and_deletes() {
 	let hash = *blake3::hash(b"one").as_bytes();
 	let suppression = Suppression::default();
 
-	suppression.mark_set(path.clone(), mtime, hash);
+	let mode = fs::metadata(root.path().join(&path)).unwrap().permissions().mode();
+	suppression.mark_set(path.clone(), mtime, hash, mode);
 	assert_eq!(suppression.prior_hash(&path), Some(hash));
 	assert!(suppression.is_echo(root.path(), &FsEvent::Modified(path.clone())));
+	// A chmod keeps the mtime: only the recorded bits tell it from an echo.
+	fs::set_permissions(root.path().join(&path), fs::Permissions::from_mode(mode ^ 0o100)).unwrap();
+	assert!(!suppression.is_echo(root.path(), &FsEvent::Modified(path.clone())));
+	fs::set_permissions(root.path().join(&path), fs::Permissions::from_mode(mode)).unwrap();
 
 	let changed_time = filetime::FileTime::from_unix_time(
 		mtime.div_euclid(1_000_000_000) + 1,
@@ -933,9 +942,14 @@ async fn forwards_local_events_with_dedup_filtering_and_type_messages() {
 	let ignores = IgnoreStack::from_manifest(root.path(), &[]);
 	let suppress = Suppression::default();
 	let touch_entry = build_entry(root.path(), Path::new("touch")).unwrap().unwrap();
-	suppress.mark_set(PathBuf::from("touch"), 0, touch_entry.hash);
+	suppress.mark_set(PathBuf::from("touch"), 0, touch_entry.hash, touch_entry.mode);
 	let echo_entry = build_entry(root.path(), Path::new("echo")).unwrap().unwrap();
-	suppress.mark_set(PathBuf::from("echo"), echo_entry.mtime, echo_entry.hash);
+	suppress.mark_set(
+		PathBuf::from("echo"),
+		echo_entry.mtime,
+		echo_entry.hash,
+		echo_entry.mode,
+	);
 	let writer = Arc::new(Mutex::new(Vec::new()));
 
 	forward_local_events(
@@ -1009,6 +1023,82 @@ async fn forwards_local_events_with_dedup_filtering_and_type_messages() {
 		Message::Touch { path, .. } if path == Path::new("touch")
 	));
 	assert!(reader.is_empty());
+}
+
+#[tokio::test]
+async fn a_local_permission_change_is_forwarded_not_taken_for_an_echo() {
+	// The usual way a script is born: written, sent to the peer, then
+	// `chmod +x` seconds later. chmod moves no mtime, so an echo check on
+	// mtime alone took it for our own write and dropped it — the peer kept
+	// the file non-executable, and git there reports a mode change.
+	let root = TestDir::new("chmod-forward");
+	let script = root.path().join("script");
+	fs::write(&script, b"#!/bin/sh\n").unwrap();
+	fs::set_permissions(&script, fs::Permissions::from_mode(0o644)).unwrap();
+	let ignores = IgnoreStack::from_manifest(root.path(), &[]);
+	let suppress = Suppression::default();
+	let gate = GitGate::default();
+	let baseline = LiveBaseline::disabled();
+	let writer = Arc::new(Mutex::new(Vec::new()));
+	let forward = |event: FsEvent| {
+		forward_local_events(
+			root.path(),
+			vec![event],
+			&writer,
+			false,
+			&suppress,
+			false,
+			&ignores,
+			&gate,
+			&baseline,
+		)
+	};
+
+	forward(FsEvent::Created(PathBuf::from("script"))).await.unwrap();
+	fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+	forward(FsEvent::Modified(PathBuf::from("script"))).await.unwrap();
+
+	let wire = writer.lock().await.clone();
+	let mut reader = wire.as_slice();
+	assert!(matches!(
+		read_message(&mut reader).await.unwrap(),
+		Message::FileData { entry, .. } if entry.mode & 0o777 == 0o644
+	));
+	assert!(matches!(
+		read_message(&mut reader).await.unwrap(),
+		Message::Touch { path, mode, .. } if path == Path::new("script") && mode & 0o777 == 0o755
+	));
+	assert!(reader.is_empty());
+}
+
+#[tokio::test]
+async fn an_incoming_permission_change_lands_on_unchanged_content() {
+	// A peer's chmod changes no byte and no mtime: what arrives is the same
+	// content with new permission bits. Deduplicated as already equal, the
+	// bits never land here.
+	let root = TestDir::new("incoming-mode");
+	let ctx = session_ctx(root.path());
+	let mut script = file_entry("script", b"#!/bin/sh\n");
+	script.mode = 0o644;
+	apply_file_data(root.path(), &script, b"#!/bin/sh\n").unwrap();
+
+	script.mode = 0o755;
+	handle_incoming(
+		&ctx,
+		Message::FileData {
+			entry: script,
+			content: b"#!/bin/sh\n".to_vec(),
+		},
+		&Suppression::default(),
+		&Pending::default(),
+		&Arc::new(Mutex::new(Vec::new())),
+		true,
+	)
+	.await
+	.unwrap();
+
+	let mode = fs::metadata(root.path().join("script")).unwrap().permissions().mode();
+	assert_eq!(mode & 0o777, 0o755);
 }
 
 #[tokio::test]

@@ -38,6 +38,12 @@ pub enum EntryKind {
 	Symlink,
 }
 
+/// Permission bits `Entry::mode` is compared on. The walker's `st_mode` also
+/// carries the file-type bits; setuid/setgid/sticky stay out because the
+/// kernel may drop them on apply, and a bit that never lands would never
+/// compare equal.
+pub const PERM_BITS: u32 = 0o777;
+
 /// A single filesystem entry, relative to the sync root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
@@ -62,6 +68,13 @@ impl Entry {
 			EntryKind::Dir => true,
 			EntryKind::Symlink => self.link_target == other.link_target,
 		}
+	}
+
+	/// True when two files hold different permission bits. `same_content`
+	/// can't see it and a chmod moves no mtime, yet git (`core.fileMode`)
+	/// reports it as a change — a mode-only difference is not converged.
+	pub fn perms_differ(&self, other: &Entry) -> bool {
+		self.kind == EntryKind::File && other.kind == EntryKind::File && (self.mode ^ other.mode) & PERM_BITS != 0
 	}
 }
 

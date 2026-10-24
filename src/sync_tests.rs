@@ -626,6 +626,51 @@ async fn init_sync_keeps_what_was_written_into_a_directory_the_peer_removed() {
 	assert_eq!(fs::read(dir.join("new")).unwrap(), b"fresh object");
 }
 
+#[tokio::test]
+async fn init_sync_repairs_permission_drift_on_unchanged_content() {
+	// A chmod no session carried over leaves both sides with the same bytes
+	// and different permission bits. Read as converged, the drift outlives
+	// every reconnect: git on the stale side sees a mode change, and a
+	// `git add` there stages it into an index that syncs over the good one.
+	let root = TestDir::new("mode-drift");
+	fs::write(root.0.join("script"), b"#!/bin/sh\n").unwrap();
+	fs::set_permissions(root.0.join("script"), fs::Permissions::from_mode(0o755)).unwrap();
+	let local = build_entry(&root.0, Path::new("script")).unwrap().unwrap();
+	let remote = Entry {
+		mode: local.mode & !0o111,
+		..local.clone()
+	};
+
+	let input = encode([
+		Message::ManifestBegin,
+		Message::ManifestEntry(remote),
+		Message::ManifestEnd,
+		Message::SyncDone,
+	])
+	.await;
+	let writer = Arc::new(Mutex::new(Vec::new()));
+	run_inner(
+		root.0.clone(),
+		once_args(&root.0),
+		false,
+		std::io::Cursor::new(input),
+		writer.clone(),
+		None,
+	)
+	.await
+	.unwrap();
+
+	let output = writer.lock().await.clone();
+	let mut reader = output.as_slice();
+	let mut pushed_mode = None;
+	while !reader.is_empty() {
+		if let Message::FileData { entry, .. } = read_message(&mut reader).await.unwrap() {
+			pushed_mode = Some(entry.mode & 0o777);
+		}
+	}
+	assert_eq!(pushed_mode, Some(0o755));
+}
+
 #[test]
 fn classifies_fatal_errors_and_shortens_multiline_messages() {
 	assert!(is_fatal(&anyhow::anyhow!("protocol mismatch")));

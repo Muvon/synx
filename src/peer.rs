@@ -20,7 +20,9 @@ use crate::baseline::LiveBaseline;
 use crate::cache::HashCache;
 use crate::ignores::IgnoreStack;
 use crate::paths::{resolve_beneath, INTERNAL_TMP_PREFIX};
-use crate::protocol::{read_message, write_message, Entry, EntryKind, Message, SyncMode, CHUNK_SIZE, CHUNK_THRESHOLD};
+use crate::protocol::{
+	read_message, write_message, Entry, EntryKind, Message, SyncMode, CHUNK_SIZE, CHUNK_THRESHOLD, PERM_BITS,
+};
 use crate::walker::{build_entry, walk_manifest};
 use crate::watcher::{self, FsEvent};
 
@@ -48,7 +50,8 @@ fn lstat_mtime_ns(p: &Path) -> i64 {
 /// Lets us short-circuit echoes coming back from the peer.
 ///
 /// Comparison is layered:
-///   1. Size mismatch → not equal (cheap reject).
+///   1. Size or permission-bit mismatch → not equal (cheap reject; a
+///      chmod changes neither content nor mtime).
 ///   2. mtime match → assume equal (cheap stat-only fast path; matches
 ///      git's heuristic).
 ///   3. mtime drift → hash the file and compare to `entry.hash`. Robust
@@ -66,7 +69,7 @@ fn is_already_equal(root: &Path, entry: &Entry) -> bool {
 			if ft.is_symlink() || !ft.is_file() {
 				return false;
 			}
-			if meta.len() != entry.size {
+			if meta.len() != entry.size || (meta.permissions().mode() ^ entry.mode) & PERM_BITS != 0 {
 				return false;
 			}
 			let mt = meta
@@ -860,7 +863,14 @@ enum ApplyState {
 	/// for regular files; `[0u8; 32]` for dirs / symlinks (we don't track
 	/// their "content"). Used for echo suppression (mtime match) AND
 	/// sender-side dedup (hash match → send `Touch` instead of full file).
-	Set { mtime: i64, hash: [u8; 32] },
+	/// `mode` is the permission bits we left on a file (`None` for dirs /
+	/// symlinks): a chmod moves no mtime, so only it tells a chmod apart
+	/// from the echo of our own write.
+	Set {
+		mtime: i64,
+		hash: [u8; 32],
+		mode: Option<u32>,
+	},
 	/// The local user deleted the path and we told the peer. Feeds the
 	/// stale-create guard: content the peer had already put on the wire
 	/// must not resurrect what the user just removed.
@@ -900,18 +910,23 @@ pub struct Suppression {
 }
 
 impl Suppression {
-	/// Record that the path now exists with `mtime` and (optionally) `hash`.
-	/// Use `NO_HASH` for dirs / symlinks.
-	pub fn mark_set(&self, path: PathBuf, mtime_ns: i64, hash: [u8; 32]) {
-		if let Ok(mut g) = self.inner.lock() {
-			g.map
-				.insert(path, (ApplyState::Set { mtime: mtime_ns, hash }, Instant::now()));
-		}
+	/// Record that the file now exists with `mtime`, `hash` and `mode`.
+	pub fn mark_set(&self, path: PathBuf, mtime: i64, hash: [u8; 32], mode: u32) {
+		let mode = Some(mode & PERM_BITS);
+		self.mark(path, ApplyState::Set { mtime, hash, mode });
 	}
 
-	/// Convenience: mark without a content hash (dirs, symlinks, or unknown).
+	/// Convenience: mark without a content hash or mode (dirs, symlinks, or
+	/// unknown).
 	pub fn mark_mtime(&self, path: PathBuf, mtime_ns: i64) {
-		self.mark_set(path, mtime_ns, NO_HASH);
+		self.mark(
+			path,
+			ApplyState::Set {
+				mtime: mtime_ns,
+				hash: NO_HASH,
+				mode: None,
+			},
+		);
 	}
 
 	/// Record a delete that originated here: the local user removed the
@@ -1016,11 +1031,16 @@ impl Suppression {
 			return false;
 		};
 		match (state, ev) {
-			(ApplyState::Set { mtime: expected, .. }, FsEvent::Created(_))
-			| (ApplyState::Set { mtime: expected, .. }, FsEvent::Modified(_))
-			| (ApplyState::Set { mtime: expected, .. }, FsEvent::Renamed { .. }) => {
-				let cur = lstat_mtime_ns(&root.join(key));
-				cur != 0 && cur == *expected
+			(ApplyState::Set { mtime, mode, .. }, FsEvent::Created(_))
+			| (ApplyState::Set { mtime, mode, .. }, FsEvent::Modified(_))
+			| (ApplyState::Set { mtime, mode, .. }, FsEvent::Renamed { .. }) => {
+				let full = root.join(key);
+				let cur = lstat_mtime_ns(&full);
+				cur != 0
+					&& cur == *mtime
+					&& mode.is_none_or(|mode| {
+						fs::symlink_metadata(&full).is_ok_and(|meta| meta.permissions().mode() & PERM_BITS == mode)
+					})
 			}
 			(ApplyState::Deleted | ApplyState::AppliedDelete, FsEvent::Removed(_)) => !root.join(key).exists(),
 			_ => false,
@@ -1542,7 +1562,7 @@ where
 			// skip the write entirely (and the noisy log line).
 			if is_already_equal(root, &entry) {
 				let mt = lstat_mtime_ns(&root.join(&entry.path));
-				suppress.mark_set(entry.path.clone(), mt, entry.hash);
+				suppress.mark_set(entry.path.clone(), mt, entry.hash, entry.mode);
 				tracing::trace!("dedup (recv FileData): {}", entry.path.display());
 				ctx.baseline.set(entry);
 				return Ok(());
@@ -1562,7 +1582,7 @@ where
 			// this write matches exactly (set_file_mtime may be FS-rounded).
 			// Store hash too, so future sender checks can dedup via Touch.
 			let mt = lstat_mtime_ns(&full);
-			suppress.mark_set(entry.path.clone(), mt, hash);
+			suppress.mark_set(entry.path.clone(), mt, hash, entry.mode);
 			if log_event {
 				eprintln!(
 					"  {} {}  {}",
@@ -1586,7 +1606,7 @@ where
 			// no-ops (Pending::chunk silently drops chunks for unknown paths).
 			if is_already_equal(root, &entry) {
 				let mt = lstat_mtime_ns(&root.join(&entry.path));
-				suppress.mark_set(entry.path.clone(), mt, entry.hash);
+				suppress.mark_set(entry.path.clone(), mt, entry.hash, entry.mode);
 				tracing::trace!("dedup (recv FileStart): {}", entry.path.display());
 				ctx.baseline.set(entry);
 				return Ok(());
@@ -1617,7 +1637,7 @@ where
 			}
 			if let Some(entry) = pending.end(root, &path).await? {
 				let mt = lstat_mtime_ns(&root.join(&entry.path));
-				suppress.mark_set(entry.path.clone(), mt, entry.hash);
+				suppress.mark_set(entry.path.clone(), mt, entry.hash, entry.mode);
 				if log_event {
 					eprintln!(
 						"  {} {}  {}",
@@ -1658,7 +1678,7 @@ where
 			// had on record (content didn't change).
 			let prior = suppress.prior_hash(&path).unwrap_or(NO_HASH);
 			let new_mtime = lstat_mtime_ns(&full);
-			suppress.mark_set(path.clone(), new_mtime, prior);
+			suppress.mark_set(path.clone(), new_mtime, prior, mode);
 			if log_event {
 				eprintln!("  {} {}  {}", "←".bright_cyan(), path.display(), "(touch)".dimmed());
 			}
@@ -1981,6 +2001,7 @@ where
 				let entry_mtime = entry.mtime;
 				let entry_hash = entry.hash;
 				let entry_kind = entry.kind;
+				let entry_mode = entry.mode;
 				// Snapshot for the baseline before `entry` is moved into the
 				// outgoing message below.
 				let baseline_entry = entry.clone();
@@ -2070,11 +2091,10 @@ where
 				// our payload back, (b) if the user then deletes & we get a
 				// stale Create back, drop it, (c) next watcher fire for this
 				// same content → sender skip via prior_hash.
-				let hash_to_mark = match entry_kind {
-					EntryKind::File => entry_hash,
-					_ => NO_HASH,
-				};
-				suppress.mark_set(path_clone, entry_mtime, hash_to_mark);
+				match entry_kind {
+					EntryKind::File => suppress.mark_set(path_clone, entry_mtime, entry_hash, entry_mode),
+					_ => suppress.mark_mtime(path_clone, entry_mtime),
+				}
 				// This content is now on both sides — record it as the
 				// converged baseline (so a later delete of it is detectable).
 				baseline.set(baseline_entry);
