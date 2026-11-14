@@ -293,9 +293,13 @@ where
 				// normal send.
 				match build_entry(&root, &path)? {
 					None => {
-						// We don't have it — tell client to delete its copy.
+						// Gone since our manifest was sent. Never answer with a
+						// `Delete`: a checkout or an atomic save removes a file
+						// for a moment, and the client would drop its own copy
+						// on that. Report the pull as not served instead.
+						let failed = report_err(&path, &anyhow::anyhow!("no longer present"));
 						let mut w = writer.lock().await;
-						write_message(&mut *w, &Message::Delete { path }, compress).await?;
+						write_message(&mut *w, &failed, compress).await?;
 					}
 					Some(entry) => match entry.kind {
 						EntryKind::Dir => {
@@ -350,7 +354,10 @@ where
 						}
 					}
 				} else {
-					tracing::warn!("FileGet for missing path: {}", path.display());
+					// The client must not record this pull as converged.
+					let failed = report_err(&path, &anyhow::anyhow!("no longer present"));
+					let mut w = writer.lock().await;
+					write_message(&mut *w, &failed, compress).await?;
 				}
 			}
 			Message::SyncDone => break,

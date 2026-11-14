@@ -594,6 +594,56 @@ async fn a_push_the_remote_rejected_stays_out_of_the_seeded_baseline() {
 }
 
 #[tokio::test]
+async fn a_pull_the_remote_never_served_stays_out_of_the_seeded_baseline() {
+	let root = TestDir::new("pull-not-served");
+	fs::write(root.0.join("kept"), b"local copy").unwrap();
+	let arrived = file_entry("arrived", b"served", 2);
+	let vanished = file_entry("vanished", b"gone before the pull", 2);
+	let silent = file_entry("silent", b"never answered", 2);
+
+	// The remote lists three files we lack. One arrives; one vanished there
+	// before the pull and is reported; one gets no answer at all. Neither of
+	// the last two may cost us a file or enter the baseline.
+	let input = encode([
+		Message::ManifestBegin,
+		Message::ManifestEntry(arrived.clone()),
+		Message::ManifestEntry(vanished.clone()),
+		Message::ManifestEntry(silent),
+		Message::ManifestEnd,
+		Message::FileData {
+			entry: arrived,
+			content: b"served".to_vec(),
+		},
+		Message::ApplyFailed {
+			path: vanished.path,
+			reason: "no longer present".into(),
+		},
+		Message::SyncDone,
+	])
+	.await;
+	run_inner(
+		root.0.clone(),
+		once_args(&root.0),
+		false,
+		std::io::Cursor::new(input),
+		Arc::new(Mutex::new(Vec::new())),
+		None,
+	)
+	.await
+	.unwrap();
+
+	assert_eq!(fs::read(root.0.join("kept")).unwrap(), b"local copy");
+	assert_eq!(fs::read(root.0.join("arrived")).unwrap(), b"served");
+	// Seeded as converged, a file we do not hold would read as deleted here
+	// next session — and the remote's copy would be removed.
+	let seeded = Baseline::load(&root.0);
+	assert!(seeded.get(Path::new("kept")).is_some());
+	assert!(seeded.get(Path::new("arrived")).is_some());
+	assert!(seeded.get(Path::new("vanished")).is_none());
+	assert!(seeded.get(Path::new("silent")).is_none());
+}
+
+#[tokio::test]
 async fn init_sync_keeps_what_was_written_into_a_directory_the_peer_removed() {
 	let root = TestDir::new("spare-dir");
 	let dir = root.0.join("objects/ab");

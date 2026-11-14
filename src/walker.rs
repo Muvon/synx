@@ -15,6 +15,22 @@ use crate::watcher::IdCache;
 /// Below it, the mmap setup cost outweighs the parallelism win.
 const MMAP_HASH_THRESHOLD: u64 = 1024 * 1024; // 1 MiB
 
+/// A tmp file untouched for this long was left by a synx that died
+/// mid-write. A transfer still running refreshes its tmp's mtime with every
+/// chunk, so one this old belongs to nobody.
+const ORPHAN_TMP_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Remove an orphaned tmp file the walk came across. Nothing else cleans
+/// them: they sit beside their destination, anywhere in the tree.
+fn remove_orphan_tmp(path: &Path) {
+	let orphaned = fs::symlink_metadata(path)
+		.and_then(|meta| meta.modified())
+		.is_ok_and(|written| written.elapsed().is_ok_and(|age| age > ORPHAN_TMP_AGE));
+	if orphaned && fs::remove_file(path).is_ok() {
+		tracing::debug!("removed orphaned tmp {}", path.display());
+	}
+}
+
 /// Hash a single file with blake3.
 ///
 /// - Small files (<1 MiB): streaming `io::copy` — minimal overhead.
@@ -199,6 +215,7 @@ pub fn walk_manifest(root: &Path, cache: &mut HashCache, ids: Option<&IdCache>) 
 				return WalkState::Continue;
 			}
 			if is_internal_temp(path) {
+				remove_orphan_tmp(path);
 				return WalkState::Continue;
 			}
 			let rel = match path.strip_prefix(root) {

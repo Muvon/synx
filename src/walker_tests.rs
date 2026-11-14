@@ -77,6 +77,24 @@ fn walks_once_with_ignores_internal_temps_and_reusable_cache() {
 }
 
 #[test]
+fn walk_removes_orphaned_temps_and_leaves_fresh_ones() {
+	let root = TestDir::new("orphan-tmp");
+	fs::create_dir(root.0.join("nested")).unwrap();
+	let orphan = root.0.join(format!("nested/{INTERNAL_TMP_PREFIX}1-1"));
+	let in_flight = root.0.join(format!("{INTERNAL_TMP_PREFIX}2-2"));
+	fs::write(&orphan, b"left by a killed synx").unwrap();
+	fs::write(&in_flight, b"transfer still running").unwrap();
+	let long_ago = std::time::SystemTime::now() - ORPHAN_TMP_AGE - std::time::Duration::from_secs(60);
+	filetime::set_file_mtime(&orphan, filetime::FileTime::from_system_time(long_ago)).unwrap();
+
+	walk_manifest(&root.0, &mut HashCache::default(), None).unwrap();
+
+	assert!(!orphan.exists());
+	// Another synx may be writing this one right now.
+	assert!(in_flight.exists());
+}
+
+#[test]
 fn walk_includes_git_when_idle_and_excludes_it_declared_when_busy() {
 	let root = TestDir::new("gitbusy");
 	fs::create_dir(root.0.join(".git")).unwrap();

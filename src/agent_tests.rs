@@ -236,7 +236,20 @@ async fn runs_handshake_initial_operations_and_live_shutdown_end_to_end() {
 	assert!(messages
 		.iter()
 		.any(|message| matches!(message, Message::Signature { path, sig: None } if path == Path::new("base"))));
-	assert!(messages
+	// A path that vanished after the manifest is reported as not served, for
+	// `PullDelta` and `FileGet` alike — never as a delete of the client's copy.
+	let not_served = messages
+		.iter()
+		.filter(|message| {
+			matches!(
+				message,
+				Message::ApplyFailed { path, reason }
+					if path == Path::new("missing") && reason.contains("no longer present")
+			)
+		})
+		.count();
+	assert_eq!(not_served, 2);
+	assert!(!messages
 		.iter()
 		.any(|message| matches!(message, Message::Delete { path } if path == Path::new("missing"))));
 	assert!(messages.iter().any(

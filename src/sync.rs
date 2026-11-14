@@ -585,6 +585,10 @@ where
 	// recorded as converged, the next session would read the gap as a
 	// deletion and remove the surviving copy.
 	let mut unconverged: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+	// Paths whose content from the remote was applied here. A planned pull
+	// that never shows up in this set did not arrive (the file vanished on
+	// the remote after its manifest), so it is not converged either.
+	let mut pulled: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 	let warn_apply =
 		|unconverged: &mut std::collections::HashSet<PathBuf>, path: &std::path::Path, e: &anyhow::Error| {
 			tracing::warn!("apply {} failed: {}", path.display(), e);
@@ -602,6 +606,7 @@ where
 					warn_apply(&mut unconverged, &path, &e);
 				} else {
 					received_files += 1;
+					pulled.insert(path.clone());
 					suppress.mark_set(path, mt, hash, entry.mode);
 				}
 			}
@@ -620,6 +625,7 @@ where
 			Message::FileEnd { path } => match pending.end(&local_root, &path).await {
 				Ok(Some(entry)) => {
 					received_files += 1;
+					pulled.insert(entry.path.clone());
 					suppress.mark_set(entry.path, entry.mtime, entry.hash, entry.mode);
 				}
 				Ok(None) => {}
@@ -638,6 +644,7 @@ where
 							m.mtime() * 1_000_000_000 + m.mtime_nsec()
 						})
 						.unwrap_or(entry.mtime);
+					pulled.insert(path.clone());
 					suppress.mark_mtime(path, mt);
 				}
 			}
@@ -654,6 +661,7 @@ where
 							m.mtime() * 1_000_000_000 + m.mtime_nsec()
 						})
 						.unwrap_or(entry.mtime);
+					pulled.insert(path.clone());
 					suppress.mark_mtime(path, mt);
 				}
 			}
@@ -703,6 +711,7 @@ where
 					warn_apply(&mut unconverged, &path, &e);
 				} else {
 					received_files += 1;
+					pulled.insert(path.clone());
 					suppress.mark_set(path, mt, hash, entry.mode);
 				}
 			}
@@ -763,6 +772,7 @@ where
 	// every apply it did, and any it failed arrived as `ApplyFailed` before
 	// it. The live loop confirms its own updates per barrier (see
 	// `LiveBaseline::begin_barrier`).
+	unconverged.extend(get.iter().filter(|p| !pulled.contains(*p)).cloned());
 	let live_baseline = {
 		let remote_by_path: HashMap<&PathBuf, &Entry> = remote_manifest.iter().map(|e| (&e.path, e)).collect();
 		let deleted_local: std::collections::HashSet<PathBuf> = del_local.iter().cloned().collect();

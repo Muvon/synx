@@ -1538,6 +1538,134 @@ async fn live_loop_tells_the_peer_its_stale_copy_did_not_land() {
 }
 
 #[tokio::test]
+async fn live_loop_keeps_a_changed_local_file_the_peer_deleted() {
+	// `topic` changed here since the converged state and the change has not
+	// gone out; `lib.rs` is still what both sides last agreed on.
+	let root = TestDir::new("live-loop-delete");
+	let ctx = stale_copy_ctx(root.path());
+	let ignore_state = Arc::new(std::sync::OnceLock::new());
+	assert!(ignore_state.set(ctx.ignores.clone()).is_ok());
+	let watcher = watcher::spawn(root.path().to_path_buf(), Suppression::default(), ignore_state).unwrap();
+	let mut input = Vec::new();
+	for message in [
+		Message::Delete {
+			path: PathBuf::from(".git/refs/heads/topic"),
+		},
+		Message::Delete {
+			path: PathBuf::from("lib.rs"),
+		},
+		Message::Bye,
+	] {
+		write_message(&mut input, &message, false).await.unwrap();
+	}
+	let writer = Arc::new(Mutex::new(Vec::new()));
+	live_loop(
+		ctx,
+		std::io::Cursor::new(input),
+		writer.clone(),
+		Suppression::default(),
+		Pending::default(),
+		watcher,
+		None,
+	)
+	.await
+	.unwrap();
+
+	assert_eq!(
+		fs::read(root.path().join(".git/refs/heads/topic")).unwrap(),
+		b"commit\n"
+	);
+	// An unchanged copy still follows the peer's delete.
+	assert!(!root.path().join("lib.rs").exists());
+	let wire = writer.lock().await.clone();
+	let mut reader = wire.as_slice();
+	let mut refused = Vec::new();
+	while !reader.is_empty() {
+		if let Message::ApplyFailed { path, reason } = read_message(&mut reader).await.unwrap() {
+			assert!(reason.contains("keeping ours"), "{reason}");
+			refused.push(path);
+		}
+	}
+	assert_eq!(refused, [PathBuf::from(".git/refs/heads/topic")]);
+}
+
+#[tokio::test]
+async fn live_loop_spares_unsent_files_in_a_directory_the_peer_deleted() {
+	let root = TestDir::new("live-loop-delete-dir");
+	for dir in ["pkg/sub", "gone/sub"] {
+		fs::create_dir_all(root.path().join(dir)).unwrap();
+	}
+	fs::write(root.path().join("pkg/same"), b"converged").unwrap();
+	fs::write(root.path().join("pkg/sub/same"), b"converged").unwrap();
+	fs::write(root.path().join("pkg/changed"), b"edited here").unwrap();
+	fs::write(root.path().join("pkg/new"), b"never sent").unwrap();
+	fs::write(root.path().join("gone/sub/same"), b"converged").unwrap();
+	let mut ctx = session_ctx(root.path());
+	let converged = [
+		kind_entry("pkg", EntryKind::Dir),
+		kind_entry("pkg/sub", EntryKind::Dir),
+		file_entry("pkg/same", b"converged"),
+		file_entry("pkg/sub/same", b"converged"),
+		file_entry("pkg/changed", b"as last synced"),
+		kind_entry("gone", EntryKind::Dir),
+		kind_entry("gone/sub", EntryKind::Dir),
+		file_entry("gone/sub/same", b"converged"),
+	]
+	.map(|entry| (entry.path.clone(), entry));
+	ctx.baseline = LiveBaseline::seed(
+		root.path().to_path_buf(),
+		HashMap::from(converged),
+		&Baseline::default(),
+	);
+	let ignore_state = Arc::new(std::sync::OnceLock::new());
+	assert!(ignore_state.set(ctx.ignores.clone()).is_ok());
+	let watcher = watcher::spawn(root.path().to_path_buf(), Suppression::default(), ignore_state).unwrap();
+	let mut input = Vec::new();
+	for message in [
+		Message::Delete {
+			path: PathBuf::from("pkg"),
+		},
+		Message::Delete {
+			path: PathBuf::from("gone"),
+		},
+		Message::Bye,
+	] {
+		write_message(&mut input, &message, false).await.unwrap();
+	}
+	let writer = Arc::new(Mutex::new(Vec::new()));
+	live_loop(
+		ctx,
+		std::io::Cursor::new(input),
+		writer.clone(),
+		Suppression::default(),
+		Pending::default(),
+		watcher,
+		None,
+	)
+	.await
+	.unwrap();
+
+	// The edited file and the one the peer never saw stay; what was still
+	// the converged copy follows the delete.
+	assert_eq!(fs::read(root.path().join("pkg/changed")).unwrap(), b"edited here");
+	assert_eq!(fs::read(root.path().join("pkg/new")).unwrap(), b"never sent");
+	assert!(!root.path().join("pkg/same").exists());
+	assert!(!root.path().join("pkg/sub").exists());
+	// Nothing unsent beneath it: the whole tree goes.
+	assert!(!root.path().join("gone").exists());
+	let wire = writer.lock().await.clone();
+	let mut reader = wire.as_slice();
+	let mut refused = Vec::new();
+	while !reader.is_empty() {
+		if let Message::ApplyFailed { path, reason } = read_message(&mut reader).await.unwrap() {
+			assert!(reason.contains("keeping ours"), "{reason}");
+			refused.push(path);
+		}
+	}
+	assert_eq!(refused, [PathBuf::from("pkg")]);
+}
+
+#[tokio::test]
 async fn content_the_baseline_already_holds_goes_out_as_a_touch() {
 	// git "freshens" a pack it reuses an object from: a new mtime over the
 	// same bytes, long after any suppression record of it has lapsed.

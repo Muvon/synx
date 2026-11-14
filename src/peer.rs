@@ -19,7 +19,7 @@ use tokio::sync::Mutex;
 use crate::baseline::LiveBaseline;
 use crate::cache::HashCache;
 use crate::ignores::IgnoreStack;
-use crate::paths::{resolve_beneath, INTERNAL_TMP_PREFIX};
+use crate::paths::{is_internal_temp, resolve_beneath, INTERNAL_TMP_PREFIX};
 use crate::protocol::{
 	read_message, write_message, Entry, EntryKind, Message, SyncMode, CHUNK_SIZE, CHUNK_THRESHOLD, PERM_BITS,
 };
@@ -120,6 +120,32 @@ fn is_stale_peer_copy(root: &Path, baseline: &LiveBaseline, entry: &Entry) -> bo
 	}
 }
 
+/// True when the local file or symlink at `rel` is not what both sides last
+/// converged on (`converged`; `None` when they never did). Every send and
+/// every apply records what it left on disk, so a difference is a local
+/// change the peer has not received yet. A peer delete was made against the
+/// converged copy; applied here, it destroys that change.
+fn has_unsent_local_change(root: &Path, converged: Option<&Entry>, rel: &Path) -> bool {
+	let Some(converged) = converged else {
+		return true;
+	};
+	let full = root.join(rel);
+	// Size and mtime as recorded: unchanged, without reading the file. Git
+	// drops packs of hundreds of MiB, and hashing each one first held the
+	// live loop.
+	if converged.kind == EntryKind::File
+		&& fs::symlink_metadata(&full).is_ok_and(|meta| meta.is_file() && meta.len() == converged.size)
+		&& lstat_mtime_ns(&full) == converged.mtime
+	{
+		return false;
+	}
+	match build_entry(root, rel) {
+		Ok(Some(local)) => !local.same_content(converged),
+		// Gone already, or unreadable: nothing here to protect.
+		_ => false,
+	}
+}
+
 // ─────────────────────────────────────────────────────────────
 // Apply: deterministic, atomic filesystem mutations.
 // ─────────────────────────────────────────────────────────────
@@ -142,7 +168,11 @@ fn write_file_atomic(root: &Path, entry: &Entry, content: &[u8]) -> Result<()> {
 		fs::create_dir_all(parent).with_context(|| format!("create parent {}", parent.display()))?;
 	}
 	let tmp = tmp_path(&full);
-	fs::write(&tmp, content).with_context(|| format!("write tmp {}", tmp.display()))?;
+	if let Err(e) = fs::write(&tmp, content) {
+		// A write that failed midway (disk full) leaves a partial tmp.
+		let _ = fs::remove_file(&tmp);
+		return Err(e).with_context(|| format!("write tmp {}", tmp.display()));
+	}
 	finalize_path(&tmp, &full, entry.mode, entry.mtime)?;
 	Ok(())
 }
@@ -183,16 +213,45 @@ pub fn apply_symlink(root: &Path, entry: &Entry) -> Result<()> {
 }
 
 pub fn apply_delete(root: &Path, rel: &Path) -> Result<()> {
+	apply_delete_keeping(root, rel, &|_| false).map(|_| ())
+}
+
+/// Delete `rel` and everything beneath it, except the files and symlinks
+/// `keep` claims (paths relative to the root). A directory holding a kept
+/// path stays. Returns the kept paths.
+pub fn apply_delete_keeping(root: &Path, rel: &Path, keep: &dyn Fn(&Path) -> bool) -> Result<Vec<PathBuf>> {
 	let full = resolve_beneath(root, rel)?;
-	let meta = match fs::symlink_metadata(&full) {
+	let mut kept = Vec::new();
+	delete_keeping(&full, rel, keep, &mut kept)?;
+	Ok(kept)
+}
+
+fn delete_keeping(full: &Path, rel: &Path, keep: &dyn Fn(&Path) -> bool, kept: &mut Vec<PathBuf>) -> Result<()> {
+	use std::io::ErrorKind::NotFound;
+	let meta = match fs::symlink_metadata(full) {
 		Ok(m) => m,
-		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+		Err(e) if e.kind() == NotFound => return Ok(()),
 		Err(e) => return Err(e.into()),
 	};
-	if meta.is_dir() && !meta.file_type().is_symlink() {
-		fs::remove_dir_all(&full)?;
-	} else {
-		fs::remove_file(&full)?;
+	// `symlink_metadata` never reports a symlink as a directory, so a link
+	// is unlinked, not descended into.
+	if !meta.is_dir() {
+		if keep(rel) {
+			kept.push(rel.to_path_buf());
+			return Ok(());
+		}
+		return match fs::remove_file(full) {
+			Err(e) if e.kind() != NotFound => Err(e.into()),
+			_ => Ok(()),
+		};
+	}
+	let kept_before = kept.len();
+	for child in fs::read_dir(full)? {
+		let name = child?.file_name();
+		delete_keeping(&full.join(&name), &rel.join(&name), keep, kept)?;
+	}
+	if kept.len() == kept_before {
+		fs::remove_dir(full)?;
 	}
 	Ok(())
 }
@@ -1795,7 +1854,34 @@ where
 			let existed_before = resolve_beneath(root, &path)
 				.ok()
 				.is_some_and(|full| fs::symlink_metadata(full).is_ok());
-			apply_delete(root, &path)?;
+			// The peer deleted what it last saw: the converged copy. A file
+			// here that differs from it, or that never converged, carries a
+			// change the peer has not received — it stays, with the
+			// directories holding it. Its queued event (or the next sweep)
+			// sends it back, and `ApplyFailed` tells the peer the delete did
+			// not land in full. Ignored files go with their directory.
+			let guarded = ctx.baseline.with_entries(|converged| {
+				Some(apply_delete_keeping(root, &path, &|rel| {
+					!is_internal_temp(rel)
+						&& !ignores.is_ignored_rel(rel, false)
+						&& has_unsent_local_change(root, converged.get(rel), rel)
+				}))
+			});
+			let kept = match guarded {
+				Some(kept) => kept?,
+				// No baseline to compare against: the agent side.
+				None => {
+					apply_delete(root, &path)?;
+					Vec::new()
+				}
+			};
+			if !kept.is_empty() {
+				anyhow::bail!(
+					"delete of {}: {} changed here since the last sync, keeping ours",
+					path.display(),
+					kept.len()
+				);
+			}
 			ctx.baseline.remove(&path);
 			suppress.mark_applied_delete(path.clone());
 			if existed_before && log_event {
